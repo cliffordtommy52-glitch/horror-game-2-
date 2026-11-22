@@ -54,7 +54,9 @@
     Desktop: drag to orbit, <b>F</b> toggles the flashlight, <b>E</b> opens / closes the nearest door (no locomotion).<br />
     Generator: hold Trigger or Grip on its yellow handle, then hit each skill check with the other Trigger (or A / X). Beat 5 to power the floodlights.<br />
     Four generators are spread round the bigger campground (camp, cabin row, deep woods, lakeside ridge): power all 4 to light the whole camp.<br />
-    Lake (east of camp): walk down the sandy beach into the deep water, or out along the dock. You slowly sink in the water: swim by sweeping your hands through it to rise and move. Find the propeller and spark plug (hidden far out: a far cabin and behind a rock in the woods) and drop them at the boat's motor; find the jerrycan in another cabin and tilt it over the fuel tank's cap to pour until the gauge reads 100%. Then grab the tiller on the outboard and swing it to steer; Trigger or the thumbstick is the throttle (desktop: arrow keys). Dropped and thrown items bounce, settle and float.<br />
+    Lake (east of camp): walk down the sandy beach into the deep water, or out along the dock. You float at the surface (you can't sink): sweep your hands through the water to swim. Find the propeller and spark plug (hidden far out: a far cabin and behind a rock in the woods) and drop them at the boat's motor; find the jerrycan in another cabin and tilt it over the fuel tank's cap to pour until the gauge reads 100%. Then grab the tiller on the outboard and swing it to steer; Trigger or the thumbstick is the throttle (desktop: arrow keys). Dropped and thrown items bounce, settle and float.<br />
+    After PLAY you wait in the waiting room: pick a map on the big screen, watch the MONSTER POV monitor, or spend coins at THE TRADER (shop corner). B / Y (Tab / Esc on desktop) opens the menu: turning and SURVIVOR / MONSTER.<br />
+    Escape a map (all its generators and objectives done, then the boat) for a sunrise and coins. As the MONSTER in VR, swing the machete hard to hack doors, crates, barricades and trees, and slice branches off.<br />
     Ambient horror music starts when you press PLAY in the lobby (headphones recommended).
   </div>
   <!-- GRIMAPE lobby: the menu itself is 3D (a curved panel in the scene, on desktop and in VR). These are just a hint and a fade. -->
@@ -5440,11 +5442,10 @@
       swimming = inWater;
       if (!inWater) { prevRelOk[0] = prevRelOk[1] = false; return; }
 
-      // no free floating: the water takes most of your weight, but you still sink slowly towards the lakebed
-      // unless you stroke your hands through the water to swim up and along
-      rigVelocity.y += (GRAVITY - UNDERWATER_SINK) * dt;
+      // float-only: the water carries all your weight and holds your head at the surface (you can't sink);
+      // stroke your hands through the water to swim along
+      floatAtSurface(dt, WATER_LEVEL);
       rigVelocity.multiplyScalar(Math.exp(-WATER_DRAG * dt)); // water drag
-      if (rigVelocity.y < -MAX_SINK_SPEED) rigVelocity.y += (-MAX_SINK_SPEED - rigVelocity.y) * Math.min(1, dt * 4);
 
       // Gorilla-style strokes: a hand sweeping through the water pushes you the opposite way
       let stroking = false;
@@ -5923,6 +5924,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'UPDATE', date: '22/11/26', title: 'MACHETE HACKING, SUNRISE ENDING, MAP QUESTS, POV MONITOR & SHOP',
+        text: 'New mask, machete grip and branch slicing; floating swim, lakes everywhere, mechanical outboard, coins.' },
       { tag: 'UPDATE', date: '22/11/26', title: 'REALISTIC BOAT & GAS POURING, DEEP LAKE, HEALTH & DROWNING, VR HANDS & BRIGHTER LIGHTS',
         text: 'Climb-through windows, burning fires, floating items, a deeper forest and blazing floodlights.' },
       { tag: 'NEWS',   date: '22/11/26', title: 'NEW LOADING MENU',            text: 'A curved lobby, pointer lasers and a brand-new 1950s song.' },
@@ -6247,8 +6250,8 @@
       for (;;) {
         layout = LOBBY_UPDATES.map((u) => ({ u, title: wrap(u.title, `900 ${tf}px ${LOBBY_SANS}`, 3), desc: wrap(u.text, `500 ${df}px ${LOBBY_MONO}`, 0) }));
         const total = layout.reduce((a, e) => a + 52 + e.title.length * (tf + 6) + e.desc.length * (df + 8) + 26, 0);
-        if (total <= R.h - 130 || tf <= 30) break;
-        tf -= 2; df = Math.max(22, df - 1);
+        if (total <= R.h - 130 || tf <= 22) break;
+        tf -= 2; df = Math.max(17, df - 1);   // (smaller floor now there are more entries)
       }
       let ry = R.y + 112;
       layout.forEach(({ u, title, desc }, i) => {
@@ -7077,12 +7080,12 @@
     const _wrng = mulberry32(5150), wpr = (a, b) => a + _wrng() * (b - a);   // own seed: the existing layouts don't shift
     const glowMatFlame = new THREE.MeshBasicMaterial({ color: 0xffc060 });
     const MAPS = [
-      { id: 'camp', name: 'LAKESIDE WOODS', tag: 'THE CAMP', desc: 'The original camp: power 4 generators, fix the boat and escape across the lake.',
+      { id: 'camp', name: 'LAKESIDE WOODS', tag: 'THE CAMP', desc: 'Power 4 generators, fix the boat, then race to the escape flare across the lake.',
         spawn: { x: 0, z: 0, yaw: 0 }, fog: [NIGHT, 0.085], sky: NIGHT, hemi: [0x1b2a4a, 0x050403, 0.25], desk: { cam: [0, 1.6, 3], target: [0, 0.4, -2.5] } },
-      { id: 'graveyard', name: 'FOGGY GRAVEYARD', tag: 'VARIATION', desc: 'Crooked headstones, a sealed mausoleum and dead trees, lost in thick pale fog.',
+      { id: 'graveyard', name: 'FOGGY GRAVEYARD', tag: 'VARIATION', desc: 'Power 2 generators, light 4 braziers and lay 3 skull relics on the crypt altar to free the lake boat.',
         spawn: { x: GRAVE.x, z: GRAVE.z + 13.5, yaw: 0 }, fog: [0x26302c, 0.13], sky: 0x1a201e, hemi: [0x5a7a74, 0x0a0a08, 0.42],
         desk: { cam: [GRAVE.x + 4, 2.2, GRAVE.z + 17], target: [GRAVE.x, 0.4, GRAVE.z + 6] } },
-      { id: 'mine', name: 'ABANDONED MINE', tag: 'VARIATION', desc: 'Lantern-lit tunnels, rails and old carts deep in the rock. Bring your head lamp.',
+      { id: 'mine', name: 'ABANDONED MINE', tag: 'VARIATION', desc: 'Power 2 generators, pull 3 breakers, ram the minecart through the rock fall and reach the underground lake.',
         spawn: { x: MINE.x + 12, z: MINE.z, yaw: Math.PI / 2 }, fog: [0x0d0a07, 0.12], sky: 0x060504, hemi: [0x3a2a1a, 0x050403, 0.18],
         desk: { cam: [MINE.x + 15, 1.6, MINE.z + 3], target: [MINE.x + 6, 0.6, MINE.z] } },
     ];
@@ -7198,7 +7201,7 @@
         g.fillStyle = '#000'; for (const x of [s * 0.44, s * 0.56]) { g.beginPath(); g.arc(x, s * 0.4, 4, 0, Math.PI * 2); g.fill(); }   // no faces, just dark eyes
       });
       const portraitMat = new THREE.MeshStandardMaterial({ map: portraitTex, roughness: 0.8 });
-      for (const [x, z, ry] of [[-W.w / 2 + 0.02, -1.2, Math.PI / 2], [-W.w / 2 + 0.02, 1.4, Math.PI / 2], [W.w / 2 - 0.02, 1.6, -Math.PI / 2]]) {
+      for (const [x, z, ry] of [[-W.w / 2 + 0.02, -1.2, Math.PI / 2], [W.w / 2 - 0.02, 1.6, -Math.PI / 2]]) {
         rb.add(new THREE.PlaneGeometry(0.5, 0.62), portraitMat, W.x + x + Math.sin(ry) * 0.02, 1.45, W.z + z, 0, ry, 0.05);
         rb.add(UNIT_BOX, trimMat, W.x + x, 1.45, W.z + z, 0, ry, 0.05, 0.6, 0.72, 0.02);
       }
@@ -7253,16 +7256,137 @@
       b.dust.rotation.y += dt * 0.01;
     }
 
+    // ---------- shared by the new maps: lakes, breakable props, hackable trees, sliceable branches ----------
+    const extraLakes = [];        // swimmable water on the new maps: { map, x0, x1, z0, z1, level, water }
+    const breakables = [];        // wooden crates and barricades the monster's machete can smash
+    const hackTrees = [];         // extra tree trunks the machete can hack into (the camp's trees are added later)
+    const branchDefs = [];        // sliceable branches: { map, base, dir, len, r }
+    const addCol = (cx, y0, cz, w, h, d) => { addBoxCollider(cx, y0, cz, w, h, d); return colliders[colliders.length - 1]; };
+    const lakeBedMat = new THREE.MeshStandardMaterial({ color: 0x14110c, roughness: 1 });
+    const lakeWallMat = new THREE.MeshStandardMaterial({ color: 0x1e1a14, roughness: 1, flatShading: true });
+    // ground with a rectangular hole for a lake: four strips (visible + solid), a basin and the water
+    function groundWithLake(mat, gx0, gx1, gz0, gz1, L, map, waterColor) {
+      const strips = [[gx0, L.x0, gz0, gz1], [L.x1, gx1, gz0, gz1], [L.x0, L.x1, gz0, L.z0], [L.x0, L.x1, L.z1, gz1]];
+      for (const [x0, x1, z0, z1] of strips) {
+        const w = x1 - x0, d = z1 - z0;
+        if (w <= 0.01 || d <= 0.01) continue;
+        const geo = new THREE.PlaneGeometry(w, d);
+        const uv = geo.attributes.uv;
+        for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * w / 4.75, uv.getY(i) * d / 4.75);
+        const m = new THREE.Mesh(geo, mat);
+        m.rotation.x = -Math.PI / 2; m.position.set((x0 + x1) / 2, 0.001, (z0 + z1) / 2); m.receiveShadow = true;
+        scene.add(m);
+        addBoxCollider((x0 + x1) / 2, -3, (z0 + z1) / 2, w, 3, d);
+      }
+      const cx = (L.x0 + L.x1) / 2, cz = (L.z0 + L.z1) / 2, w = L.x1 - L.x0, d = L.z1 - L.z0;
+      addBoxCollider(cx, -4, cz, w, 4 + L.bed, d);                                      // lakebed (its top is L.bed, below 0)
+      const bed = new THREE.Mesh(new THREE.PlaneGeometry(w, d), lakeBedMat);
+      bed.rotation.x = -Math.PI / 2; bed.position.set(cx, L.bed, cz); scene.add(bed);
+      const wb = makeBatch();
+      const depth = -L.bed;
+      wb.add(UNIT_BOX, lakeWallMat, cx, L.bed / 2, L.z0 + 0.02, 0, 0, 0, w, depth, 0.04);
+      wb.add(UNIT_BOX, lakeWallMat, cx, L.bed / 2, L.z1 - 0.02, 0, 0, 0, w, depth, 0.04);
+      wb.add(UNIT_BOX, lakeWallMat, L.x0 + 0.02, L.bed / 2, cz, 0, 0, 0, 0.04, depth, d);
+      wb.add(UNIT_BOX, lakeWallMat, L.x1 - 0.02, L.bed / 2, cz, 0, 0, 0, 0.04, depth, d);
+      for (let k = 0; k < Math.round((w + d) * 1.6); k++) {                             // stones along the bank
+        const t = k / Math.round((w + d) * 1.6), per = 2 * (w + d), s = t * per;
+        let x, z;
+        if (s < w) { x = L.x0 + s; z = L.z0; } else if (s < w + d) { x = L.x1; z = L.z0 + s - w; }
+        else if (s < 2 * w + d) { x = L.x1 - (s - w - d); z = L.z1; } else { x = L.x0; z = L.z1 - (s - 2 * w - d); }
+        const sz = 0.08 + wpr(0, 0.12);
+        wb.add(new THREE.DodecahedronGeometry(1, 0), rockMat, x + wpr(-0.1, 0.1), 0.01, z + wpr(-0.1, 0.1), wpr(0, 3), wpr(0, 3), 0, sz, sz * 0.6, sz);
+      }
+      wb.build(scene);
+      const wgeo = new THREE.PlaneGeometry(w, d, Math.max(2, Math.round(w)), Math.max(2, Math.round(d)));
+      const water = new THREE.Mesh(wgeo, new THREE.MeshStandardMaterial({ color: waterColor, roughness: 0.12, metalness: 0.25, transparent: true, opacity: 0.86 }));
+      water.rotation.x = -Math.PI / 2; water.position.set(cx, L.level, cz);
+      scene.add(water);
+      const lake = { map, x0: L.x0, x1: L.x1, z0: L.z0, z1: L.z1, level: L.level, water };
+      extraLakes.push(lake);
+      return lake;
+    }
+    // a wooden crate: one box with its edge frame; the machete breaks it into planks after a few hits
+    function makeCrate(map, x, y0, z, s, ry = 0) {
+      const group = new THREE.Group();
+      group.position.set(x, y0 + s / 2, z); group.rotation.y = ry;
+      scene.add(group);
+      const cb = makeBatch();
+      cb.add(UNIT_BOX, plankMat, 0, 0, 0, 0, 0, 0, s, s, s);
+      for (const a of [-1, 1]) for (const b of [-1, 1]) {
+        cb.add(UNIT_BOX, trimMat, a * (s / 2 - 0.015), 0, b * (s / 2 - 0.015), 0, 0, 0, 0.035, s + 0.004, 0.035);
+        cb.add(UNIT_BOX, trimMat, a * (s / 2 - 0.015), b * (s / 2 - 0.015), 0, 0, 0, 0, 0.035, 0.035, s + 0.004);
+        cb.add(UNIT_BOX, trimMat, 0, a * (s / 2 - 0.015), b * (s / 2 - 0.015), 0, 0, 0, s + 0.004, 0.035, 0.035);
+      }
+      cb.build(group, { rayTarget: true });
+      const box = new THREE.Box3(new THREE.Vector3(x - s / 2, y0, z - s / 2), new THREE.Vector3(x + s / 2, y0 + s, z + s / 2));
+      const col = addCol(x, y0, z, s, s, s);
+      const b = { kind: 'crate', map, group, box, col, hp: 3, size: s, broken: false, planks: [] };
+      breakables.push(b);
+      return b;
+    }
+    // a wooden barricade: two posts and nailed boards (axis-aligned: along x, or along z when alongZ)
+    function makeBarricade(map, x, z, w, h, alongZ = false) {
+      const group = new THREE.Group();
+      group.position.set(x, 0, z); if (alongZ) group.rotation.y = Math.PI / 2;
+      scene.add(group);
+      const pb = makeBatch();
+      for (const s of [-1, 1]) pb.add(UNIT_BOX, trimMat, s * (w / 2 - 0.05), h / 2 + 0.05, 0, 0, 0, s * 0.03, 0.09, h + 0.1, 0.09);
+      pb.build(group);
+      const planks = [];
+      const n = Math.max(3, Math.round(h / 0.17));
+      for (let k = 0; k < n; k++) {
+        const m = new THREE.Mesh(UNIT_BOX, plankMat);
+        m.scale.set(w + wpr(-0.05, 0.12), 0.12, 0.035);
+        m.position.set(wpr(-0.04, 0.04), 0.12 + k * (h - 0.1) / (n - 1), 0.07);
+        m.rotation.z = wpr(-0.12, 0.12);
+        m.castShadow = m.receiveShadow = true;
+        group.add(m); planks.push(m);
+        for (const s of [-1, 1]) {                       // nail heads
+          const nail = new THREE.Mesh(new THREE.SphereGeometry(0.008, 5, 4), ironMat);
+          nail.position.set(s * (0.5 - 0.05 / m.scale.x), 0, 0.55); m.add(nail);
+          nail.scale.set(1 / m.scale.x, 1 / m.scale.y, 1 / m.scale.z);
+        }
+      }
+      const ex = alongZ ? 0.2 : w, ez = alongZ ? w : 0.2;
+      const box = new THREE.Box3(new THREE.Vector3(x - ex / 2, 0, z - ez / 2), new THREE.Vector3(x + ex / 2, h + 0.1, z + ez / 2));
+      const col = addCol(x, 0, z, ex, h + 0.1, ez);
+      const b = { kind: 'barricade', map, group, box, col, hp: n, planks, broken: false };
+      breakables.push(b);
+      return b;
+    }
+
     // ---------- FOGGY GRAVEYARD ----------
+    // (lake in the north-east corner, two generators, four braziers, three skull relics and the crypt altar)
+    const GY = {
+      lake: { x0: GRAVE.x + 5.5, x1: GRAVE.x + 14, z0: GRAVE.z - 14, z1: GRAVE.z - 5, level: -0.12, bed: -1.2 },
+      gens: [
+        { name: 'WEST FENCE', pos: new THREE.Vector3(GRAVE.x - 14, 0, GRAVE.z - 6), rot: 0,
+          floods: [[GRAVE.x - 14.6, GRAVE.z - 9.5], [GRAVE.x - 14.6, GRAVE.z - 2.5]], aim: [GRAVE.x - 9, GRAVE.z - 6], realLights: 0 },
+        { name: 'EAST GATEHOUSE', pos: new THREE.Vector3(GRAVE.x + 14.2, 0, GRAVE.z + 9), rot: Math.PI,
+          floods: [[GRAVE.x + 14.6, GRAVE.z + 12.5], [GRAVE.x + 14.6, GRAVE.z + 5.5]], aim: [GRAVE.x + 9, GRAVE.z + 9], realLights: 0 },
+      ],
+      braziers: [[-3.5, 12.5], [3.5, 12.5], [-11, -12], [4.2, -11.5]].map(([x, z]) => new THREE.Vector3(GRAVE.x + x, 0, GRAVE.z + z)),
+      skulls: [[-6, 0.06, 7.2], [11.5, 0, 12.5], [0.4, 0, -15.2]].map(([x, y, z]) => new THREE.Vector3(GRAVE.x + x, y, GRAVE.z + z)),
+      altar: new THREE.Vector3(GRAVE.x, 0, GRAVE.z - 9.4),
+      boatStart: new THREE.Vector3(GRAVE.x + 7.0, 0, GRAVE.z - 9.5), boatEnd: new THREE.Vector3(GRAVE.x + 12.6, 0, GRAVE.z - 9.5),
+      dock: { x0: GRAVE.x + 4.3, x1: GRAVE.x + 6.2, z0: GRAVE.z - 10.1, z1: GRAVE.z - 8.9 },
+    };
     {
       const G = GRAVE, half = G.size / 2, gb = makeBatch();
-      const ground = new THREE.Mesh(new THREE.PlaneGeometry(G.size + 6, G.size + 6), new THREE.MeshStandardMaterial({ map: graveGroundTex, color: 0x9aa098, roughness: 1 }));
-      ground.rotation.x = -Math.PI / 2; ground.position.set(G.x, 0.001, G.z); ground.receiveShadow = true;
-      scene.add(ground);
-      addBoxCollider(G.x, -1, G.z, G.size + 6, 1, G.size + 6);
+      const gMat = new THREE.MeshStandardMaterial({ map: graveGroundTex, color: 0x9aa098, roughness: 1 });
+      graveGroundTex.repeat.set(1, 1);
+      groundWithLake(gMat, G.x - half - 3, G.x + half + 3, G.z - half - 3, G.z + half + 3, GY.lake, 'graveyard', 0x1a2422);
       for (const [x, z, w, d] of [[0, -half - 1, G.size + 4, 0.4], [0, half + 1, G.size + 4, 0.4], [-half - 1, 0, 0.4, G.size + 4], [half + 1, 0, 0.4, G.size + 4]]) {
         addBoxCollider(G.x + x, -1, G.z + z, w, 6, d);                                        // invisible boundary
       }
+      // places kept clear of headstones and trees (generators, floodlights, braziers, relics, altar, lake, dock)
+      const keepClear = [];
+      for (const s of GY.gens) { keepClear.push([s.pos.x, s.pos.z, 1.3]); for (const [x, z] of s.floods) keepClear.push([x, z, 0.8]); }
+      for (const p of GY.braziers) keepClear.push([p.x, p.z, 1.1]);
+      for (const p of GY.skulls) keepClear.push([p.x, p.z, 0.9]);
+      keepClear.push([GY.altar.x, GY.altar.z, 1.4]);
+      const blocked = (x, z) => (x > GY.lake.x0 - 1.2 && x < GY.lake.x1 + 1.2 && z > GY.lake.z0 - 1.2 && z < GY.lake.z1 + 1.2) ||
+        keepClear.some(([cx, cz, r]) => Math.hypot(x - cx, z - cz) < r);
       // wrought-iron fence with spear tips round the edge, a gap for the gate in the south side
       const fenceAt = (x0, z0, x1, z1) => {
         const len = Math.hypot(x1 - x0, z1 - z0), n = Math.round(len / 0.25), ry = Math.atan2(x1 - x0, z1 - z0);
@@ -7288,10 +7412,11 @@
         if (rng2() < 0.22) continue;
         const x = -12 + col * 2.2 + (rng2() - 0.5) * 0.6, z = -11 + row * 2.3 + (rng2() - 0.5) * 0.5;
         if (Math.abs(x) < 2 && z > 6) continue;                                                // keep the path from the gate clear
-        if (Math.abs(x) < 3.2 && z < -9) continue;                                             // and the mausoleum
+        if (Math.abs(x) < 3.2 && z < -8.6) continue;                                           // and the mausoleum and its altar
         const kind = rng2(), mat = rng2() < 0.4 ? mossStone : stoneMat;
         const lean = (rng2() - 0.5) * 0.35, twist = (rng2() - 0.5) * 0.3;
         const px = G.x + x, pz = G.z + z;
+        if (blocked(px, pz) || blocked(px, pz + 0.65)) continue;
         if (kind < 0.5) {
           const h = 0.45 + rng2() * 0.35;
           gb.add(UNIT_BOX, mat, px, h / 2, pz, lean, twist, 0, 0.42, h, 0.1);
@@ -7308,7 +7433,7 @@
         gb.add(new THREE.SphereGeometry(1, 8, 5, 0, Math.PI * 2, 0, Math.PI / 2), dirtMat, px, 0, pz + 0.65, 0, twist, 0, 0.32, 0.1, 0.6);
         addBoxCollider(px, 0, pz, 0.45, kind < 0.88 ? 0.75 : 0.16, kind < 0.88 ? 0.2 : 1.1);
       }
-      // an open grave with a dirt pile
+      // an open grave with a dirt pile (a relic lies in it)
       gb.add(UNIT_BOX, windowVoidMat, G.x - 6, 0.002, G.z + 7.2, 0, 0, 0, 0.7, 0.004, 1.4);
       gb.add(new THREE.SphereGeometry(1, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2), dirtMat, G.x - 5.1, 0, G.z + 7.2, 0, 0, 0, 0.45, 0.3, 0.7);
       // the mausoleum at the far end: steps, walls, columns, a pediment roof and an iron door
@@ -7324,22 +7449,47 @@
         gb.add(UNIT_BOX, ironMat, mx, 1.0, mz + 1.11, 0, 0, 0, 1.0, 1.6, 0.04);
         for (let k = 0; k < 5; k++) gb.add(UNIT_BOX, windowVoidMat, mx - 0.4 + k * 0.2, 1.4, mz + 1.135, 0, 0, 0, 0.04, 0.6, 0.01);
       }
-      // dead, bare trees
-      for (let k = 0; k < 11; k++) {
+      // the crypt altar in front of it: a stone table with three hollows for the skull relics, and two black candles
+      {
+        const a = GY.altar;
+        gb.add(UNIT_BOX, stoneMat, a.x, 0.2, a.z, 0, 0, 0, 0.3, 0.4, 0.3);
+        gb.add(UNIT_BOX, mossStone, a.x, 0.42, a.z, 0, 0, 0, 1.0, 0.06, 0.42);
+        for (const s of [-1, 1]) gb.add(UNIT_BOX, stoneMat, a.x + s * 0.4, 0.2, a.z, 0, 0, 0, 0.12, 0.4, 0.3);
+        for (let k = -1; k <= 1; k++) gb.add(new THREE.TorusGeometry(0.06, 0.012, 6, 16), windowVoidMat, a.x + k * 0.28, 0.452, a.z, Math.PI / 2, 0, 0);
+        const blackWax = new THREE.MeshStandardMaterial({ color: 0x141414, roughness: 0.6 });
+        for (const s of [-1, 1]) {
+          gb.add(new THREE.CylinderGeometry(0.02, 0.022, 0.16, 8), blackWax, a.x + s * 0.46, 0.53, a.z - 0.12);
+          gb.add(new THREE.SphereGeometry(0.012, 6, 4), glowMatFlame, a.x + s * 0.46, 0.625, a.z - 0.12, 0, 0, 0, 1, 2, 1);
+        }
+        addBoxCollider(a.x, 0, a.z, 1.0, 0.45, 0.42);
+      }
+      // a little jetty on the west bank of the lake, for the escape boat
+      {
+        const D = GY.dock;
+        for (let k = 0; k < 8; k++) gb.add(UNIT_BOX, plankMat, D.x0 + (k + 0.5) * (D.x1 - D.x0) / 8, 0.04, (D.z0 + D.z1) / 2, 0, 0, 0, (D.x1 - D.x0) / 8 - 0.01, 0.04, D.z1 - D.z0);
+        for (const x of [D.x0 + 0.1, D.x1 - 0.1]) for (const z of [D.z0 + 0.05, D.z1 - 0.05]) gb.add(new THREE.CylinderGeometry(0.04, 0.04, 1.3, 6), trimMat, x, -0.55, z);
+        addBoxCollider((D.x0 + D.x1) / 2, -0.6, (D.z0 + D.z1) / 2, D.x1 - D.x0, 0.66, D.z1 - D.z0);
+      }
+      // dead, bare trees (trunks the machete can hack; low branches it can slice off)
+      for (let k = 0; k < 14; k++) {
         const a = rng2() * Math.PI * 2, r = 6 + rng2() * 8.5, x = G.x + Math.cos(a) * r, z = G.z + Math.sin(a) * r * 0.9;
         if (Math.abs(x - G.x) < 2 && z > G.z + 5) continue;
+        if (blocked(x, z)) continue;
         const h = 2.8 + rng2() * 2;
-        gb.add(new THREE.CylinderGeometry(0.06, 0.16, h, 6), barkMat, x, h / 2, z, (rng2() - 0.5) * 0.15, 0, (rng2() - 0.5) * 0.15);
+        gb.add(new THREE.CylinderGeometry(0.06, 0.16, h, 6), barkMat, x, h / 2, z);
+        hackTrees.push({ map: 'graveyard', x, z, r: 0.13, h });
         for (let b = 0; b < 5; b++) {
-          const by = h * (0.45 + b * 0.11), ba = rng2() * Math.PI * 2, bl = 0.6 + rng2() * 0.9;
-          gb.add(new THREE.CylinderGeometry(0.015, 0.05, bl, 5), barkMat, x + Math.cos(ba) * bl * 0.4, by + bl * 0.3, z + Math.sin(ba) * bl * 0.4,
-            Math.sin(ba) * 0.95, 0, -Math.cos(ba) * 0.95);
+          const low = b < 2;
+          const by = low ? 0.55 + rng2() * 0.6 : h * (0.45 + b * 0.11), ba = rng2() * Math.PI * 2, bl = low ? 0.5 + rng2() * 0.35 : 0.6 + rng2() * 0.9;
+          const dir = new THREE.Vector3(Math.cos(ba), low ? 0.55 : 0.9, Math.sin(ba)).normalize();
+          const rad = 0.13 * (1 - by / h) + 0.02;
+          branchDefs.push({ map: 'graveyard', base: new THREE.Vector3(x + Math.cos(ba) * rad * 0.8, by, z + Math.sin(ba) * rad * 0.8), dir, len: bl, r: low ? 0.028 : 0.035 });
         }
         addBoxCollider(x, 0, z, 0.22, h, 0.22);
       }
       // lamp posts with a cold, sickly light
       const lampMat = new THREE.MeshStandardMaterial({ color: 0x1a2a22, emissive: 0xa8f0c8, emissiveIntensity: 1.4 });
-      for (const [x, z] of [[-3, 8], [3, 8], [-9, -4], [9, -4], [0, -7]]) {
+      for (const [x, z] of [[-3, 8], [3, 8], [-9, -4], [9, -3.2], [0, -7]]) {
         gb.add(new THREE.CylinderGeometry(0.03, 0.04, 1.6, 6), ironMat, G.x + x, 0.8, G.z + z);
         gb.add(UNIT_BOX, lampMat, G.x + x, 1.7, G.z + z, 0, 0, 0, 0.14, 0.18, 0.14);
         gb.add(new THREE.ConeGeometry(0.13, 0.1, 4), ironMat, G.x + x, 1.84, G.z + z, 0, Math.PI / 4, 0);
@@ -7349,6 +7499,12 @@
         lightSources.push({ x: G.x + x, y: 1.6, z: G.z + z, color: 0xa8f0c8, intensity: 3.5, distance: 7, weight: 1 });
       }
       gb.build(scene, { rayTarget: true });
+      // breakable props: crates by the gatehouse, and boarded barricades
+      makeCrate('graveyard', G.x + 12.6, 0, G.z + 14.4, 0.45);
+      makeCrate('graveyard', G.x + 13.2, 0, G.z + 14.5, 0.38, 0.4);
+      makeCrate('graveyard', G.x - 13.6, 0, G.z + 14.3, 0.45, 0.2);
+      makeBarricade('graveyard', G.x - 15.1, G.z + 2, 1.4, 0.9, true);
+      makeBarricade('graveyard', G.x + 7.5, G.z + 15.1, 1.6, 0.9);
       // low ground mist drifting between the stones
       const mist = [];
       for (let k = 0; k < 18; k++) {
@@ -7361,27 +7517,44 @@
     }
 
     // ---------- ABANDONED MINE ----------
+    // (two generators in the yard, three breaker levers in the north chamber, a minecart to ram through the rock fall,
+    //  and an underground lake with the escape boat in the cavern behind it)
+    const MN = {
+      ex: MINE.x + 7,
+      lake: { x0: MINE.x - 33, x1: MINE.x - 21, z0: MINE.z - 6, z1: MINE.z + 6, level: -0.12, bed: -1.3 },
+      gens: [
+        { name: 'YARD NORTH', pos: new THREE.Vector3(MINE.x + 10.2, 0, MINE.z + 5.6), rot: Math.PI / 2,
+          floods: [[MINE.x + 8.4, MINE.z + 6.6], [MINE.x + 12.6, MINE.z + 6.6]], aim: [MINE.x + 8.5, MINE.z], realLights: 0 },
+        { name: 'YARD SOUTH', pos: new THREE.Vector3(MINE.x + 10.2, 0, MINE.z - 5.6), rot: -Math.PI / 2,
+          floods: [[MINE.x + 8.4, MINE.z - 6.6], [MINE.x + 12.6, MINE.z - 6.6]], aim: [MINE.x + 8.5, MINE.z], realLights: 0 },
+      ],
+      breaker: new THREE.Vector3(MINE.x - 3, 0.85, MINE.z + 12.97),
+      cartStart: MINE.x + 1, cartStop: MINE.x - 13.45, rubbleX: MINE.x - 15.2,
+      boatStart: new THREE.Vector3(MINE.x - 23.6, 0, MINE.z), boatEnd: new THREE.Vector3(MINE.x - 31.6, 0, MINE.z),
+      dock: { x0: MINE.x - 22.6, x1: MINE.x - 20.6, z0: MINE.z - 0.6, z1: MINE.z + 0.6 },
+    };
+    let mineCart = null, mineRubble = null;
     {
       const M = MINE, mb = makeBatch();
-      const ground = new THREE.Mesh(new THREE.PlaneGeometry(44, 40), new THREE.MeshStandardMaterial({ map: mineDirtTex, roughness: 1 }));
-      ground.rotation.x = -Math.PI / 2; ground.position.set(M.x - 2, 0.001, M.z); ground.receiveShadow = true;
-      scene.add(ground);
-      addBoxCollider(M.x - 2, -1, M.z, 44, 1, 40);
       const darkRock = new THREE.MeshStandardMaterial({ color: 0x2c2620, roughness: 1, flatShading: true });
       const timberMat = new THREE.MeshStandardMaterial({ map: woodTex, color: 0x6a5038, roughness: 0.95 });
-      // tunnel layout on a 1 m grid (world x from M.x-16 to M.x+8, z from M.z-13 to M.z+14): open cells are tunnel
-      const X0 = M.x - 16, Z0 = M.z - 13, NX = 24, NZ = 27, open = [];
+      const dirtMat2 = new THREE.MeshStandardMaterial({ map: mineDirtTex, roughness: 1 });
+      mineDirtTex.repeat.set(1, 1);
+      groundWithLake(dirtMat2, M.x - 36, M.x + 19, M.z - 15, M.z + 15, MN.lake, 'mine', 0x0c1416);
+      // tunnel layout on a 1 m grid (world x from M.x-34 to M.x+8, z from M.z-13 to M.z+14): open cells are tunnel
+      const X0 = M.x - 34, Z0 = M.z - 13, NX = 42, NZ = 27, open = [];
       for (let i = 0; i < NX; i++) { open.push(new Array(NZ).fill(false)); }
       const carve = (x0, x1, z0, z1) => { for (let i = 0; i < NX; i++) for (let j = 0; j < NZ; j++) { const x = X0 + i + 0.5, z = Z0 + j + 0.5; if (x > x0 && x < x1 && z > z0 && z < z1) open[i][j] = true; } };
       carve(M.x - 9, M.x + 7, M.z - 1, M.z + 1);          // main adit, from the entrance (east) going west
       carve(M.x - 15, M.x - 9, M.z - 3, M.z + 3);         // the end chamber
+      carve(M.x - 17.01, M.x - 15, M.z - 1, M.z + 1);     // the old tunnel on to the cavern (blocked by a rock fall)
+      carve(M.x - 33, M.x - 17, M.z - 8, M.z + 8);        // the cavern with the underground lake
       carve(M.x - 4, M.x - 2, M.z + 1, M.z + 10);         // north drift
-      carve(M.x - 6, M.x + 0, M.z + 10, M.z + 13);        // north chamber
+      carve(M.x - 6, M.x + 0, M.z + 10, M.z + 13);        // north chamber (breaker panel)
       carve(M.x + 2, M.x + 4, M.z - 9, M.z - 1);          // south drift
       carve(M.x + 0, M.x + 6, M.z - 12, M.z - 9);         // south chamber
       const isOpen = (i, j) => i >= 0 && j >= 0 && i < NX && j < NZ && open[i][j];
-      const WALL_H = 2.0, WT = 0.4;
-      // walls: every open cell edge that meets rock gets a wall face; faces in a row are merged into one collider
+      const WALL_H = 2.0, WT = 0.4, WALL_LOW = -1.5;      // walls reach down below the lake so you can't swim under them
       const runs = [];
       for (let j = 0; j < NZ; j++) for (const dz of [-1, 1]) {           // faces facing +z / -z, merged along x
         let start = -1;
@@ -7403,12 +7576,13 @@
       const rr3 = mulberry32(4242);
       for (const r of runs) {
         const len = r.a1 - r.a0, c = (r.a0 + r.a1) / 2;
+        const vy = (WALL_H + WALL_LOW) / 2, vh = WALL_H - WALL_LOW + 0.1;
         if (r.axis === 'x') {
-          addBoxCollider(c, 0, r.at + r.out * WT / 2, len + WT, WALL_H + 0.4, WT);
-          mb.add(UNIT_BOX, darkRock, c, WALL_H / 2, r.at + r.out * WT / 2, 0, 0, 0, len + WT, WALL_H + 0.1, WT);
+          addBoxCollider(c, WALL_LOW - 1, r.at + r.out * WT / 2, len + WT, WALL_H - WALL_LOW + 1.4, WT);
+          mb.add(UNIT_BOX, darkRock, c, vy, r.at + r.out * WT / 2, 0, 0, 0, len + WT, vh, WT);
         } else {
-          addBoxCollider(r.at + r.out * WT / 2, 0, c, WT, WALL_H + 0.4, len + WT);
-          mb.add(UNIT_BOX, darkRock, r.at + r.out * WT / 2, WALL_H / 2, c, 0, 0, 0, WT, WALL_H + 0.1, len + WT);
+          addBoxCollider(r.at + r.out * WT / 2, WALL_LOW - 1, c, WT, WALL_H - WALL_LOW + 1.4, len + WT);
+          mb.add(UNIT_BOX, darkRock, r.at + r.out * WT / 2, vy, c, 0, 0, 0, WT, vh, len + WT);
         }
         for (let k = 0; k < len * 2.2; k++) {                                 // rough rock lumps on the face
           const t = r.a0 + rr3() * len, y = rr3() * WALL_H, s = 0.12 + rr3() * 0.22;
@@ -7416,7 +7590,7 @@
           mb.add(new THREE.DodecahedronGeometry(1, 0), k % 3 ? darkRock : rockMat, x, y, z, rr3() * 3, rr3() * 3, 0, s, s * 0.8, s);
         }
       }
-      // ceiling over the tunnels (rows merged), with lumps hanging from it
+      // ceiling over the tunnels (rows merged)
       for (let j = 0; j < NZ; j++) {
         let start = -1;
         for (let i = 0; i <= NX; i++) {
@@ -7430,8 +7604,13 @@
           }
         }
       }
+      // stalactites over the cavern
+      for (let k = 0; k < 40; k++) {
+        const x = M.x - 32 + rr3() * 14.5, z = M.z - 7.5 + rr3() * 15, l = 0.2 + rr3() * 0.6;
+        mb.add(new THREE.ConeGeometry(0.06 + rr3() * 0.08, l, 5), darkRock, x, WALL_H - l / 2 + 0.02, z, Math.PI, rr3() * 3, 0);
+      }
       // the rock face round the entrance (outside), a timber portal and a warning sign
-      const ex = M.x + 7;
+      const ex = MN.ex;
       for (const s of [-1, 1]) {
         addBoxCollider(ex + 0.6, 0, M.z + s * 7.5, 1.2, 6, 13);
         mb.add(UNIT_BOX, darkRock, ex + 0.6, 3, M.z + s * 7.5, 0, 0, 0, 1.2, 6, 13);
@@ -7468,49 +7647,95 @@
       for (let x = M.x + 5; x > M.x - 9; x -= 3) support(x, M.z, true);
       for (let z = M.z + 3; z < M.z + 10; z += 3) support(M.x - 3, z, false);
       for (let z = M.z - 3; z > M.z - 9; z -= 3) support(M.x + 3, z, false);
-      // rails along the main adit and up the north drift, with sleepers
+      support(M.x - 16, M.z, true);
+      // rails along the main adit (right up to the rock fall) and up the north drift, with sleepers
       const railMat = new THREE.MeshStandardMaterial({ color: 0x4a3a30, roughness: 0.5, metalness: 0.8 });
       const rails = (x0, z0, x1, z1) => {
         const len = Math.hypot(x1 - x0, z1 - z0), ry = Math.atan2(x1 - x0, z1 - z0), nx = Math.cos(ry), nz = -Math.sin(ry);
         for (const s of [-1, 1]) mb.add(UNIT_BOX, railMat, (x0 + x1) / 2 + nx * s * 0.3, 0.05, (z0 + z1) / 2 + nz * s * 0.3, 0, ry, 0, 0.04, 0.05, len);
         for (let k = 0; k < len / 0.5; k++) { const t = (k + 0.5) / (len / 0.5); mb.add(UNIT_BOX, timberMat, x0 + (x1 - x0) * t, 0.015, z0 + (z1 - z0) * t, 0, ry, 0, 0.9, 0.03, 0.14); }
       };
-      rails(M.x + 9, M.z, M.x - 12, M.z);
+      rails(M.x + 9, M.z, M.x - 14.4, M.z);
       rails(M.x - 3, M.z + 0.8, M.x - 3, M.z + 11);
-      // ore carts (one tipped over), crates, barrels, a rubble fall in the end chamber
-      const cart = (x, z, ry, tip) => {
-        const hullMat = new THREE.MeshStandardMaterial({ color: 0x3a2e26, map: grimeTex, roughness: 0.6, metalness: 0.7 });
-        const q = [x, z];
-        mb.add(new THREE.CylinderGeometry(0.42, 0.3, 0.4, 4, 1, true), hullMat, q[0], 0.4, q[1], tip, Math.PI / 4 + ry, 0, 1.3, 1, 0.9);
-        mb.add(UNIT_BOX, hullMat, q[0], 0.2, q[1], tip, ry, 0, 0.75, 0.04, 0.5);
-        if (!tip) for (const sx of [-1, 1]) for (const sz of [-1, 1]) mb.add(new THREE.CylinderGeometry(0.1, 0.1, 0.05, 10), railMat, q[0] + sx * 0.28, 0.1, q[1] + sz * 0.3, Math.PI / 2, 0, 0);
-        addBoxCollider(x, 0, z, 0.9, 0.6, 0.7);
-      };
-      cart(M.x + 1, M.z, 0, 0);
-      cart(M.x - 12, M.z - 1.5, 0.6, 1.2);
-      for (const [x, z] of [[M.x - 13, M.z + 2], [M.x - 12.2, M.z + 2.3], [M.x - 4.5, M.z + 11.5], [M.x + 4.5, M.z - 10.5], [M.x + 1.2, M.z - 11]]) {
-        mb.add(UNIT_BOX, plankMat, x, 0.22, z, 0, rr3(), 0, 0.45, 0.45, 0.45);
-        addBoxCollider(x, 0, z, 0.45, 0.45, 0.45);
-      }
+      // the old tipped-over cart in the end chamber
+      const hullMat = new THREE.MeshStandardMaterial({ color: 0x3a2e26, map: grimeTex, roughness: 0.6, metalness: 0.7 });
+      mb.add(new THREE.CylinderGeometry(0.42, 0.3, 0.4, 4, 1, true), hullMat, M.x - 12, 0.4, M.z - 1.9, 1.2, Math.PI / 4 + 0.6, 0, 1.3, 1, 0.9);
+      mb.add(UNIT_BOX, hullMat, M.x - 12, 0.2, M.z - 1.9, 1.2, 0.6, 0, 0.75, 0.04, 0.5);
+      addBoxCollider(M.x - 12, 0, M.z - 1.9, 0.9, 0.6, 0.7);
+      // breakable crates and barrels
+      makeCrate('mine', M.x - 13, 0, M.z + 2.2, 0.45);
+      makeCrate('mine', M.x - 12.2, 0, M.z + 2.4, 0.4, 0.5);
+      makeCrate('mine', M.x - 4.5, 0, M.z + 11.5, 0.45, 0.3);
+      makeCrate('mine', M.x + 4.5, 0, M.z - 10.5, 0.45);
+      makeCrate('mine', M.x + 1.2, 0, M.z - 11, 0.4, 0.8);
+      makeCrate('mine', MN.ex + 7.6, 0, M.z + 3.2, 0.45, 0.2);
+      makeCrate('mine', MN.ex + 7.9, 0, M.z + 2.6, 0.38);
+      makeBarricade('mine', M.x + 3, M.z - 1.3, 1.9, 1.1);          // boards across the mouth of the south drift
       for (const [x, z] of [[M.x - 1.5, M.z + 11.8], [M.x + 2.4, M.z - 10.8]]) {
         mb.add(new THREE.CylinderGeometry(0.2, 0.2, 0.55, 12), ironMat, x, 0.275, z);
         addBoxCollider(x, 0, z, 0.4, 0.55, 0.4);
       }
-      for (let k = 0; k < 26; k++) {
-        const s = 0.15 + rr3() * 0.35;
-        mb.add(new THREE.DodecahedronGeometry(1, 0), rockMat, M.x - 15 + rr3() * 2, s * 0.6, M.z - 2.5 + rr3() * 5, rr3() * 3, rr3() * 3, 0, s, s * 0.8, s);
-      }
-      addBoxCollider(M.x - 14.2, 0, M.z, 1.6, 0.7, 5);
-      // lanterns hanging from the supports: warm, flickering pools of light in the dark
+      // lanterns hanging from the supports and on the cavern walls: warm, flickering pools of light in the dark
       const lantMat = new THREE.MeshStandardMaterial({ color: 0x2a1a08, emissive: 0xffa040, emissiveIntensity: 1.8 });
-      for (const [x, z] of [[M.x + 5, M.z + 0.7], [M.x - 1, M.z - 0.7], [M.x - 7, M.z + 0.7], [M.x - 12, M.z], [M.x - 3.7, M.z + 6], [M.x - 3, M.z + 11.5], [M.x + 3.7, M.z - 6], [M.x + 3, M.z - 10.5]]) {
+      for (const [x, z] of [[M.x + 5, M.z + 0.7], [M.x - 1, M.z - 0.7], [M.x - 7, M.z + 0.7], [M.x - 12, M.z], [M.x - 3.7, M.z + 6], [M.x - 3, M.z + 11.5],
+                            [M.x + 3.7, M.z - 6], [M.x + 3, M.z - 10.5], [M.x - 18, M.z + 7.5], [M.x - 18, M.z - 7.5], [M.x - 26, M.z + 7.6], [M.x - 26, M.z - 7.6], [M.x - 20.8, M.z + 0.8]]) {
         mb.add(new THREE.CylinderGeometry(0.05, 0.05, 0.13, 10), lantMat, x, 1.62, z);
         mb.add(new THREE.CylinderGeometry(0.003, 0.003, 0.25, 4), ironMat, x, 1.8, z);
         const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xffa040, transparent: true, opacity: 0.65, blending: THREE.AdditiveBlending, depthWrite: false }));
         sp.scale.set(1.1, 1.1, 1); sp.position.set(x, 1.62, z); scene.add(sp);
         lightSources.push({ x, y: 1.55, z, color: 0xffa050, intensity: 3.5, distance: 6, weight: 1.2, fire: true });
       }
+      // the dark water tunnel in the cavern's west wall (where the escape boat goes)
+      const arch = new THREE.Mesh(new THREE.CircleGeometry(1.1, 20, 0, Math.PI), new THREE.MeshBasicMaterial({ color: 0x000000 }));
+      arch.position.set(M.x - 32.99, MN.lake.level, M.z); arch.rotation.y = Math.PI / 2; scene.add(arch);
+      for (let k = 0; k < 9; k++) { const a = (k / 8) * Math.PI; mb.add(new THREE.DodecahedronGeometry(1, 0), rockMat, M.x - 32.9, MN.lake.level + Math.sin(a) * 1.15, M.z + Math.cos(a) * 1.15, rr3() * 3, rr3() * 3, 0, 0.18, 0.15, 0.18); }
+      // the jetty on the lake for the escape boat
+      {
+        const D = MN.dock;
+        for (let k = 0; k < 8; k++) mb.add(UNIT_BOX, plankMat, D.x0 + (k + 0.5) * (D.x1 - D.x0) / 8, 0.04, (D.z0 + D.z1) / 2, 0, 0, 0, (D.x1 - D.x0) / 8 - 0.01, 0.04, D.z1 - D.z0);
+        addBoxCollider((D.x0 + D.x1) / 2, -0.6, (D.z0 + D.z1) / 2, D.x1 - D.x0, 0.66, D.z1 - D.z0);
+      }
+      // the breaker panel on the north chamber's back wall
+      {
+        const B = MN.breaker;
+        mb.add(UNIT_BOX, new THREE.MeshStandardMaterial({ color: 0x3a4038, map: grimeTex, roughness: 0.6, metalness: 0.6 }), B.x, B.y, B.z - 0.06, 0, 0, 0, 0.9, 0.55, 0.1);
+        mb.add(UNIT_BOX, ironMat, B.x, B.y + 0.31, B.z - 0.08, 0, 0, 0, 0.95, 0.05, 0.14);
+        mb.add(new THREE.CylinderGeometry(0.025, 0.025, 1.0, 8), ironMat, B.x + 0.38, B.y + 0.8, B.z - 0.05);   // conduit up into the rock
+      }
       mb.build(scene, { rayTarget: true });
+      // the rock fall blocking the old tunnel to the cavern (the minecart can smash through it)
+      {
+        const group = new THREE.Group(); scene.add(group);
+        const rocks = [];
+        for (let k = 0; k < 34; k++) {
+          const s = 0.15 + rr3() * 0.35, y = Math.min(1.8, rr3() * rr3() * 2.2);
+          const m = new THREE.Mesh(new THREE.DodecahedronGeometry(1, 0), k % 3 ? darkRock : rockMat);
+          m.position.set(MN.rubbleX - 0.8 + rr3() * 1.6, y + s * 0.5, M.z - 1.2 + rr3() * 2.4);
+          m.rotation.set(rr3() * 3, rr3() * 3, 0); m.scale.set(s, s * 0.8, s);
+          m.castShadow = m.receiveShadow = true;
+          group.add(m); rocks.push(m);
+        }
+        const col = addCol(MN.rubbleX, 0, M.z, 1.8, 2.2, 2.4);
+        mineRubble = { group, rocks, col, cleared: false };
+      }
+      // the minecart on the rails (pushable)
+      {
+        const group = new THREE.Group(); group.position.set(MN.cartStart, 0, M.z); scene.add(group);
+        const cb = makeBatch();
+        cb.add(new THREE.CylinderGeometry(0.42, 0.3, 0.4, 4, 1, true), hullMat, 0, 0.4, 0, 0, Math.PI / 4, 0, 1.3, 1, 0.9);
+        cb.add(UNIT_BOX, hullMat, 0, 0.2, 0, 0, 0, 0, 0.75, 0.04, 0.5);
+        for (const s of [-1, 1]) cb.add(UNIT_BOX, ironMat, s * 0.42, 0.18, 0, 0, 0, 0, 0.06, 0.08, 0.5);   // buffers
+        for (let k = 0; k < 6; k++) cb.add(new THREE.DodecahedronGeometry(1, 0), rockMat, -0.2 + (k % 3) * 0.2, 0.45, (k < 3 ? -0.1 : 0.12), k, k * 2, 0, 0.1, 0.08, 0.1);   // ore
+        cb.build(group);
+        const wheels = [];
+        for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+          const w = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.05, 12), railMat);
+          w.rotation.x = Math.PI / 2; w.position.set(sx * 0.28, 0.1, sz * 0.3); group.add(w); wheels.push(w);
+          const spoke = new THREE.Mesh(UNIT_BOX, ironMat); spoke.scale.set(0.18, 0.02, 0.055); w.add(spoke); spoke.rotation.x = -Math.PI / 2;
+        }
+        const col = addCol(MN.cartStart, 0, M.z, 0.9, 0.6, 0.7);
+        mineCart = { group, wheels, col, x: MN.cartStart, vx: 0, done: false };
+      }
     }
 
     // ---------- waiting room music: low drones, dissonant music-box notes, wind and creaks (procedural) ----------
@@ -8055,28 +8280,91 @@
     const mChainMat = new THREE.MeshStandardMaterial({ color: 0xe4e6ea, roughness: 0.28, metalness: 0.85 });
     const mBloodMat = new THREE.MeshStandardMaterial({ color: 0xd8180f, roughness: 0.35, emissive: 0x300000 });
     const mEarMat = new THREE.MeshStandardMaterial({ color: 0x5e5650, roughness: 0.8, flatShading: true });
-    const maskTex = (() => {
-      const c = document.createElement('canvas'); c.width = 512; c.height = 512;
-      const g = c.getContext('2d');
-      g.fillStyle = '#efe4a6'; g.fillRect(0, 0, 512, 512);                     // pale yellow
-      const nrng = mulberry32(666);
-      for (let k = 0; k < 900; k++) { g.fillStyle = `rgba(120,100,50,${(nrng() * 0.1).toFixed(3)})`; g.fillRect(nrng() * 512, nrng() * 512, 3, 3); }
-      g.fillStyle = '#0b0a0a';                                                // large black oval eye holes
-      for (const x of [178, 334]) { g.beginPath(); g.ellipse(x, 205, 54, 42, 0, 0, Math.PI * 2); g.fill(); }
-      g.fillStyle = '#b3160f';                                                // red triangular cheek markings
-      for (const [x, s] of [[150, 1], [362, -1]]) {
-        for (const dy of [0, 24]) { g.beginPath(); g.moveTo(x - s * 40, 264 + dy); g.lineTo(x + s * 45, 250 + dy); g.lineTo(x + s * 45, 268 + dy); g.closePath(); g.fill(); }
+    // the hockey mask's face plate: a canvas with a transparent background (the plate's outline is cut by alphaTest),
+    // eye holes cut right through it, painted vents, mouth slits, red cheek triangles and the scar. Variants come from the shop.
+    const MASK_EYES = [[176, 214, 58, 44, -0.12], [336, 214, 58, 44, 0.12]];    // canvas x, y, rx, ry, tilt (viewer's left, right)
+    const maskCanvas = document.createElement('canvas'); maskCanvas.width = maskCanvas.height = 512;
+    const maskTex = new THREE.CanvasTexture(maskCanvas); maskTex.colorSpace = THREE.SRGBColorSpace;
+    function shieldPath(g, inset = 0) {
+      // a rounded shield: broad domed forehead, slightly pinched temples, cheeks tapering to a rounded chin
+      const i = inset;
+      g.beginPath();
+      g.moveTo(256, 18 + i);
+      g.bezierCurveTo(360 - i, 18 + i, 452 - i, 60 + i, 462 - i, 170);
+      g.bezierCurveTo(470 - i, 260, 440 - i, 330, 402 - i, 392);
+      g.bezierCurveTo(362 - i, 452 - i, 312, 496 - i, 256, 498 - i);
+      g.bezierCurveTo(200, 496 - i, 150 + i, 452 - i, 110 + i, 392);
+      g.bezierCurveTo(72 + i, 330, 42 + i, 260, 50 + i, 170);
+      g.bezierCurveTo(60 + i, 60 + i, 152 + i, 18 + i, 256, 18 + i);
+      g.closePath();
+    }
+    function drawMask(variant = 'classic') {
+      const g = maskCanvas.getContext('2d'), nrng = mulberry32(666);
+      g.clearRect(0, 0, 512, 512);
+      const base = { classic: ['#efe2a0', '#c9b66e'], bone: ['#f2efe6', '#c8c2b2'], blood: ['#ead99a', '#b8a060'], iron: ['#6a5a4c', '#3a2e26'] }[variant] || ['#efe2a0', '#c9b66e'];
+      // aged plate: lighter in the middle, yellowed and grimy towards the rim
+      g.save(); shieldPath(g); g.clip();
+      const grd = g.createRadialGradient(256, 230, 40, 256, 260, 300);
+      grd.addColorStop(0, base[0]); grd.addColorStop(0.75, base[0]); grd.addColorStop(1, base[1]);
+      g.fillStyle = grd; g.fillRect(0, 0, 512, 512);
+      for (let k = 0; k < 1400; k++) { g.fillStyle = `rgba(${variant === 'iron' ? '120,60,20' : '110,90,40'},${(nrng() * 0.12).toFixed(3)})`; g.fillRect(nrng() * 512, nrng() * 512, 2 + nrng() * 3, 2 + nrng() * 3); }
+      if (variant === 'iron') for (let k = 0; k < 40; k++) {                                         // rust blooms
+        const x = nrng() * 512, y = nrng() * 512, r = 8 + nrng() * 30, rg = g.createRadialGradient(x, y, 0, x, y, r);
+        rg.addColorStop(0, 'rgba(140,60,20,0.6)'); rg.addColorStop(1, 'rgba(140,60,20,0)'); g.fillStyle = rg; g.fillRect(x - r, y - r, r * 2, r * 2);
       }
-      g.fillStyle = '#141212';                                                // vertical mouth slits
-      for (const x of [226, 256, 286]) g.fillRect(x - 6, 330, 12, 120);
-      for (const [x, y] of [[214, 92], [256, 80], [298, 92], [235, 128], [277, 128]]) { g.beginPath(); g.arc(x, y, 8, 0, Math.PI * 2); g.fill(); }   // forehead dots
-      // the diagonal scratch over its left eye (the model's left is your right, looking at it: the right of the canvas)
-      g.strokeStyle = '#3a2a20'; g.lineWidth = 7; g.lineCap = 'round';
-      g.beginPath(); g.moveTo(300, 120); g.lineTo(390, 300); g.stroke();
-      g.strokeStyle = 'rgba(255,255,255,0.35)'; g.lineWidth = 2;
-      g.beginPath(); g.moveTo(305, 118); g.lineTo(394, 296); g.stroke();
-      const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
-    })();
+      // soft shading: a darker rim so the curve reads, a highlight down the middle ridge
+      const rim = g.createRadialGradient(256, 250, 170, 256, 250, 290); rim.addColorStop(0, 'rgba(0,0,0,0)'); rim.addColorStop(1, 'rgba(60,45,15,0.35)');
+      g.fillStyle = rim; g.fillRect(0, 0, 512, 512);
+      const ridge = g.createLinearGradient(220, 0, 292, 0); ridge.addColorStop(0, 'rgba(255,255,255,0)'); ridge.addColorStop(0.5, 'rgba(255,255,240,0.22)'); ridge.addColorStop(1, 'rgba(255,255,255,0)');
+      g.fillStyle = ridge; g.fillRect(220, 40, 72, 420);
+      // a darker edge band round the outline
+      g.lineWidth = 10; g.strokeStyle = 'rgba(90,70,30,0.45)'; shieldPath(g, 4); g.stroke();
+      // recess shading round the eye sockets (they're cut out below)
+      for (const [x, y, rx, ry, t] of MASK_EYES) {
+        const sh = g.createRadialGradient(x, y, Math.min(rx, ry) * 0.9, x, y, rx * 1.35);
+        sh.addColorStop(0, 'rgba(30,20,5,0.75)'); sh.addColorStop(1, 'rgba(30,20,5,0)');
+        g.fillStyle = sh; g.beginPath(); g.ellipse(x, y, rx * 1.35, ry * 1.4, t, 0, Math.PI * 2); g.fill();
+      }
+      // red triangular cheek markings: two sharp wedges under each eye, pointing in towards the nose
+      g.fillStyle = variant === 'iron' ? '#c0302a' : '#b5160f';
+      for (const [x, s] of [[176, 1], [336, -1]]) {
+        g.beginPath(); g.moveTo(x - s * 56, 282); g.lineTo(x + s * 50, 268); g.lineTo(x + s * 50, 292); g.closePath(); g.fill();
+        g.beginPath(); g.moveTo(x - s * 44, 316); g.lineTo(x + s * 46, 302); g.lineTo(x + s * 46, 322); g.closePath(); g.fill();
+      }
+      // three vertical black mouth slits near the chin
+      g.fillStyle = '#0d0b0a';
+      for (const x of [222, 256, 290]) { g.beginPath(); g.roundRect ? g.roundRect(x - 7, 352, 14, 110, 7) : g.rect(x - 7, 352, 14, 110); g.fill(); }
+      // small round ventilation holes on the forehead, the temples and round the chin
+      for (const [x, y, r] of [[256, 70, 8], [214, 82, 7], [298, 82, 7], [176, 112, 7], [336, 112, 7], [256, 120, 7], [118, 196, 7], [394, 196, 7],
+                               [130, 330, 7], [382, 330, 7], [176, 420, 7], [336, 420, 7]]) {
+        g.fillStyle = '#0d0b0a'; g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
+        g.strokeStyle = 'rgba(255,255,230,0.25)'; g.lineWidth = 2; g.beginPath(); g.arc(x + 1, y + 1, r + 2, 0.2, 1.6); g.stroke();
+      }
+      // the diagonal slash scar across its left eye (the model's left is the viewer's right: the right of the canvas)
+      g.lineCap = 'round';
+      g.strokeStyle = '#2a1c12'; g.lineWidth = 9; g.beginPath(); g.moveTo(292, 104); g.lineTo(318, 168); g.moveTo(352, 262); g.lineTo(392, 336); g.stroke();
+      g.strokeStyle = 'rgba(255,250,220,0.45)'; g.lineWidth = 3; g.beginPath(); g.moveTo(298, 102); g.lineTo(324, 166); g.moveTo(358, 260); g.lineTo(398, 334); g.stroke();
+      if (variant === 'blood') {                                                                     // splatter
+        for (let k = 0; k < 26; k++) {
+          const x = 120 + nrng() * 300, y = 120 + nrng() * 320, r = 3 + nrng() * 16;
+          g.fillStyle = `rgba(${130 + nrng() * 40 | 0},10,8,${(0.6 + nrng() * 0.35).toFixed(2)})`; g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
+          if (nrng() < 0.5) g.fillRect(x - 2, y, 4, 20 + nrng() * 50);                               // drips
+        }
+      }
+      g.restore();
+      // cut the eye holes right through (alpha 0)
+      g.save(); g.globalCompositeOperation = 'destination-out';
+      for (const [x, y, rx, ry, t] of MASK_EYES) { g.beginPath(); g.ellipse(x, y, rx, ry, t, 0, Math.PI * 2); g.fill(); }
+      g.restore();
+      maskTex.needsUpdate = true;
+    }
+    drawMask('classic');
+    // canvas point on the mask -> point on the face plate (the plate is a curved shell centred on the head)
+    const MASK_R = 0.124, MASK_PHI0 = Math.PI / 2 - 1.12, MASK_PHI_LEN = 2.24, MASK_TH0 = 0.36, MASK_TH_LEN = 1.98;
+    function maskPoint(cx, cy, r, out = new THREE.Vector3()) {
+      const phi = MASK_PHI0 + (cx / 512) * MASK_PHI_LEN, th = MASK_TH0 + (cy / 512) * MASK_TH_LEN;
+      return out.set(-r * Math.cos(phi) * Math.sin(th), r * Math.cos(th), r * Math.sin(phi) * Math.sin(th));
+    }
     const steelTex = (() => {                                                 // straight silver blade: brushed, brighter edge
       const c = document.createElement('canvas'); c.width = 512; c.height = 128;
       const g = c.getContext('2d');
@@ -8143,10 +8431,13 @@
       for (let k = 0; k < 4; k++) tb.add(link, mChainMat, 0, 0.32 - k * 0.058, 0.155 + k * 0.004, 0, k % 2 ? Math.PI / 2 : 0, 0, 1.1, 1.1, 1.1);   // dangling chain
       tb.build(mTorso, { castShadow: true, receiveShadow: false });
     }
-    // head: low-poly greyish-brown, small ears, the pale yellow hockey mask
+    // head: low-poly greyish-brown zombie-ape head, small ears, and the curved hockey mask fitted snugly over the face
     const mHead = new THREE.Group();
     mHead.position.set(0, 0.47, 0.07);          // at your eyes (cancels the torso offset)
     mTorso.add(mHead);
+    const mMaskMat = new THREE.MeshStandardMaterial({ map: maskTex, alphaTest: 0.5, side: THREE.DoubleSide, roughness: 0.42, metalness: 0.04 });
+    const mBrowMat = new THREE.MeshStandardMaterial({ color: 0xe8d896, roughness: 0.45, metalness: 0.04 });
+    const MASK_SY = 1.12;                       // the plate is a little taller than it is wide
     {
       const hb2 = makeBatch();
       hb2.add(new THREE.IcosahedronGeometry(0.11, 1), mSkinMat, 0, 0.01, -0.01, 0, 0, 0, 1, 1.15, 1.02);
@@ -8156,12 +8447,44 @@
       }
       hb2.add(new THREE.CylinderGeometry(0.05, 0.06, 0.09, 8), mSkinMat, 0, -0.11, -0.01);                         // neck
       hb2.build(mHead, { castShadow: true, receiveShadow: false });
-      const mask = new THREE.Mesh(new THREE.SphereGeometry(0.122, 20, 16, Math.PI / 2 - 0.95, 1.9, 0.45, 1.75),
-        new THREE.MeshStandardMaterial({ map: maskTex, roughness: 0.45, metalness: 0.05 }));
-      mask.scale.set(1, 1.15, 1.02);
-      mask.position.set(0, 0.01, -0.004);
+      // the face plate: a smooth curved shell (part of an ellipsoid), with a gentle ridge down the middle and the
+      // cheeks pulled in towards the chin; its outline comes from the texture (alphaTest), so it's an oval shield
+      const geo = new THREE.SphereGeometry(MASK_R, 48, 40, MASK_PHI0, MASK_PHI_LEN, MASK_TH0, MASK_TH_LEN);
+      const p = geo.attributes.position;
+      for (let i = 0; i < p.count; i++) {
+        const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+        const ridge = 0.009 * Math.exp(-((x / 0.03) ** 2)) * THREE.MathUtils.smoothstep(y, -0.09, 0.02);   // nose ridge
+        const chin = y < -0.03 ? 1 - 0.18 * ((-0.03 - y) / 0.09) : 1;                                       // narrower towards the chin
+        p.setXYZ(i, x * chin, y, z + ridge);
+      }
+      geo.computeVertexNormals();
+      const mask = new THREE.Mesh(geo, mMaskMat);
+      mask.scale.set(1, MASK_SY, 1);
+      mask.position.set(0, 0.012, -0.004);
       mask.castShadow = true;
       mHead.add(mask);
+      // black recessed sockets behind the eye holes
+      const socketMat = new THREE.MeshBasicMaterial({ color: 0x050404 });
+      for (const [cx, cy, rx, ry, t] of MASK_EYES) {
+        const sp = maskPoint(cx, cy, MASK_R - 0.014);
+        const sock = new THREE.Mesh(new THREE.SphereGeometry(1, 14, 10), socketMat);
+        sock.position.set(sp.x, sp.y * MASK_SY + 0.012, sp.z - 0.004);
+        sock.scale.set(rx / 512 * MASK_PHI_LEN * MASK_R * 1.05, ry / 512 * MASK_TH_LEN * MASK_R * MASK_SY * 1.05, 0.012);
+        sock.lookAt(sock.position.clone().multiplyScalar(2));
+        sock.rotateZ(-t);
+        mask.parent.add(sock);
+      }
+      // angled brow ridges over the eyes (lower towards the nose, a scowl)
+      for (const pts of [[[106, 156], [170, 150], [244, 182]], [[268, 182], [342, 150], [406, 156]]]) {
+        const curve = new THREE.CatmullRomCurve3(pts.map(([cx, cy]) => { const v = maskPoint(cx, cy, MASK_R + 0.002); v.y = v.y * MASK_SY + 0.012; v.z -= 0.004; return v; }));
+        const brow = new THREE.Mesh(new THREE.TubeGeometry(curve, 16, 0.0075, 6, false), mBrowMat);
+        brow.castShadow = true;
+        mHead.add(brow);
+      }
+    }
+    function setMaskVariant(v) {
+      drawMask(v);
+      mBrowMat.color.setHex({ classic: 0xe8d896, bone: 0xefece2, blood: 0xe4d290, iron: 0x5a4a3c }[v] || 0xe8d896);
     }
     // arms: long dark-brown sleeves with frayed cuffs, silver shackles with short chains, clawed hands
     const ARM_A = 0.36, ARM_B = 0.36, ARM_STRETCH = 1.6;
@@ -8192,45 +8515,67 @@
       const link = new THREE.TorusGeometry(0.018, 0.0055, 6, 12); link.scale(1, 1.6, 1);
       for (let k = 0; k < 4; k++) db.add(link, mChainMat, 0, -0.03 - k * 0.045, 0, 0, k % 2 ? Math.PI / 2 : 0, 0);
       db.build(dangle);
-      // clawed hand (fingers along +y, curling towards +z): dark greyish-brown with bloodied red fingertips and knuckles
+      // clawed hand, built in the controller's grip space like the survivor's hands: the grip runs along Z through the
+      // middle of the fist (-Z forward), the back of the hand faces +X, the wrist is at +Y and the knuckles at -Y. The
+      // fingers curl round the Z axis (where the machete handle sits). Left hand = mirrored.
       const hand = new THREE.Group();
       const hb3 = makeBatch();
-      hb3.add(UNIT_BOX, mHandMat, 0, 0.045, 0, 0, 0, 0, 0.085, 0.09, 0.038);
-      for (let k = 0; k < 4; k++) {
-        const fx = (k - 1.5) * 0.021;
-        hb3.add(new THREE.SphereGeometry(0.012, 6, 4), mBloodMat, fx, 0.09, 0.012);                            // bloodied knuckles
-        hb3.add(new THREE.CylinderGeometry(0.0095, 0.011, 0.055, 6), mHandMat, fx, 0.115, 0.02, 0.5, 0, 0);
-        hb3.add(new THREE.CylinderGeometry(0.008, 0.0095, 0.045, 6), mHandMat, fx, 0.14, 0.055, 1.25, 0, 0);
-        hb3.add(new THREE.ConeGeometry(0.009, 0.034, 6), mBloodMat, fx, 0.135, 0.085, 2.1, 0, 0);               // red claw tip
-      }
-      hb3.add(new THREE.CylinderGeometry(0.011, 0.013, 0.055, 6), mHandMat, -side * 0.05, 0.055, 0.028, 0.6, 0, side * 0.7);   // thumb
-      hb3.add(new THREE.ConeGeometry(0.009, 0.03, 6), mBloodMat, -side * 0.068, 0.08, 0.05, 1.2, 0, side * 0.6);
+      const palm = new THREE.BoxGeometry(0.03, 0.085, 0.08, 1, 2, 2);
+      hb3.add(palm, mHandMat, 0.036, 0.004, 0);
+      hb3.add(new THREE.CylinderGeometry(0.024, 0.027, 0.05, 8), mHandMat, 0.034, 0.062, 0, 0, 0, 0, 0.8, 1, 1);   // wrist
+      const C = new THREE.Vector2(0, -0.004);                                    // the curl centre (the grip axis)
+      const fingerZ = [-0.029, -0.0095, 0.0095, 0.028];
+      const seg = (a, b, r0, r1, mat) => {                                       // a tapered cylinder from a to b
+        const d = new THREE.Vector3().subVectors(b, a), len = d.length();
+        const g = new THREE.CylinderGeometry(r1, r0, len, 6); g.translate(0, len / 2, 0);
+        const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize());
+        hb3.addMatrix(g, mat, new THREE.Matrix4().compose(a, q, new THREE.Vector3(1, 1, 1)));
+      };
+      fingerZ.forEach((z, k) => {
+        const len = k === 3 ? 0.85 : 1;
+        const th0 = Math.atan2(-0.042 - C.y, 0.033 - C.x);                      // the knuckle
+        const pts = [[0, 0.05], [0.95, 0.032], [1.85, 0.03], [2.55 * len, 0.03]].map(([da, r]) => {
+          const a = th0 - da;
+          return new THREE.Vector3(C.x + Math.cos(a) * r, C.y + Math.sin(a) * r, z);
+        });
+        hb3.add(new THREE.SphereGeometry(0.0125, 6, 5), mBloodMat, pts[0].x + 0.004, pts[0].y - 0.002, z);   // bloodied knuckle
+        seg(pts[0], pts[1], 0.011, 0.0098, mHandMat);
+        seg(pts[1], pts[2], 0.0098, 0.0088, mHandMat);
+        seg(pts[2], pts[3], 0.0088, 0.0078, mHandMat);
+        const tipDir = new THREE.Vector3().subVectors(pts[3], pts[2]).normalize();
+        seg(pts[3], pts[3].clone().addScaledVector(tipDir, 0.026), 0.008, 0.0012, mBloodMat);                // red claw
+      });
+      // thumb: from the side of the palm, over the top of the grip on the -Z side
+      const tp = [new THREE.Vector3(0.03, 0.012, -0.04), new THREE.Vector3(0.012, 0.03, -0.048), new THREE.Vector3(-0.012, 0.026, -0.05), new THREE.Vector3(-0.026, 0.012, -0.048)];
+      seg(tp[0], tp[1], 0.012, 0.0105, mHandMat); seg(tp[1], tp[2], 0.0105, 0.009, mHandMat); seg(tp[2], tp[3], 0.009, 0.008, mHandMat);
+      seg(tp[3], tp[3].clone().add(new THREE.Vector3(-0.01, -0.02, 0)), 0.008, 0.0012, mBloodMat);
       hb3.build(hand);
       monsterModel.add(upper, fore, hand);
       return { side, upper, fore, foreSleeve, wrist, hand, dangle };
     });
-    // the straight silver machete with a dark grip and a crossguard (along the hand's +y = pointing forward)
+    // the straight silver machete with a dark grip and a crossguard, held in the right fist: the handle runs through the
+    // centre of the palm along the grip axis (Z) with the claws curled round it, the blade points forward (-Z), edge down
     const mMachete = new THREE.Group();
+    const MACHETE_BLADE = { z0: -0.078, z1: -0.6 };          // blade, from the guard to the tip (hand space, before scale)
     {
       const mb2 = makeBatch();
       const gripMat = new THREE.MeshStandardMaterial({ color: 0x181410, roughness: 0.9 });
       const guardMat = new THREE.MeshStandardMaterial({ color: 0xb8bcc2, roughness: 0.35, metalness: 0.9 });
-      mb2.add(new THREE.CylinderGeometry(0.016, 0.018, 0.13, 8), gripMat, 0, 0, 0);
-      for (let k = 0; k < 5; k++) mb2.add(new THREE.TorusGeometry(0.0175, 0.0035, 4, 10), gripMat, 0, -0.045 + k * 0.022, 0, Math.PI / 2, 0, 0.3);
-      mb2.add(new THREE.CylinderGeometry(0.02, 0.02, 0.012, 8), guardMat, 0, -0.07, 0);                                  // pommel
-      mb2.add(UNIT_BOX, guardMat, 0, 0.071, 0, 0, 0, 0, 0.1, 0.014, 0.03);                                              // crossguard
-      const bs = new THREE.Shape();                                                                                       // straight blade
-      bs.moveTo(-0.022, 0); bs.lineTo(0.024, 0); bs.lineTo(0.026, 0.46); bs.lineTo(0.004, 0.52); bs.lineTo(-0.024, 0.47); bs.lineTo(-0.022, 0);
-      const blade = new THREE.ExtrudeGeometry(bs, { depth: 0.004, bevelEnabled: true, bevelThickness: 0.0015, bevelSize: 0.002, bevelSegments: 1 });
-      blade.translate(0, 0.078, -0.002);
+      mb2.add(new THREE.CylinderGeometry(0.0165, 0.0175, 0.13, 10), gripMat, 0, 0, 0.002, Math.PI / 2, 0, 0);
+      for (let k = 0; k < 5; k++) mb2.add(new THREE.TorusGeometry(0.0175, 0.0035, 4, 10), gripMat, 0, 0, -0.048 + k * 0.024, 0, 0, 0);   // cord wrap
+      mb2.add(new THREE.CylinderGeometry(0.021, 0.021, 0.012, 10), guardMat, 0, 0, 0.073, Math.PI / 2, 0, 0);                         // pommel
+      mb2.add(UNIT_BOX, guardMat, 0, -0.004, -0.069, 0, 0, 0, 0.016, 0.1, 0.014);                                                     // crossguard
+      const bs = new THREE.Shape();                          // blade outline: x = along the blade, y = across (edge at -y)
+      bs.moveTo(0, -0.026); bs.lineTo(0.47, -0.027); bs.lineTo(0.522, 0.002); bs.lineTo(0.48, 0.022); bs.lineTo(0, 0.021); bs.lineTo(0, -0.026);
+      const blade = new THREE.ExtrudeGeometry(bs, { depth: 0.004, bevelEnabled: true, bevelThickness: 0.0012, bevelSize: 0.002, bevelSegments: 1 });
       const p = blade.attributes.position, uv = blade.attributes.uv;
-      for (let i = 0; i < p.count; i++) uv.setXY(i, (p.getY(i) - 0.078) / 0.52, (p.getX(i) + 0.026) / 0.052);
+      for (let i = 0; i < p.count; i++) uv.setXY(i, p.getX(i) / 0.52, (p.getY(i) + 0.027) / 0.05);
+      blade.rotateY(Math.PI / 2);                            // along -Z, flat in the YZ plane
+      blade.translate(-0.002, -0.004, -0.076);
       mb2.addMatrix(blade, mBladeMat, IDENTITY);
       mb2.build(mMachete);
       mMachete.traverse((o) => { if (o.isMesh) o.castShadow = true; });
-      // in the palm: grip across the curled fingers, blade forward past the knuckles; edge facing down
-      mMachete.position.set(0, 0.06, 0.035);
-      mMachete.rotation.set(0, Math.PI / 2, 0);
+      mMachete.position.set(0, 0, 0);
     }
     mArms[0].hand.add(mMachete);                // model faces +z, so its right hand is on -x: mArms[0]
 
@@ -8261,10 +8606,10 @@
       arm.dangle.parent.getWorldQuaternion(_ikQi).invert();
       arm.dangle.quaternion.copy(_ikQi);
     }
-    // grip space (-Z forward, +Y up) -> hand space (+Y fingers forward, +Z palm side down)
-    const HAND_FROM_GRIP = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(
-      new THREE.Vector3(-1, 0, 0), new THREE.Vector3(0, 0, -1), new THREE.Vector3(0, -1, 0)));
-    const HAND_REST = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);   // knuckles down, fingers forward
+    const HAND_SCALE = PLAYER_SCALE / MON_SCALE;            // hands at the same size as the survivor's in VR
+    const HAND_REST = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);   // fist forward, knuckles down
+    const WRIST_LOCAL = new THREE.Vector3(0.034, 0.08, 0);   // where the sleeve meets the hand (hand space)
+    const _mnWr = new THREE.Vector3();
     const _mnRootQi = new THREE.Quaternion(), _mnQ = new THREE.Quaternion(), _mnFlip = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
     const _mnS = new THREE.Vector3(), _mnW = new THREE.Vector3(), _mnF = new THREE.Vector3(), _mnCam = new THREE.Vector3(), _mnDir = new THREE.Vector3();
     let monsterYaw = 0, monsterT = 0;
@@ -8306,19 +8651,1782 @@
         const arm = src?.handedness === 'left' ? mArms[1] : src?.handedness === 'right' ? mArms[0] : mArms[i];
         _mnS.set(arm.side * 0.23, -0.14, -0.1);                       // shoulder, in model space
         if (vr && h.tracked && h.follower.visible) {
-          _mnF.set(0, 0, -1).applyQuaternion(h.follower.quaternion);  // controller forward
-          _mnW.copy(h.follower.position).addScaledVector(_mnF, -0.045);  // wrist just behind the palm
+          _mnW.copy(h.follower.position);                             // the hand sits exactly where the survivor's would
           monsterModel.worldToLocal(_mnW);
           arm.hand.position.copy(_mnW);
-          arm.hand.quaternion.copy(_mnRootQi).multiply(h.follower.quaternion).multiply(HAND_FROM_GRIP);
+          arm.hand.quaternion.copy(_mnRootQi).multiply(h.follower.quaternion);
         } else {
-          // resting: knuckles down in front of the body, gorilla style
-          arm.hand.position.set(arm.side * 0.3, -0.5 + Math.sin(monsterT * 1.6 + arm.side) * 0.008, 0.16);
+          // resting: fists forward and knuckles down in front of the body, gorilla style
+          arm.hand.position.set(arm.side * 0.3, -0.46 + Math.sin(monsterT * 1.6 + arm.side) * 0.008, 0.2);
           arm.hand.quaternion.copy(HAND_REST);
         }
-        solveArm(arm, _mnS, arm.hand.position);
+        arm.hand.scale.set(arm === mArms[1] ? -HAND_SCALE : HAND_SCALE, HAND_SCALE, HAND_SCALE);   // the left hand is mirrored
+        _mnWr.copy(WRIST_LOCAL).multiply(arm.hand.scale).applyQuaternion(arm.hand.quaternion).add(arm.hand.position);
+        solveArm(arm, _mnS, _mnWr);
       }
     }
+
+
+    // =====================================================================
+    //  GAME EXTRAS (22/11/26): float-only swimming on every lake, the mechanical outboard engine, generators and quests
+    //  on the graveyard and the mine, escape boats, the sunrise ending, the MONSTER POV monitor, the waiting room shop
+    //  and the monster's machete hacking wood and slicing branches.
+    // =====================================================================
+
+    // ---------- float-only swimming: in deep water you always bob at the surface and can't sink ----------
+    const FLOAT_HEAD = 0.13;                     // your eyes ride this far above the water (scaled VR metres)
+    const _flH = new THREE.Vector3();
+    function floatAtSurface(dt, level) {
+      headWorld(_flH);
+      const err = level + FLOAT_HEAD - _flH.y;
+      if (err > 0) {
+        rigVelocity.y += GRAVITY * dt;                         // the water carries all your weight...
+        rigVelocity.y += err * 34 * dt;                        // ...and lifts you back up to the surface
+        rigVelocity.y *= Math.exp(-4 * dt);                    // without bouncing
+      } else {
+        rigVelocity.y += GRAVITY * 0.45 * dt;                  // above it (a strong stroke): you drop back gently
+      }
+      if (_flH.y < level + 0.04) rigVelocity.y = Math.max(rigVelocity.y, (level + 0.04 - _flH.y) * 10 + 0.25);   // never under
+    }
+    // the same Gorilla-style strokes as the camp lake, for the lakes on the other maps
+    const exPrevRel = [new THREE.Vector3(), new THREE.Vector3()], exPrevOk = [false, false];
+    const _exHead = new THREE.Vector3(), _exHand = new THREE.Vector3(), _exRel = new THREE.Vector3(), _exVel = new THREE.Vector3();
+    let exSwimming = false, exStrokeT = 0;
+    function updateExtraSwimming(dt) {
+      for (const L of extraLakes) {                            // gentle waves on the water
+        if (L.map !== currentMap) continue;
+        const pos = L.water.geometry.attributes.position, t = performance.now() * 0.001;
+        for (let i = 0; i < pos.count; i++) pos.setZ(i, 0.01 * Math.sin(pos.getX(i) * 1.3 + t * 1.2) + 0.008 * Math.sin(pos.getY(i) * 1.7 - t * 0.9));
+        pos.needsUpdate = true;
+      }
+      if (!renderer.xr.isPresenting || currentMap === 'camp' || currentMap === 'waiting' || dt <= 0) { exSwimming = false; return; }
+      headWorld(_exHead);
+      const L = extraLakes.find((l) => l.map === currentMap && _exHead.x > l.x0 + 0.05 && _exHead.x < l.x1 - 0.05 && _exHead.z > l.z0 + 0.05 && _exHead.z < l.z1 - 0.05);
+      const inWater = !!L && _exHead.y < L.level + 0.35 && !escapeBoatAboard();
+      if (inWater && !exSwimming && rigVelocity.y < -0.4) boatAudio.splash(-rigVelocity.y / 3);
+      exSwimming = inWater;
+      if (!inWater) { exPrevOk[0] = exPrevOk[1] = false; return; }
+      floatAtSurface(dt, L.level);
+      rigVelocity.multiplyScalar(Math.exp(-WATER_DRAG * dt));
+      let stroking = false;
+      for (let i = 0; i < hands.length; i++) {
+        const h = hands[i];
+        if (!h.tracked) { exPrevOk[i] = false; continue; }
+        currentHandPosition(h, _exHand);
+        _exRel.subVectors(_exHand, _exHead);
+        if (exPrevOk[i] && _exHand.y < L.level) {
+          _exVel.subVectors(_exRel, exPrevRel[i]).divideScalar(dt);
+          if (_exVel.length() > 4) _exVel.setLength(4);
+          rigVelocity.addScaledVector(_exVel, -SWIM_STRENGTH * dt);
+          if (_exVel.length() > 1.2) stroking = true;
+        }
+        exPrevRel[i].copy(_exRel); exPrevOk[i] = true;
+      }
+      if (rigVelocity.length() > 3) rigVelocity.setLength(3);
+      if (stroking && (exStrokeT -= dt) <= 0) { exStrokeT = 0.35; boatAudio.stroke(); }
+    }
+
+    // ---------- the mechanical outboard: engine block, cooling fins, exhaust, flywheel, plug leads, throttle, prop shaft ----------
+    const engineParts = {};
+    {
+      const blockMat = new THREE.MeshStandardMaterial({ color: 0x3c4046, map: grimeTex, roughness: 0.55, metalness: 0.75 });
+      const finMat = new THREE.MeshStandardMaterial({ color: 0x8e949a, roughness: 0.35, metalness: 0.85 });
+      const pipeMat = new THREE.MeshStandardMaterial({ color: 0x4a3226, map: grimeTex, roughness: 0.7, metalness: 0.6 });
+      const wireMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.8 });
+      const bootMat = new THREE.MeshStandardMaterial({ color: 0xb02a1a, roughness: 0.6 });
+      const porcelainMat = new THREE.MeshStandardMaterial({ color: 0xf0eee6, roughness: 0.3 });
+      const redMat = new THREE.MeshStandardMaterial({ color: 0xc0281c, roughness: 0.5, metalness: 0.3 });
+      const eb = makeBatch();
+      // engine block housing behind the cowl: a crankcase with twin horizontal cylinders and deep cooling fins
+      eb.add(UNIT_BOX, blockMat, -0.155, 0.36, 0, 0, 0, 0, 0.06, 0.12, 0.13);
+      for (const z of [-0.034, 0.034]) {
+        eb.add(new THREE.CylinderGeometry(0.03, 0.03, 0.09, 14), blockMat, -0.22, 0.375, z, 0, 0, Math.PI / 2);
+        for (let k = 0; k < 7; k++) eb.add(new THREE.CylinderGeometry(0.043, 0.043, 0.004, 16), finMat, -0.19 - k * 0.011, 0.375, z, 0, 0, Math.PI / 2);
+        eb.add(UNIT_BOX, blockMat, -0.272, 0.375, z, 0, 0, 0, 0.018, 0.07, 0.06);                          // cylinder head
+        for (let k = 0; k < 4; k++) eb.add(UNIT_BOX, finMat, -0.272, 0.35 + k * 0.016, z, 0, 0, 0, 0.026, 0.004, 0.064);
+        // spark plug in each head: hex body, white porcelain, red boot on the lead
+        eb.add(new THREE.CylinderGeometry(0.008, 0.008, 0.012, 6), finMat, -0.287, 0.375, z, 0, 0, Math.PI / 2);
+        eb.add(new THREE.CylinderGeometry(0.005, 0.006, 0.02, 10), porcelainMat, -0.303, 0.375, z, 0, 0, Math.PI / 2);
+        eb.add(new THREE.CylinderGeometry(0.008, 0.007, 0.022, 10), bootMat, -0.322, 0.375, z, 0, 0, Math.PI / 2);
+        // the plug lead, curving up over the block to the magneto under the flywheel
+        const lead = new THREE.CatmullRomCurve3([new THREE.Vector3(-0.333, 0.375, z), new THREE.Vector3(-0.35, 0.43, z * 1.4), new THREE.Vector3(-0.24, 0.5, z * 1.6),
+          new THREE.Vector3(-0.1, 0.5, z * 1.2), new THREE.Vector3(-0.03, 0.49, z * 0.6)]);
+        eb.addMatrix(new THREE.TubeGeometry(lead, 20, 0.0035, 5, false), wireMat, IDENTITY);
+      }
+      eb.add(UNIT_BOX, blockMat, -0.03, 0.495, 0, 0, 0, 0, 0.05, 0.03, 0.06);                              // magneto / coil box
+      // exhaust: a manifold off the block, a pipe running down the back of the leg, a flared outlet near the water
+      const ex = new THREE.CatmullRomCurve3([new THREE.Vector3(-0.2, 0.33, 0.06), new THREE.Vector3(-0.17, 0.29, 0.075), new THREE.Vector3(-0.08, 0.22, 0.05),
+        new THREE.Vector3(-0.065, 0.1, 0.04), new THREE.Vector3(-0.066, -0.06, 0.035)]);
+      eb.addMatrix(new THREE.TubeGeometry(ex, 28, 0.011, 8, false), pipeMat, IDENTITY);
+      eb.add(new THREE.CylinderGeometry(0.018, 0.012, 0.03, 10), pipeMat, -0.066, -0.075, 0.035);
+      // throttle lever and quadrant on the starboard side of the cowl
+      eb.add(new THREE.CylinderGeometry(0.03, 0.03, 0.008, 16, 1, false, 0, Math.PI), finMat, 0.075, 0.34, 0.118, Math.PI / 2, 0, 0);
+      eb.add(new THREE.CylinderGeometry(0.008, 0.008, 0.012, 10), blockMat, 0.075, 0.34, 0.124, Math.PI / 2, 0, 0);
+      // propeller shaft housing under the gearcase
+      eb.add(new THREE.CylinderGeometry(0.014, 0.014, 0.12, 10), blockMat, -0.01, -0.236, 0, 0, 0, Math.PI / 2);
+      for (const x of [0.045, -0.06]) eb.add(new THREE.CylinderGeometry(0.018, 0.018, 0.012, 10), finMat, x, -0.236, 0, 0, 0, Math.PI / 2);   // bearing collars
+      eb.build(motorGroup);
+      // flywheel with a pulley groove and starter cogs on top of the powerhead (spins when the engine runs)
+      const fly = new THREE.Group(); fly.position.set(-0.005, 0.515, 0); motorGroup.add(fly);
+      const fb2 = makeBatch();
+      fb2.add(new THREE.CylinderGeometry(0.075, 0.075, 0.022, 28), blockMat, 0, 0, 0);
+      fb2.add(new THREE.TorusGeometry(0.075, 0.004, 6, 28), finMat, 0, 0.004, 0, Math.PI / 2, 0, 0);
+      fb2.add(new THREE.CylinderGeometry(0.035, 0.035, 0.014, 20), finMat, 0, 0.017, 0);                 // pulley
+      fb2.add(new THREE.TorusGeometry(0.035, 0.004, 6, 20), blockMat, 0, 0.017, 0, Math.PI / 2, 0, 0);    // its groove
+      for (let k = 0; k < 6; k++) { const a = (k / 6) * Math.PI * 2; fb2.add(UNIT_BOX, finMat, Math.cos(a) * 0.055, 0.012, Math.sin(a) * 0.055, 0, -a, 0, 0.018, 0.006, 0.008); }   // cooling vanes
+      fb2.add(UNIT_BOX, redMat, 0.05, 0.012, 0, 0, 0, 0, 0.02, 0.004, 0.006);                             // timing mark
+      fb2.add(new THREE.CylinderGeometry(0.01, 0.01, 0.02, 8), finMat, 0, 0.03, 0);                       // nut
+      fb2.build(fly);
+      // throttle lever (swings with the throttle)
+      const lever = new THREE.Group(); lever.position.set(0.075, 0.34, 0.128); motorGroup.add(lever);
+      const lb = makeBatch();
+      lb.add(UNIT_BOX, finMat, 0, 0.03, 0, 0, 0, 0, 0.008, 0.06, 0.006);
+      lb.add(new THREE.SphereGeometry(0.009, 10, 8), redMat, 0, 0.062, 0);
+      lb.build(lever);
+      // the spinning propeller shaft: a striped coupling you can see turning
+      const shaft = new THREE.Group(); shaft.position.set(-0.01, -0.236, 0); motorGroup.add(shaft);
+      const sb = makeBatch();
+      sb.add(new THREE.CylinderGeometry(0.006, 0.006, 0.18, 8), finMat, 0, 0, 0, 0, 0, Math.PI / 2);
+      for (let k = 0; k < 4; k++) sb.add(UNIT_BOX, redMat, -0.03 + k * 0.022, 0, 0, k * 0.8, 0, 0, 0.006, 0.0165, 0.004);
+      sb.build(shaft);
+      Object.assign(engineParts, { fly, lever, shaft });
+    }
+    function updateEngineParts(dt) {
+      const ready = boat.parts >= PARTS_NEEDED;
+      const running = ready && (boat.holding >= 0 || boat.engineLevel > 0.02 || Math.abs(boat.speed) > 0.3);
+      engineParts.spin = (engineParts.spin || 0) + ((running ? 28 + 70 * boat.engineLevel : 0) - (engineParts.spin || 0)) * Math.min(1, dt * (running ? 3 : 1));
+      engineParts.fly.rotation.y += engineParts.spin * dt;
+      engineParts.shaft.rotation.x += (boat.speed * 25 + (running ? 4 : 0)) * dt;
+      engineParts.lever.rotation.z = -0.35 + boat.engineLevel * 1.0;
+    }
+
+    // ---------- generators on the graveyard and the mine (the same machines and skill checks as the camp) ----------
+    const extraGens = [];
+    for (const [map, sites] of [['graveyard', GY.gens], ['mine', MN.gens]]) {
+      sites.forEach((site, k) => {
+        const g = buildGenerator(site, k);
+        g.extra = true; g.map = map;
+        extraGens.push(g);
+      });
+    }
+    cableBatch.build(scene, { castShadow: false });
+    const mapGens = (map) => extraGens.filter((g) => g.map === map);
+    {
+      // their own sign text and pop-ups (the camp's "Generators Powered: n/4" stays the camp's)
+      const baseSign = drawGenSign;
+      drawGenSign = function (g) {
+        if (!g.extra) return baseSign(g);
+        const list = mapGens(g.map), on = list.filter((x) => x.running).length;
+        const c = g.signCanvas.getContext('2d'), W = g.signCanvas.width, H = g.signCanvas.height;
+        c.clearRect(0, 0, W, H);
+        c.fillStyle = 'rgba(0,0,0,0.6)'; c.fillRect(6, 6, W - 12, H - 12);
+        c.strokeStyle = g.running ? '#3cff6e' : '#ff3a2a'; c.lineWidth = 4; c.strokeRect(8, 8, W - 16, H - 16);
+        c.textAlign = 'center'; c.textBaseline = 'middle';
+        c.fillStyle = '#cfd8dc'; c.font = 'bold 30px system-ui, sans-serif';
+        c.fillText(`GENERATOR ${g.index + 1} · ${g.site.name}`, W / 2, 42);
+        c.fillStyle = g.running ? '#6dff8a' : '#ff6a5a'; c.font = 'bold 34px system-ui, sans-serif';
+        c.fillText(g.running ? 'ONLINE' : `OFFLINE · ${g.progress}/${GEN_CHECKS_NEEDED}`, W / 2, 92);
+        c.fillStyle = '#ffcf5a'; c.font = '28px system-ui, sans-serif';
+        c.fillText(`Generators Powered: ${on}/${list.length}`, W / 2, 140);
+        g.signTex.needsUpdate = true;
+      };
+      const basePower = powerUp;
+      powerUp = function (g) {
+        if (!g.extra) { basePower(g); questChanged('camp'); return; }
+        g.running = true;
+        releaseHandle(g);
+        g.bulbMat.color.setHex(0x002200);
+        g.bulbMat.emissive.setHex(0x30ff50);
+        g.glow.material.color.setHex(0x40ff60);
+        horrorAudio.engineOn();
+        const list = mapGens(g.map), on = list.filter((x) => x.running).length;
+        list.forEach(drawGenSign);
+        showToast(`Generators Powered: ${on}/${list.length}`, on >= list.length ? 'Every floodlight is on' : `${g.site.name} floodlights are on`);
+        questChanged(g.map);
+      };
+      const baseNearest = nearestRunningGeneratorDistance;
+      nearestRunningGeneratorDistance = function (p) {
+        let best = baseNearest(p);
+        for (const g of extraGens) if (g.running && g.map === currentMap) { const d = p.distanceTo(g.pos); if (Number.isFinite(d)) best = Math.min(best, d); }
+        return best;
+      };
+      extraGens.forEach(drawGenSign);
+    }
+    let exGenPrev = [[false, false, false], [false, false, false]];
+    function updateExtraGenerators(dt) {
+      const now = controllers.map((c) => [btn(c, 0), btn(c, 1), btn(c, 4)]);
+      const pressedNow = (i, k) => now[i][k] && !exGenPrev[i][k];
+      for (const g of extraGens) {
+        if (g.map !== currentMap) { if (g.holding >= 0) releaseHandle(g); continue; }
+        updateOneGenerator(g, dt, now, pressedNow);
+      }
+      exGenPrev = now;
+    }
+
+    // ---------- extra sounds (their own small Web Audio graph): machete hits, slices, levers, cart, rock fall, fire, chimes ----------
+    const gameAudio = (() => {
+      let ctx = null, out = null, noise = null;
+      function build() {
+        ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -12; comp.ratio.value = 4;
+        out = ctx.createGain(); out.gain.value = 0.7;
+        out.connect(comp); comp.connect(ctx.destination);
+        const len = ctx.sampleRate * 2; noise = ctx.createBuffer(1, len, ctx.sampleRate);
+        const d = noise.getChannelData(0); for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+      }
+      const ok = () => ctx && ctx.state === 'running';
+      const fin = (v, d = 0) => (Number.isFinite(v) ? v : d);
+      function burst(t, { type = 'bandpass', f0, f1 = f0, q = 1, peak, attack = 0.002, decay }) {
+        const s = ctx.createBufferSource(); s.buffer = noise;
+        const f = ctx.createBiquadFilter(); f.type = type; f.Q.value = q;
+        f.frequency.setValueAtTime(fin(f0, 1000), t); f.frequency.exponentialRampToValueAtTime(Math.max(20, fin(f1, 1000)), t + attack + decay);
+        const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(Math.max(0.0002, fin(peak)), t + attack);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + attack + decay);
+        s.connect(f); f.connect(g); g.connect(out); s.start(t, Math.random()); s.stop(t + attack + decay + 0.05);
+      }
+      function tone(t, f0, f1, peak, dur, type = 'sine') {
+        const o = ctx.createOscillator(); o.type = type;
+        o.frequency.setValueAtTime(fin(f0, 200), t); o.frequency.exponentialRampToValueAtTime(Math.max(20, fin(f1, 100)), t + dur);
+        const g = ctx.createGain(); g.gain.setValueAtTime(Math.max(0.0002, fin(peak)), t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+        o.connect(g); g.connect(out); o.start(t); o.stop(t + dur + 0.05);
+      }
+      const att = (d) => 1 / (1 + (fin(d, 0) / 4) ** 2);
+      return {
+        unlock() { try { if (!ctx) build(); ctx.resume(); } catch (e) { console.warn('Game audio could not start:', e); } },
+        hack(dist, strength = 1) {                     // steel biting into wood: a hard thunk, a ring off the blade, splinters
+          if (!ok()) return; const t = ctx.currentTime + 0.005, a = att(dist) * Math.min(1.3, strength);
+          tone(t, 170, 55, 0.6 * a, 0.16, 'triangle');
+          burst(t, { type: 'lowpass', f0: 900, f1: 200, peak: 0.8 * a, decay: 0.09 });
+          burst(t + 0.004, { f0: 3200, f1: 1800, q: 1.5, peak: 0.45 * a, decay: 0.06 });
+          for (const f of [1870, 2790, 4120]) tone(t, f, f * 0.98, 0.05 * a, 0.35);
+          for (let k = 0; k < 5; k++) burst(t + 0.02 + Math.random() * 0.08, { type: 'highpass', f0: 2500 + Math.random() * 3000, peak: 0.12 * a, decay: 0.02 });
+        },
+        slice(dist) {                                  // a clean swish through a branch and a dry snap
+          if (!ok()) return; const t = ctx.currentTime + 0.005, a = att(dist);
+          burst(t, { f0: 5200, f1: 900, q: 2.5, peak: 0.5 * a, attack: 0.01, decay: 0.14 });
+          burst(t + 0.05, { type: 'highpass', f0: 1800, peak: 0.9 * a, decay: 0.035 });
+          tone(t + 0.05, 620, 240, 0.25 * a, 0.06, 'square');
+          for (let k = 0; k < 4; k++) burst(t + 0.08 + k * 0.03, { type: 'highpass', f0: 3000, peak: 0.15 * a, decay: 0.015 });
+        },
+        smash(dist) {                                  // boards splintering apart
+          if (!ok()) return; const t = ctx.currentTime + 0.005, a = att(dist);
+          burst(t, { type: 'lowpass', f0: 1400, f1: 120, peak: 1.0 * a, decay: 0.35 });
+          for (let k = 0; k < 9; k++) burst(t + Math.random() * 0.25, { f0: 900 + Math.random() * 2500, q: 3, peak: (0.2 + Math.random() * 0.3) * a, decay: 0.03 + Math.random() * 0.05 });
+          tone(t, 110, 45, 0.5 * a, 0.3, 'triangle');
+        },
+        whoosh() { if (!ok()) return; const t = ctx.currentTime + 0.005; burst(t, { type: 'lowpass', f0: 300, f1: 1600, peak: 0.6, attack: 0.15, decay: 0.6 }); burst(t, { f0: 2200, q: 0.8, peak: 0.15, attack: 0.05, decay: 0.5 }); },
+        chime() { if (!ok()) return; const t = ctx.currentTime + 0.005; for (const [f, d] of [[392, 0], [466, 0.12], [587, 0.24]]) tone(t + d, f, f, 0.18, 1.4); },
+        clunk() { if (!ok()) return; const t = ctx.currentTime + 0.005; tone(t, 120, 60, 0.6, 0.18, 'square'); burst(t, { type: 'lowpass', f0: 600, peak: 0.6, decay: 0.08 }); burst(t + 0.05, { type: 'highpass', f0: 4000, peak: 0.5, decay: 0.15 }); },
+        rumble() { if (!ok()) return; const t = ctx.currentTime + 0.005; burst(t, { type: 'lowpass', f0: 260, f1: 60, peak: 1.2, attack: 0.05, decay: 2.2 }); for (let k = 0; k < 14; k++) burst(t + Math.random() * 1.6, { type: 'lowpass', f0: 500 + Math.random() * 600, peak: 0.4, decay: 0.12 }); },
+        roll(speed) {                                  // a cart wheel click on a rail joint
+          if (!ok()) return; const t = ctx.currentTime + 0.005; burst(t, { f0: 700, q: 4, peak: Math.min(0.4, 0.1 + speed * 0.1), decay: 0.04 });
+        },
+        engine(on) {                                   // a little two-stroke putter for the escape boats
+          if (!ok()) return;
+          if (on && !this._eng) {
+            const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = 46;
+            const lfo = ctx.createOscillator(); lfo.frequency.value = 11; const lg = ctx.createGain(); lg.gain.value = 0.5;
+            const g = ctx.createGain(); g.gain.value = 0; const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 500;
+            lfo.connect(lg); lg.connect(g.gain); o.connect(f); f.connect(g); g.connect(out); o.start(); lfo.start();
+            g.gain.setValueAtTime(0, ctx.currentTime); g.gain.linearRampToValueAtTime(0.25, ctx.currentTime + 0.5);
+            this._eng = { o, lfo, g };
+          } else if (!on && this._eng) {
+            const e = this._eng; this._eng = null; const t = ctx.currentTime;
+            e.g.gain.cancelScheduledValues(t); e.g.gain.setValueAtTime(e.g.gain.value, t); e.g.gain.linearRampToValueAtTime(0, t + 0.8);
+            setTimeout(() => { try { e.o.stop(); e.lfo.stop(); } catch (er) { /* already stopped */ } }, 900);
+          }
+        },
+        growl() {                                      // the "you can't do that" warning: a low, wet growl and a dull double buzz
+          if (!ok()) return; const t = ctx.currentTime + 0.01;
+          const o = ctx.createOscillator(); o.type = 'sawtooth';
+          o.frequency.setValueAtTime(62, t); o.frequency.linearRampToValueAtTime(78, t + 0.25); o.frequency.linearRampToValueAtTime(55, t + 0.9);
+          const wob = ctx.createOscillator(); wob.frequency.value = 23; const wg = ctx.createGain(); wg.gain.value = 9; wob.connect(wg); wg.connect(o.frequency);
+          const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 420; lp.Q.value = 6;
+          const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.55, t + 0.08); g.gain.exponentialRampToValueAtTime(0.0001, t + 1.0);
+          o.connect(lp); lp.connect(g); g.connect(out); o.start(t); wob.start(t); o.stop(t + 1.05); wob.stop(t + 1.05);
+          burst(t, { type: 'lowpass', f0: 300, f1: 90, peak: 0.5, attack: 0.05, decay: 0.8 });
+          for (const d of [0, 0.16]) tone(t + d, 98, 92, 0.18, 0.12, 'square');
+        },
+        fanfare() {                                    // the ending sting: a low swell into a bright, uneasy chord
+          if (!ok()) return; const t = ctx.currentTime + 0.05;
+          for (const [f, d] of [[130.8, 0], [196, 0.4], [261.6, 0.8], [311.1, 1.2], [392, 1.6], [415.3, 2.4]]) {
+            const o = ctx.createOscillator(); o.type = 'triangle'; o.frequency.value = f;
+            const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t + d); g.gain.linearRampToValueAtTime(0.09, t + d + 0.6); g.gain.exponentialRampToValueAtTime(0.0001, t + d + 5);
+            o.connect(g); g.connect(out); o.start(t + d); o.stop(t + d + 5.2);
+          }
+        },
+      };
+    })();
+    vrButton.addEventListener('click', () => gameAudio.unlock());
+    window.addEventListener('pointerdown', () => gameAudio.unlock());
+    renderer.xr.addEventListener('sessionstart', () => gameAudio.unlock());
+
+    // ---------- coins (kept in this browser) ----------
+    const SAVE_KEY = 'grimape_save_v1';
+    const save = { coins: 50, owned: ['flash:warm', 'band:none', 'mask:classic', 'charm:none'], equipped: { flash: 'warm', band: 'none', mask: 'classic', charm: 'none' }, escapes: 0 };
+    try { const s = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null'); if (s && typeof s.coins === 'number') Object.assign(save, s); } catch (e) { /* storage blocked: start fresh */ }
+    function writeSave() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(save)); } catch (e) { /* storage blocked: kept for this visit */ } }
+
+    // ---------- objectives on every map ----------
+    const quest = {
+      camp: { escaped: false, unlocked: false, firstEscape: true },
+      graveyard: { braziers: [false, false, false, false], skulls: 0, unlocked: false, escaped: false, firstEscape: true },
+      mine: { levers: [false, false, false], tunnel: false, unlocked: false, escaped: false, firstEscape: true },
+    };
+    function objectiveLines(map) {
+      if (map === 'camp') {
+        const on = generators.filter((g) => g.running).length;
+        return [[`Power the generators  ${on}/${generators.length}`, on >= generators.length],
+                [`Repair and fuel the boat  ${Math.min(boat.parts, PARTS_NEEDED)}/${PARTS_NEEDED}`, boat.parts >= PARTS_NEEDED],
+                ['Steer the boat to the escape flare', quest.camp.escaped]];
+      }
+      if (map === 'graveyard') {
+        const q = quest.graveyard, on = mapGens('graveyard').filter((g) => g.running).length, lit = q.braziers.filter(Boolean).length;
+        return [[`Power the generators  ${on}/2`, on >= 2], [`Light the braziers  ${lit}/4`, lit >= 4], [`Skull relics on the altar  ${q.skulls}/3`, q.skulls >= 3],
+                ['Start the boat on the lake', q.escaped]];
+      }
+      const q = quest.mine, on = mapGens('mine').filter((g) => g.running).length, pulled = q.levers.filter(Boolean).length;
+      return [[`Power the generators  ${on}/2`, on >= 2], [`Pull the breakers  ${pulled}/3`, pulled >= 3], ['Ram the cart through the rock fall', q.tunnel],
+              ['Take the boat on the underground lake', q.escaped]];
+    }
+    const mapReady = (map) => objectiveLines(map).slice(0, -1).every(([, done]) => done);
+    // a sign at each map's start with the objectives ticked off
+    const objSigns = {};
+    for (const [map, pos] of [['camp', new THREE.Vector3(DOCK.x0 - 0.4, 1.05, DOCK.z0 - 0.5)], ['graveyard', new THREE.Vector3(GRAVE.x + 2.4, 1.1, GRAVE.z + 13.2)],
+                              ['mine', new THREE.Vector3(MN.ex + 3.2, 1.15, MINE.z + 1.8)]]) {
+      const canvas = document.createElement('canvas'); canvas.width = 512; canvas.height = 256;
+      const tex = new THREE.CanvasTexture(canvas); tex.colorSpace = THREE.SRGBColorSpace;
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+      sp.scale.set(0.9, 0.45, 1); sp.position.copy(pos); scene.add(sp);
+      objSigns[map] = { canvas, tex };
+    }
+    function drawObjectives(map) {
+      const s = objSigns[map]; if (!s) return;
+      const g = s.canvas.getContext('2d');
+      g.clearRect(0, 0, 512, 256);
+      if (playerRole === 'monster') {                 // the monster gets hunting / sabotage orders instead of escape tasks
+        g.fillStyle = 'rgba(14,4,3,0.82)'; g.fillRect(6, 6, 500, 244);
+        g.strokeStyle = '#d0140c'; g.lineWidth = 4; g.strokeRect(8, 8, 496, 240);
+        g.fillStyle = '#ff5a46'; g.font = 'bold 25px "Courier New", monospace'; g.textBaseline = 'middle';
+        g.fillText('HUNT SURVIVORS &', 24, 36); g.fillText('STOP THEIR ESCAPE', 24, 66);
+        const lines = { camp: ['Slash generators to undo repairs', 'Guard the boat and the lake', 'Hack through doors to find them'],
+          graveyard: ['Slash generators to undo repairs', 'Watch the braziers and the altar', 'Guard the boat on the lake'],
+          mine: ['Slash generators to undo repairs', 'Stalk the tunnels and the breakers', 'Guard the underground lake'] }[map];
+        g.fillStyle = '#ffb0a0'; g.font = '21px "Courier New", monospace';
+        lines.forEach((l, k) => g.fillText('> ' + l, 24, 116 + k * 42));
+        s.tex.needsUpdate = true;
+        return;
+      }
+      g.fillStyle = 'rgba(8,6,5,0.78)'; g.fillRect(6, 6, 500, 244);
+      g.strokeStyle = mapReady(map) ? '#6dff8a' : '#d8c8a0'; g.lineWidth = 4; g.strokeRect(8, 8, 496, 240);
+      g.fillStyle = '#e8dcc0'; g.font = 'bold 30px "Courier New", monospace'; g.textBaseline = 'middle';
+      g.fillText('OBJECTIVES', 24, 38);
+      objectiveLines(map).forEach(([line, done], k) => {
+        g.fillStyle = done ? '#6dff8a' : '#ffcf8a'; g.font = '22px "Courier New", monospace';
+        g.fillText((done ? '[X] ' : '[ ] ') + line, 24, 84 + k * 44);
+      });
+      s.tex.needsUpdate = true;
+    }
+    function questChanged(map) {
+      const q = quest[map]; if (!q) return;
+      const was = q.unlocked;
+      q.unlocked = mapReady(map);
+      drawObjectives(map);
+      if (q.unlocked && !was && currentMap === map) {
+        gameAudio.chime();
+        showToast('THE WAY OUT IS OPEN', map === 'camp' ? 'Steer the boat to the green flare' : 'Get to the boat and start it');
+      }
+    }
+    ['camp', 'graveyard', 'mine'].forEach(questChanged);
+    let campPartsShown = -1;
+
+    // ---------- graveyard: braziers ----------
+    const braziers = GY.braziers.map((p, k) => {
+      const group = new THREE.Group(); group.position.copy(p); scene.add(group);
+      const bb = makeBatch();
+      bb.add(new THREE.CylinderGeometry(0.1, 0.14, 0.6, 8), stoneMat, 0, 0.3, 0);
+      bb.add(new THREE.CylinderGeometry(0.16, 0.16, 0.05, 10), stoneMat, 0, 0.62, 0);
+      bb.add(new THREE.CylinderGeometry(0.2, 0.12, 0.12, 12, 1, true), ironMat, 0, 0.7, 0);
+      bb.add(new THREE.TorusGeometry(0.2, 0.012, 6, 16), ironMat, 0, 0.76, 0, Math.PI / 2, 0, 0);
+      for (let i = 0; i < 4; i++) { const a = (i / 4) * Math.PI * 2; bb.add(new THREE.ConeGeometry(0.02, 0.1, 4), ironMat, Math.cos(a) * 0.2, 0.8, Math.sin(a) * 0.2); }
+      bb.add(new THREE.CylinderGeometry(0.17, 0.17, 0.03, 12), new THREE.MeshStandardMaterial({ color: 0x1a120c, roughness: 1 }), 0, 0.7, 0);   // coals
+      bb.build(group, { rayTarget: true });
+      addBoxCollider(p.x, 0, p.z, 0.3, 0.8, 0.3);
+      const flames = [0, 1, 2].map((i) => {
+        const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: i ? 0xff8a20 : 0xffd060, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
+        s.position.set(0, 0.85 + i * 0.07, 0); s.scale.set(0.3, 0.45, 1); group.add(s); return s;
+      });
+      return { k, p, group, flames, lit: false, src: null, t: Math.random() * 10, bowl: new THREE.Vector3(p.x, 0.75, p.z) };
+    });
+    function lightBrazier(b) {
+      if (b.lit || monsterBlocked()) return;
+      b.lit = true;
+      quest.graveyard.braziers[b.k] = true;
+      b.src = { x: b.p.x, y: 1.0, z: b.p.z, color: 0xff9a40, intensity: 4, distance: 7, weight: 1.6, fire: true };
+      lightSources.push(b.src);
+      gameAudio.whoosh();
+      const lit = quest.graveyard.braziers.filter(Boolean).length;
+      showToast(`Braziers lit: ${lit}/4`, lit >= 4 ? 'The dead are watching' : 'The flames burn green at the edges');
+      questChanged('graveyard');
+    }
+    // ---------- graveyard: skull relics ----------
+    const skullMat = new THREE.MeshStandardMaterial({ color: 0xd8d0b8, roughness: 0.6, emissive: 0x0a1a08 });
+    const skullGeo = (() => {
+      const parts = [];
+      const cr = new THREE.SphereGeometry(0.06, 12, 10); cr.scale(1, 0.95, 1.1); cr.translate(0, 0.07, 0); parts.push(cr.toNonIndexed());
+      const jaw = new THREE.BoxGeometry(0.07, 0.035, 0.06); jaw.translate(0, 0.02, 0.025); parts.push(jaw.toNonIndexed());
+      for (const g of parts) { for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal') g.deleteAttribute(k); }
+      return mergeGeometries(parts, false);
+    })();
+    const altarSlots = [-0.28, 0, 0.28].map((dx) => ({ pos: new THREE.Vector3(GY.altar.x + dx, 0.455, GY.altar.z), skull: null }));
+    const skulls = GY.skulls.map((p) => {
+      const group = new THREE.Group(); group.position.copy(p); group.rotation.y = Math.random() * 6; scene.add(group);
+      const m = new THREE.Mesh(skullGeo, skullMat); m.castShadow = true; group.add(m);
+      for (const s of [-1, 1]) { const e = new THREE.Mesh(new THREE.SphereGeometry(0.016, 8, 6), new THREE.MeshBasicMaterial({ color: 0x050505 })); e.position.set(s * 0.024, 0.07, 0.058); group.add(e); }
+      const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0x7cff6a, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false }));
+      glow.scale.set(0.35, 0.35, 1); glow.position.y = 0.07; group.add(glow);
+      return { group, glow, held: -1, placed: false, vel: new THREE.Vector3(), falling: false, fly: null };
+    });
+    function placeSkull(s, slot) {
+      if (monsterBlocked()) { s.held = -1; s.falling = true; s.vel.set(0, 0, 0); s.fly = null; slot.reserved = false; return; }
+      s.placed = true; s.held = -1; s.falling = false; s.fly = null; slot.skull = s;
+      s.group.position.copy(slot.pos); s.group.rotation.set(0, 0, 0);
+      s.glow.material.color.setHex(0xff3a2a);
+      quest.graveyard.skulls = altarSlots.filter((a) => a.skull).length;
+      gameAudio.chime();
+      showToast(`Skull relics: ${quest.graveyard.skulls}/3`, quest.graveyard.skulls >= 3 ? 'The crypt groans open somewhere below' : 'Find the rest');
+      questChanged('graveyard');
+    }
+
+    // ---------- mine: breaker levers ----------
+    const levers = [-0.27, 0, 0.27].map((dx, k) => {
+      const pivot = new THREE.Group(); pivot.position.set(MN.breaker.x + dx, MN.breaker.y - 0.02, MN.breaker.z - 0.13); scene.add(pivot);
+      const lb = makeBatch();
+      lb.add(UNIT_BOX, ironMat, 0, 0.09, 0, 0, 0, 0, 0.025, 0.18, 0.025);
+      lb.add(new THREE.CylinderGeometry(0.022, 0.022, 0.07, 10), new THREE.MeshStandardMaterial({ color: 0xc0281c, roughness: 0.5 }), 0, 0.19, 0, 0, 0, Math.PI / 2);
+      lb.build(pivot);
+      pivot.rotation.x = -0.55;                                     // up (and leaning out towards you)
+      const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.018, 10, 8), new THREE.MeshStandardMaterial({ color: 0x220000, emissive: 0xff2010, emissiveIntensity: 1.2 }));
+      lamp.position.set(MN.breaker.x + dx, MN.breaker.y + 0.22, MN.breaker.z - 0.11); scene.add(lamp);
+      return { k, pivot, lamp, pulled: false, angle: -0.55, held: -1, grabY: 0 };
+    });
+    function pullLever(l) {
+      if (l.pulled) return;
+      if (monsterBlocked()) { l.held = -1; return; }
+      l.pulled = true; l.held = -1;
+      quest.mine.levers[l.k] = true;
+      l.lamp.material.emissive.setHex(0x30ff50);
+      gameAudio.clunk();
+      const n = quest.mine.levers.filter(Boolean).length;
+      showToast(`Breakers on: ${n}/3`, n >= 3 ? 'Power hums through the tunnels' : 'Sparks spit from the panel');
+      questChanged('mine');
+    }
+    // ---------- mine: the cart and the rock fall ----------
+    function clearRubble() {
+      if (mineRubble.cleared) return;
+      mineRubble.cleared = true;
+      mineRubble.col.box.min.set(0, -1000, 0); mineRubble.col.box.max.set(0, -1000, 0);
+      for (const r of [...mineRubble.rocks]) {
+        const v = new THREE.Vector3(-1.5 - Math.random() * 2.5, Math.random() * 2, (Math.random() - 0.5) * 2.5);
+        spawnDebris(r, v, 25 + Math.random() * 10, 0.08);
+      }
+      quest.mine.tunnel = true;
+      gameAudio.rumble();
+      controllers.forEach((c) => pulse(c, 1, 400));
+      showToast('THE ROCK FALL IS CLEARED', 'A cold draught blows from the cavern');
+      questChanged('mine');
+    }
+
+    // ---------- escape boats on the graveyard lake and the underground lake ----------
+    function makeEscapeBoat(map, start, end, level) {
+      const group = new THREE.Group(); group.position.set(start.x, level - 0.04, start.z); scene.add(group);
+      const hb = makeBatch();
+      const hullWood = new THREE.MeshStandardMaterial({ map: woodTex, color: 0x7a5a3c, roughness: 0.85 });
+      hb.add(UNIT_BOX, hullWood, 0, 0.02, 0, 0, 0, 0, 1.4, 0.04, 0.66);
+      for (const s of [-1, 1]) hb.add(UNIT_BOX, hullWood, 0, 0.13, s * 0.34, s * 0.25, 0, 0, 1.4, 0.24, 0.04);
+      hb.add(UNIT_BOX, hullWood, -0.71, 0.13, 0, 0, 0, 0, 0.04, 0.24, 0.7);                     // transom
+      const bow = new THREE.ConeGeometry(0.36, 0.5, 4, 1, true); bow.rotateZ(-Math.PI / 2); bow.rotateX(Math.PI / 4); bow.scale(1, 0.55, 1);
+      hb.add(bow, hullWood, 0.95, 0.13, 0);
+      for (const x of [-0.25, 0.35]) hb.add(UNIT_BOX, trimMat, x, 0.18, 0, 0, 0, 0, 0.18, 0.03, 0.64);   // seats
+      hb.add(UNIT_BOX, darkMetal, -0.78, 0.22, 0, 0, 0, 0, 0.14, 0.16, 0.14);                  // little outboard
+      hb.add(new THREE.CylinderGeometry(0.02, 0.02, 0.4, 8), darkMetal, -0.8, 0.0, 0);
+      hb.add(new THREE.CylinderGeometry(0.035, 0.035, 0.03, 10), brassMat, -0.78, 0.31, 0);
+      hb.build(group);
+      const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.035, 10, 8), new THREE.MeshStandardMaterial({ color: 0x220000, emissive: 0xff2010, emissiveIntensity: 1.5 }));
+      lamp.position.set(0.75, 0.33, 0); group.add(lamp);
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.12, 5), ironMat); post.position.set(0.75, 0.27, 0); group.add(post);
+      const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xff2a1a, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false }));
+      glow.scale.set(0.5, 0.5, 1); glow.position.copy(lamp.position); group.add(glow);
+      const col = addCol(start.x, level - 0.4, start.z, 1.3, 0.48, 0.6);                       // the floor you stand on
+      return { map, group, lamp, glow, col, start: start.clone(), end: end.clone(), level, t: -1, prev: new THREE.Vector3(start.x, 0, start.z) };
+    }
+    const escapeBoats = { graveyard: makeEscapeBoat('graveyard', GY.boatStart, GY.boatEnd, GY.lake.level), mine: makeEscapeBoat('mine', MN.boatStart, MN.boatEnd, MN.lake.level) };
+    escapeBoats.mine.group.rotation.y = Math.PI;                    // pointing west, at the water tunnel
+    const _ebL = new THREE.Vector3(), _ebHead = new THREE.Vector3();
+    function escapeBoatAboard() {
+      const b = escapeBoats[currentMap]; if (!b) return false;
+      headWorld(_ebHead);
+      b.group.worldToLocal(_ebL.copy(_ebHead));
+      return Math.abs(_ebL.x) < 0.75 && Math.abs(_ebL.z) < 0.4 && _ebL.y > -0.1 && _ebL.y < 1.2;
+    }
+    function startEscapeBoat(b) {
+      if (b.t >= 0 || ending) return;
+      if (monsterBlocked()) return;
+      if (!quest[b.map].unlocked) {
+        const left = objectiveLines(b.map).filter(([, done]) => !done).slice(0, 2).map(([l]) => l.replace(/\s+\d+\/\d+$/, ''));
+        showToast('THE ENGINE WON\'T CATCH', left.join(' · ')); gameAudio.clunk(); return;
+      }
+      b.t = 0;
+      b.lamp.material.emissive.setHex(0x30ff50); b.glow.material.color.setHex(0x40ff60);
+      gameAudio.engine(true);
+      controllers.forEach((c) => pulse(c, 0.6, 200));
+      if (!renderer.xr.isPresenting) { b.deskOff = camera.position.clone().sub(b.group.position); }
+    }
+    const _ebD = new THREE.Vector3(), _ebPivot = new THREE.Vector3();
+    function updateEscapeBoats(dt) {
+      for (const b of Object.values(escapeBoats)) {
+        const unlocked = quest[b.map].unlocked;
+        if (b.t < 0) {
+          b.glow.material.color.setHex(unlocked ? 0x40ff60 : 0xff2a1a);
+          b.lamp.material.emissive.setHex(unlocked ? 0x30ff50 : 0xff2010);
+          b.group.position.y = b.level - 0.04 + 0.01 * Math.sin(performance.now() * 0.0016 + b.start.x);
+          continue;
+        }
+        const DUR = 8;
+        b.t = Math.min(DUR, b.t + dt);
+        const f = b.t / DUR, e = f * f * (3 - 2 * f);
+        const prev = _ebPivot.copy(b.group.position);
+        b.group.position.set(b.start.x + (b.end.x - b.start.x) * e, b.level - 0.04, b.start.z + (b.end.z - b.start.z) * e);
+        _ebD.subVectors(b.group.position, prev); _ebD.y = 0;
+        b.col.box.min.set(b.group.position.x - 0.65, b.level - 0.4, b.group.position.z - 0.3);
+        b.col.box.max.set(b.group.position.x + 0.65, b.level + 0.08, b.group.position.z + 0.3);
+        if (renderer.xr.isPresenting && b.map === currentMap && escapeBoatAboard()) {      // carry you (and the physics' memory) along
+          playerRig.position.add(_ebD);
+          for (const h of hands) h.last.add(_ebD);
+          lastHeadPosition.add(_ebD); lastPosition.add(_ebD);
+        } else if (!renderer.xr.isPresenting && b.deskOff) {
+          camera.position.copy(b.group.position).add(b.deskOff); orbit.target.copy(b.group.position); orbit.update();
+        }
+        if (b.t >= DUR - 2.2 && !ending) beginEnding(b.map);
+        if (b.t >= DUR) { b.t = -2; gameAudio.engine(false); }
+      }
+      // keep the floor colliders under the moored boats
+      for (const b of Object.values(escapeBoats)) if (b.t === -1) {
+        b.col.box.min.set(b.group.position.x - 0.65, b.level - 0.4, b.group.position.z - 0.3);
+        b.col.box.max.set(b.group.position.x + 0.65, b.level + 0.08, b.group.position.z + 0.3);
+      }
+    }
+
+    // ---------- the camp's escape flare on the far side of the lake ----------
+    const FLARE_POS = new THREE.Vector3(21.0, WATER_LEVEL, -4.0);
+    const flare = (() => {
+      const group = new THREE.Group(); group.position.copy(FLARE_POS); scene.add(group);
+      const fb = makeBatch();
+      const redPaint = new THREE.MeshStandardMaterial({ color: 0xb0201a, roughness: 0.5 }), whitePaint = new THREE.MeshStandardMaterial({ color: 0xe8e4dc, roughness: 0.5 });
+      fb.add(new THREE.CylinderGeometry(0.16, 0.2, 0.2, 14), redPaint, 0, 0.02, 0);
+      fb.add(new THREE.CylinderGeometry(0.1, 0.16, 0.18, 14), whitePaint, 0, 0.21, 0);
+      fb.add(new THREE.CylinderGeometry(0.02, 0.02, 0.4, 8), ironMat, 0, 0.5, 0);
+      fb.add(new THREE.CylinderGeometry(0.035, 0.035, 0.07, 10), redPaint, 0, 0.72, 0);
+      fb.build(group);
+      const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xff2a1a, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+      glow.scale.set(0.8, 0.8, 1); glow.position.y = 0.76; group.add(glow);
+      const src = { x: FLARE_POS.x, y: 0.7, z: FLARE_POS.z, color: 0xff3020, intensity: 3, distance: 8, weight: 2, fire: true };
+      lightSources.push(src);
+      return { group, glow, src };
+    })();
+    function updateFlare() {
+      const ready = quest.camp.unlocked;
+      flare.group.position.y = WATER_LEVEL + 0.015 * Math.sin(performance.now() * 0.0015);
+      flare.glow.material.color.setHex(ready ? 0x50ff60 : 0xff2a1a);
+      flare.glow.scale.setScalar((ready ? 1.6 : 0.8) * (0.9 + 0.2 * Math.random()));
+      flare.src.color = ready ? 0x60ff70 : 0xff3020;
+      if (boat.parts !== campPartsShown) { campPartsShown = boat.parts; questChanged('camp'); }
+      if (ready && !ending && currentMap === 'camp' && playerRole !== 'monster' && boat.pos.distanceTo(_ebPivot.set(FLARE_POS.x, boat.pos.y, FLARE_POS.z)) < 1.8 &&
+          (boat.aboard || (!renderer.xr.isPresenting && deskBoat.engaged))) {
+        quest.camp.escaped = true;
+        beginEnding('camp');
+      }
+    }
+
+    // ---------- the ending: fade, a warm golden sunrise over the horizon, and the victory screen ----------
+    let ending = null;
+    const sunLight = new THREE.DirectionalLight(0xffc27a, 0);       // in the scene from the start (adding a light later recompiles every material)
+    scene.add(sunLight, sunLight.target);
+    const skyDome = (() => {
+      const geo = new THREE.SphereGeometry(80, 32, 20);
+      const p = geo.attributes.position, col = new Float32Array(p.count * 3), c = new THREE.Color();
+      const stops = [[-1, 0x2a1a12], [-0.02, 0x6a3a22], [0.02, 0xffa45a], [0.12, 0xffc884], [0.35, 0xe8c8a0], [1, 0x6a8cb8]];
+      for (let i = 0; i < p.count; i++) {
+        const y = p.getY(i) / 80;
+        let k = 0; while (k < stops.length - 2 && y > stops[k + 1][0]) k++;
+        const [y0, c0] = stops[k], [y1, c1] = stops[k + 1], t = THREE.MathUtils.clamp((y - y0) / (y1 - y0), 0, 1);
+        c.setHex(c0).lerp(new THREE.Color(c1), t);
+        col.set([c.r, c.g, c.b], i * 3);
+      }
+      geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+      const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false, transparent: true, opacity: 0, depthWrite: false }));
+      m.renderOrder = -10; m.frustumCulled = false; m.visible = false;
+      scene.add(m);
+      return m;
+    })();
+    const sunDisc = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xffe2a0, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+    const sunHalo = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xff9a40, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+    sunDisc.scale.set(7.5, 7.5, 1); sunHalo.scale.set(38, 22, 1);
+    sunDisc.visible = sunHalo.visible = false;
+    scene.add(sunHalo, sunDisc);
+    const SUNRISE = { sky: 0xf0b07a, fog: 0xe8a878, density: 0.022, hemi: [0xffd8a8, 0x5a4030, 0.95] };
+    const _endCam = new THREE.Vector3(), _sunDir = new THREE.Vector3(), _c1 = new THREE.Color(), _c2 = new THREE.Color();
+    function beginEnding(map) {
+      if (ending) return;
+      const q = quest[map]; q.escaped = true;
+      const reward = q.firstEscape ? 100 : 25; q.firstEscape = false;
+      save.coins += reward; save.escapes++; writeSave();
+      if (typeof redrawShop === 'function') redrawShop();
+      camera.getWorldDirection(_sunDir); _sunDir.y = 0; if (_sunDir.lengthSq() < 1e-6) _sunDir.set(0, 0, -1); _sunDir.normalize();
+      ending = { map, t: 0, reward, from: { fog: scene.fog.color.getHex(), density: scene.fog.density, sky: scene.background.getHex(),
+        hemi: hemiLight ? [hemiLight.color.getHex(), hemiLight.groundColor.getHex(), hemiLight.intensity] : null },
+        dir: _sunDir.clone(), moved: false, shown: false };
+      drawObjectives(map);
+      showToast('YOU ESCAPED', 'The night is almost over...');
+      gameAudio.fanfare();
+    }
+    function resetEnding() {
+      ending = null;
+      skyDome.visible = sunDisc.visible = sunHalo.visible = false;
+      skyDome.material.opacity = 0; sunLight.intensity = 0;
+      victoryGroup.visible = false;
+      victoryEl.classList.remove('show');
+      for (const b of Object.values(escapeBoats)) {             // the boats are back at their jetties for next time
+        b.t = -1; b.deskOff = null;
+        b.group.position.set(b.start.x, b.level - 0.04, b.start.z);
+      }
+      gameAudio.engine(false);
+      for (const m of ['camp', 'graveyard', 'mine']) { quest[m].escaped = false; questChanged(m); }
+    }
+    function updateEnding(dt) {
+      if (!ending) return;
+      const E = ending;
+      E.t += dt;
+      // the mine: once it's dark, you come up into the yard outside for the sunrise
+      if (E.map === 'mine') {
+        if (E.t < 0.8) { travelFadeMat.opacity = E.t / 0.8; travelFade.visible = true; }
+        else if (!E.moved) {
+          E.moved = true;
+          resetLocomotion();
+          if (!renderer.xr.isPresenting) placeDesktopCamera(mapById('mine').desk.cam, mapById('mine').desk.target);
+        } else if (E.t < 2.2) { travelFadeMat.opacity = Math.max(0, 1 - (E.t - 0.8) / 1.4); travelFade.visible = travelFadeMat.opacity > 0.001; }
+      }
+      const T = 12, f = THREE.MathUtils.smoothstep(E.t, 0.5, T);
+      // sky, fog and moonlight warm up into dawn
+      scene.background.setHex(E.from.sky).lerp(_c1.setHex(SUNRISE.sky), f);
+      scene.fog.color.setHex(E.from.fog).lerp(_c1.setHex(SUNRISE.fog), f);
+      scene.fog.density = E.from.density + (SUNRISE.density - E.from.density) * f;
+      if (hemiLight && E.from.hemi) {
+        hemiLight.color.setHex(E.from.hemi[0]).lerp(_c1.setHex(SUNRISE.hemi[0]), f);
+        hemiLight.groundColor.setHex(E.from.hemi[1]).lerp(_c2.setHex(SUNRISE.hemi[1]), f);
+        hemiLight.intensity = E.from.hemi[2] + (SUNRISE.hemi[2] - E.from.hemi[2]) * f;
+      }
+      // the sun climbs out of the horizon in front of you
+      camera.getWorldPosition(_endCam);
+      skyDome.visible = sunDisc.visible = sunHalo.visible = true;
+      skyDome.position.copy(_endCam);
+      skyDome.material.opacity = f;
+      const elev = THREE.MathUtils.degToRad(-5 + 19 * THREE.MathUtils.smoothstep(E.t, 0.5, T + 4));
+      const dir = _sunDir.copy(E.dir).multiplyScalar(Math.cos(elev)); dir.y = Math.sin(elev);
+      sunDisc.position.copy(_endCam).addScaledVector(dir, 62);
+      sunHalo.position.copy(_endCam).addScaledVector(dir, 66);
+      sunDisc.material.opacity = Math.min(1, f * 1.5);
+      sunHalo.material.opacity = 0.55 * f;
+      sunLight.position.copy(_endCam).addScaledVector(dir, 60);
+      sunLight.target.position.copy(_endCam);
+      sunLight.intensity = 2.4 * f * THREE.MathUtils.smoothstep(elev, -0.06, 0.12);
+      if (E.t > 5 && !E.shown) { E.shown = true; showVictory(); }
+      if (victoryGroup.visible && renderer.xr.isPresenting) followVictory(dt);
+    }
+
+    // ---------- the victory screen: in VR a panel in front of you, on the desktop a full-screen overlay ----------
+    const victoryGroup = new THREE.Group(); victoryGroup.visible = false; scene.add(victoryGroup);
+    const victoryPanel = makePanel(0.62, 0.38, 1024, 628, (g, p) => {
+      const W = p.cw, H = p.ch;
+      const grd = g.createLinearGradient(0, 0, 0, H); grd.addColorStop(0, 'rgba(20,6,4,0.92)'); grd.addColorStop(1, 'rgba(6,2,2,0.95)');
+      roundRect(g, 4, 4, W - 8, H - 8, 30); g.fillStyle = grd; g.fill();
+      g.lineWidth = 6; g.strokeStyle = '#a01810'; g.stroke();
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.shadowColor = 'rgba(255,170,90,0.8)'; g.shadowBlur = 24;
+      g.fillStyle = '#ffe8c4'; g.font = 'bold 110px Georgia, serif'; g.fillText('YOU SURVIVED', W / 2, 150);
+      g.shadowColor = 'rgba(200,0,0,0.9)'; g.shadowBlur = 18;
+      g.fillStyle = '#d0140c'; g.font = 'bold 66px Georgia, serif'; g.fillText("BUT... DON'T COME BACK", W / 2, 268);
+      g.shadowBlur = 0;
+      for (let k = 0; k < 9; k++) { const x = 230 + k * 64 + (k % 2) * 13, l = 14 + ((k * 37) % 40); g.fillStyle = '#b00e08'; g.fillRect(x, 300, 5, l); g.beginPath(); g.arc(x + 2.5, 300 + l, 5, 0, Math.PI * 2); g.fill(); }
+      g.fillStyle = '#ffd27a'; g.font = 'bold 36px "Courier New", monospace';
+      g.fillText(`+${ending ? ending.reward : 0} COINS   ·   ${save.coins} COINS`, W / 2, 392);
+      drawButton(g, W / 2 - 300, 456, 600, 104, 'RETURN TO WAITING ROOM', { hover: uiButton(p, 'return', W / 2 - 300, 456, 600, 104), size: 38 });
+      g.textAlign = 'left';
+    }, (id) => { if (id === 'return') returnFromVictory(); }, { onTop: true });
+    victoryGroup.add(victoryPanel.mesh);
+    const victoryEl = document.createElement('div');
+    victoryEl.id = 'victory';
+    victoryEl.innerHTML = `<div class="v-inner"><div class="v-title">YOU SURVIVED</div><div class="v-sub">BUT... DON'T COME BACK</div>
+      <div class="v-coins" id="v-coins"></div><button id="v-return">RETURN TO WAITING ROOM</button></div>`;
+    document.body.appendChild(victoryEl);
+    {
+      const st = document.createElement('style');
+      st.textContent = `#victory{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;opacity:0;transition:opacity 1.6s ease;
+        background:radial-gradient(ellipse at 50% 70%,rgba(70,28,12,.7),rgba(14,4,3,.94) 75%);z-index:30;font-family:Georgia,serif;text-align:center}
+        #victory.show{opacity:1;pointer-events:auto}
+        #victory .v-title{font-size:min(12vw,140px);font-weight:bold;color:#ffe8c4;letter-spacing:.06em;text-shadow:0 0 30px rgba(255,170,90,.9),0 6px 0 #3a0a06}
+        #victory .v-sub{font-size:min(6vw,64px);font-weight:bold;color:#d0140c;margin-top:.2em;text-shadow:0 0 22px rgba(200,0,0,.9);animation:vpulse 2.4s ease-in-out infinite}
+        #victory .v-coins{font:bold 26px "Courier New",monospace;color:#ffd27a;margin:28px 0}
+        #victory button{font:bold 24px "Courier New",monospace;color:#f4e8d0;background:#3a0c08;border:3px solid #ffb090;border-radius:12px;padding:16px 34px;cursor:pointer}
+        #victory button:hover{background:#7a1a12}
+        @keyframes vpulse{0%,100%{opacity:1}50%{opacity:.65}}`;
+      document.head.appendChild(st);
+    }
+    document.getElementById('v-return').addEventListener('click', () => returnFromVictory());
+    const _vtP = new THREE.Vector3(), _vtD = new THREE.Vector3(), _vtT = new THREE.Vector3();
+    function placeVictory(snap) {
+      camera.getWorldPosition(_vtP); camera.getWorldDirection(_vtD);
+      _vtD.y = 0; if (_vtD.lengthSq() < 1e-6) _vtD.set(0, 0, -1); _vtD.normalize();
+      _vtT.copy(_vtP).addScaledVector(_vtD, renderer.xr.isPresenting ? 0.5 : 0.75);
+      if (snap) victoryGroup.position.copy(_vtT); else victoryGroup.position.lerp(_vtT, 0.04);
+      victoryGroup.scale.setScalar(renderer.xr.isPresenting ? 1 : 1.3);
+      victoryGroup.lookAt(_vtP.x, victoryGroup.position.y, _vtP.z);
+    }
+    function followVictory() { placeVictory(false); }
+    function showVictory() {
+      redrawPanel(victoryPanel);
+      if (renderer.xr.isPresenting) { victoryGroup.visible = true; placeVictory(true); }
+      else {
+        document.getElementById('v-coins').textContent = `+${ending ? ending.reward : 0} COINS  ·  ${save.coins} COINS`;
+        victoryEl.classList.add('show');
+      }
+    }
+    function returnFromVictory() {
+      if (!ending || travel) return;
+      victoryGroup.visible = false;
+      victoryEl.classList.remove('show');
+      goTo('waiting');
+    }
+    renderer.xr.addEventListener('sessionstart', () => { if (ending && ending.shown) { victoryEl.classList.remove('show'); victoryGroup.visible = true; placeVictory(true); } });
+    renderer.xr.addEventListener('sessionend', () => { if (ending && ending.shown) { victoryGroup.visible = false; showVictory(); } });
+    {
+      // arriving anywhere (the waiting room or a map) clears the sunrise and puts the night back
+      const baseArrive = arrive;
+      arrive = function (id) {
+        resetEnding();
+        baseArrive(id);
+        if (id !== 'waiting') { drawObjectives(id); }
+      };
+    }
+
+    // ---------- desktop: click quest objects ----------
+    const deskClickables = [];
+    function addDeskClick(objects, onClick, map) { deskClickables.push({ objects, onClick, map }); }
+    braziers.forEach((b) => addDeskClick([b.group], () => lightBrazier(b), 'graveyard'));
+    skulls.forEach((s) => addDeskClick([s.group], () => {
+      if (s.placed || s.fly || monsterBlocked()) return;
+      const slot = altarSlots.find((a) => !a.skull && !a.reserved); if (!slot) return;
+      slot.reserved = true; s.fly = { from: s.group.position.clone(), slot, t: 0 }; gameAudio.whoosh();
+    }, 'graveyard'));
+    levers.forEach((l) => addDeskClick([l.pivot], () => pullLever(l), 'mine'));
+    addDeskClick([mineCart.group], () => { if (!mineCart.done && !monsterBlocked()) { mineCart.vx = -3.2; gameAudio.roll(2); } }, 'mine');
+    addDeskClick([escapeBoats.graveyard.group], () => startEscapeBoat(escapeBoats.graveyard), 'graveyard');
+    addDeskClick([escapeBoats.mine.group], () => startEscapeBoat(escapeBoats.mine), 'mine');
+    {
+      const ndc = new THREE.Vector2(), ray = new THREE.Raycaster();
+      let down = null;
+      renderer.domElement.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY }; });
+      renderer.domElement.addEventListener('pointerup', (e) => {
+        if (!down || titleActive || renderer.xr.isPresenting) { down = null; return; }
+        const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y); down = null;
+        if (moved > 6) return;
+        const r = renderer.domElement.getBoundingClientRect();
+        ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+        ray.setFromCamera(ndc, camera);
+        let best = null;
+        for (const c of deskClickables) {
+          if (c.map !== currentMap) continue;
+          const h = ray.intersectObjects(c.objects, true)[0];
+          if (h && (!best || h.distance < best.d)) best = { c, d: h.distance };
+        }
+        if (best) best.c.onClick();
+      });
+    }
+
+    // ---------- VR hands: braziers, skulls, levers, the cart, the boats ----------
+    const qPrev = [[false, false], [false, false]];
+    const qRaw = [new THREE.Vector3(), new THREE.Vector3()], qRawPrev = [new THREE.Vector3(), new THREE.Vector3()], qVel = [new THREE.Vector3(), new THREE.Vector3()], qOk = [false, false];
+    const _qT = new THREE.Vector3();
+    let cartClickT = 0;
+    function updateQuests(dt) {
+      // brazier flames
+      for (const b of braziers) {
+        b.t += dt;
+        for (const [i, s] of b.flames.entries()) {
+          s.material.opacity = b.lit ? 0.75 - i * 0.15 + 0.2 * Math.random() : 0;
+          s.scale.set(0.3 - i * 0.05 + 0.04 * Math.sin(b.t * 9 + i), 0.45 + 0.1 * Math.sin(b.t * 7 + i * 2), 1);
+          s.position.y = 0.85 + i * 0.07 + 0.02 * Math.sin(b.t * 11 + i);
+        }
+      }
+      // skulls: glowing, flying to the altar (desktop), falling when dropped
+      for (const s of skulls) {
+        s.glow.material.opacity = (s.placed ? 0.7 : 0.45) + 0.15 * Math.sin(performance.now() * 0.004);
+        if (s.fly) {
+          s.fly.t = Math.min(1, s.fly.t + dt * 0.8);
+          const e = s.fly.t * s.fly.t * (3 - 2 * s.fly.t);
+          s.group.position.lerpVectors(s.fly.from, s.fly.slot.pos, e); s.group.position.y += Math.sin(e * Math.PI) * 0.8;
+          if (s.fly.t >= 1) placeSkull(s, s.fly.slot);
+        } else if (s.falling) {
+          s.vel.y -= GRAVITY * dt;
+          s.group.position.addScaledVector(s.vel, dt);
+          const L = extraLakes.find((l) => l.map === 'graveyard' && s.group.position.x > l.x0 && s.group.position.x < l.x1 && s.group.position.z > l.z0 && s.group.position.z < l.z1);
+          const floor = L ? L.level - 0.03 : 0;
+          if (s.group.position.y < floor) { s.group.position.y = floor; s.vel.set(0, 0, 0); s.falling = false; }
+        }
+      }
+      // levers settle at their target angle
+      for (const l of levers) {
+        const want = l.pulled ? 0.95 : (l.held >= 0 ? l.angle : -0.55);
+        l.pivot.rotation.x += (want - l.pivot.rotation.x) * Math.min(1, dt * 14);
+      }
+      // the cart rolls along the rails
+      if (!mineCart.done) {
+        const c = mineCart;
+        c.vx *= Math.exp(-0.35 * dt);
+        if (Math.abs(c.vx) < 0.02) c.vx = 0;
+        c.x += c.vx * dt;
+        if (c.x > MINE.x + 7.5) { c.x = MINE.x + 7.5; c.vx = -c.vx * 0.3; }
+        if (c.x < MN.cartStop) {
+          if (!mineRubble.cleared && Math.abs(c.vx) > 1.1) { c.x = MN.cartStop; c.vx = 0; c.done = true; clearRubble(); }
+          else if (!mineRubble.cleared) {
+            c.x = MN.cartStop; if (c.vx < -0.2) { gameAudio.clunk(); showToast('THE CART BOUNCES OFF', 'Give it a harder shove down the rails'); } c.vx = Math.abs(c.vx) * 0.3;
+          }
+        }
+        c.group.position.x = c.x;
+        for (const w of c.wheels) w.rotation.y -= c.vx * dt / 0.1;
+        c.col.box.min.x = c.x - 0.45; c.col.box.max.x = c.x + 0.45;
+        if (Math.abs(c.vx) > 0.3 && (cartClickT -= dt * Math.abs(c.vx)) <= 0) { cartClickT = 0.5; if (currentMap === 'mine') gameAudio.roll(Math.abs(c.vx)); }
+      }
+      if (!renderer.xr.isPresenting) return;
+      // hands
+      for (let i = 0; i < hands.length; i++) {
+        const h = hands[i];
+        if (!h.tracked || dt <= 0) { qOk[i] = false; continue; }
+        qRawPrev[i].copy(qRaw[i]); currentHandPosition(h, qRaw[i]);
+        if (qOk[i]) qVel[i].subVectors(qRaw[i], qRawPrev[i]).divideScalar(dt); else qVel[i].set(0, 0, 0);
+        qOk[i] = true;
+      }
+      for (let i = 0; i < controllers.length; i++) {
+        const c = controllers[i], h = hands[i];
+        const grip = btn(c, 1), trig = btn(c, 0);
+        const gripEdge = grip && !qPrev[i][0], trigEdge = trig && !qPrev[i][1];
+        qPrev[i] = [grip, trig];
+        if (!h.tracked) continue;
+        if (currentMap === 'graveyard') {
+          if (trigEdge || gripEdge) for (const b of braziers) if (!b.lit && h.last.distanceTo(b.bowl) < 0.28) { lightBrazier(b); pulse(c, 0.6, 80); }
+          const held = skulls.find((s) => s.held === i);
+          if (held) {
+            held.group.position.copy(h.last).add(_qT.set(0, -0.06, 0));
+            held.group.quaternion.copy(h.follower.quaternion);
+            if (!grip) {
+              const slot = altarSlots.filter((a) => !a.skull).sort((a, b) => a.pos.distanceTo(held.group.position) - b.pos.distanceTo(held.group.position))[0];
+              if (slot && slot.pos.distanceTo(held.group.position) < 0.4) placeSkull(held, slot);
+              else { held.held = -1; held.falling = true; held.vel.copy(qVel[i]).clampLength(0, 6); held.group.rotation.set(0, held.group.rotation.y, 0); }
+            }
+          } else if (gripEdge) {
+            const s = skulls.find((sk) => !sk.placed && sk.held < 0 && !sk.fly && sk.group.position.distanceTo(h.last) < 0.18);
+            if (s && monsterBlocked(c)) { /* the monster can't take the relics */ } else if (s) { s.held = i; s.falling = false; pulse(c, 0.4, 40); }
+          }
+        } else if (currentMap === 'mine') {
+          for (const l of levers) {
+            if (l.pulled) continue;
+            l.pivot.updateMatrixWorld(true);
+            const knob = _qT.set(0, 0.19, 0).applyMatrix4(l.pivot.matrixWorld);
+            if (l.held < 0 && (gripEdge || trigEdge) && h.last.distanceTo(knob) < 0.13 && !monsterBlocked(c)) { l.held = i; l.grabY = h.last.y; pulse(c, 0.4, 40); }
+            if (l.held === i) {
+              if (!(grip || trig)) l.held = -1;
+              else {
+                l.angle = THREE.MathUtils.clamp(-0.55 + (l.grabY - h.last.y) * 9, -0.55, 0.95);
+                if (l.angle > 0.8) { pullLever(l); pulse(c, 1, 120); }
+              }
+            }
+          }
+          // push the cart with your hands
+          if (!mineCart.done && qOk[i]) {
+            const p = qRaw[i], cx = mineCart.x;
+            if (p.x > cx - 0.52 && p.x < cx + 0.52 && Math.abs(p.z - MINE.z) < 0.42 && p.y < 0.8 && Math.abs(qVel[i].x) > 0.4 && !monsterBlocked(c)) {
+              mineCart.vx += (THREE.MathUtils.clamp(qVel[i].x * 1.3, -4, 4) - mineCart.vx) * 0.35;
+              pulse(c, 0.3, 30);
+            }
+          }
+        }
+        // start the escape boat: sit in it and pull a trigger
+        if (trigEdge && escapeBoats[currentMap] && escapeBoatAboard()) startEscapeBoat(escapeBoats[currentMap]);
+      }
+    }
+
+    // =====================================================================
+    //  WAITING ROOM: the MONSTER POV monitor and the shop corner
+    // =====================================================================
+    // ---------- MONSTER POV: a live feed from the monster's eyes as it prowls the map picked on the big screen ----------
+    // There's no computer-driven monster in the maps, so the feed follows an unseen prowler that stalks a slow loop
+    // round the selected map at monster eye height, looking about. It's rendered into a WebGLRenderTarget a few times a
+    // second while you're in the waiting room, then shown through a dark-vision shader with a HUD on top.
+    const POV = { w: 1.6, h: 0.9, x: WAIT_ROOM.x + 2.75, y: 1.05, z: WAIT_ROOM.z - WAIT_ROOM.d / 2 + 0.045 };
+    const povRT = new THREE.WebGLRenderTarget(384, 216, { depthBuffer: true });
+    const povCam = new THREE.PerspectiveCamera(78, 16 / 9, 0.05, 70);
+    const povPaths = {
+      camp: [[0, -1], [-6, -5], [-11, -9], [-13, -13], [-6, -15], [2, -13], [5, -8], [5, -2], [4, 5], [-1, 9], [-6, 8], [-9, 3], [-4, 1]],
+      graveyard: [[0, 14], [0, 6], [-5, 2], [-10, 0], [-12, -8], [-6, -10], [0, -8.5], [4, -4], [3, 4], [8, 6], [10, 12], [4, 13]].map(([x, z]) => [GRAVE.x + x, GRAVE.z + z]),
+      mine: [[MN.ex + 5, 0], [MN.ex + 1.5, 0], [MINE.x + 4, 0], [MINE.x - 3, 0.3], [MINE.x - 3, 8], [MINE.x - 3, 11.5], [MINE.x - 3.2, 4], [MINE.x - 8, 0], [MINE.x - 12, 0.5],
+             [MINE.x - 8, -0.3], [MINE.x + 3, 0], [MINE.x + 3, -8], [MINE.x + 3, -1.5], [MN.ex + 2, -1]].map(([x, z]) => [x, MINE.z + z]),
+    };
+    const povCurves = {};
+    for (const [k, pts] of Object.entries(povPaths)) povCurves[k] = new THREE.CatmullRomCurve3(pts.map(([x, z]) => new THREE.Vector3(x, 0.55, z)), true, 'centripetal');
+    const povState = { u: 0, t: 0, frame: 0, rendered: -1, hudT: 0, map: 'camp' };
+    const povHudCanvas = document.createElement('canvas'); povHudCanvas.width = 512; povHudCanvas.height = 288;
+    const povHudTex = new THREE.CanvasTexture(povHudCanvas); povHudTex.colorSpace = THREE.SRGBColorSpace;
+    function drawPovHud() {
+      const g = povHudCanvas.getContext('2d'), W = 512, H = 288;
+      g.clearRect(0, 0, W, H);
+      g.strokeStyle = 'rgba(255,90,70,0.85)'; g.lineWidth = 3;
+      for (const [x, y, sx, sy] of [[14, 14, 1, 1], [W - 14, 14, -1, 1], [14, H - 14, 1, -1], [W - 14, H - 14, -1, -1]]) {   // corner brackets
+        g.beginPath(); g.moveTo(x, y + sy * 26); g.lineTo(x, y); g.lineTo(x + sx * 26, y); g.stroke();
+      }
+      g.beginPath(); g.moveTo(W / 2 - 14, H / 2); g.lineTo(W / 2 + 14, H / 2); g.moveTo(W / 2, H / 2 - 14); g.lineTo(W / 2, H / 2 + 14); g.stroke();   // crosshair
+      g.font = 'bold 22px "Courier New", monospace'; g.textBaseline = 'middle';
+      g.fillStyle = 'rgba(255,230,220,0.95)'; g.fillText('MONSTER POV', 28, 34);
+      if (Math.floor(povState.t * 1.2) % 2 === 0) { g.fillStyle = '#ff2a1a'; g.beginPath(); g.arc(W - 96, 34, 8, 0, Math.PI * 2); g.fill(); }
+      g.fillStyle = 'rgba(255,230,220,0.95)'; g.fillText('REC', W - 82, 34);
+      g.font = '16px "Courier New", monospace';
+      g.fillText(mapById(povState.map).name, 28, H - 30);
+      const s = Math.floor(povState.t), tc = `${String(Math.floor(s / 3600)).padStart(2, '0')}:${String(Math.floor(s / 60) % 60).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+      g.textAlign = 'right'; g.fillText(`NIGHT ${tc}`, W - 28, H - 30); g.textAlign = 'left';
+      g.fillStyle = 'rgba(255,120,100,0.7)'; g.fillText('DARK VISION', 28, 58);
+      povHudTex.needsUpdate = true;
+    }
+    drawPovHud();
+    const povMat = new THREE.ShaderMaterial({
+      uniforms: { tFeed: { value: povRT.texture }, tHud: { value: povHudTex }, uTime: { value: 0 }, uOn: { value: 1 } },
+      vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+      fragmentShader: `
+        uniform sampler2D tFeed; uniform sampler2D tHud; uniform float uTime; uniform float uOn; varying vec2 vUv;
+        float rand(vec2 c){ return fract(sin(dot(c, vec2(12.9898, 78.233))) * 43758.5453); }
+        void main(){
+          vec2 uv = vUv;
+          float band = step(0.985, rand(vec2(floor(uv.y * 60.0), floor(uTime * 8.0))));            // rolling glitch lines
+          uv.x += (rand(vec2(floor(uv.y * 140.0), floor(uTime * 24.0))) - 0.5) * (0.003 + band * 0.03);
+          vec3 c = texture2D(tFeed, uv).rgb;
+          float l = dot(c, vec3(0.299, 0.587, 0.114));
+          l = pow(clamp(l * 4.0, 0.0, 1.0), 0.55);                                                  // dark vision: the night lifted
+          vec3 col = vec3(1.0, 0.32, 0.22) * l + vec3(0.25, 0.9, 0.55) * l * l * 0.25;              // a bloody red cast
+          col += (rand(uv * 640.0 + uTime) - 0.5) * 0.14;                                         // sensor noise
+          col *= 0.82 + 0.18 * sin(vUv.y * 860.0 + uTime * 6.0);                                  // scanlines
+          col *= smoothstep(0.95, 0.35, length((vUv - 0.5) * vec2(1.25, 1.0)));                   // vignette
+          col *= uOn;
+          vec4 hud = texture2D(tHud, vUv);
+          col = mix(col, hud.rgb, hud.a);
+          gl_FragColor = vec4(pow(max(col, 0.0), vec3(1.0 / 2.2)), 1.0);
+        }`,
+      fog: false, toneMapped: false,
+    });
+    const povScreen = new THREE.Mesh(new THREE.PlaneGeometry(POV.w, POV.h), povMat);
+    povScreen.position.set(POV.x, POV.y, POV.z);
+    scene.add(povScreen);
+    {
+      const fb = makeBatch();
+      for (const [x, y, w, h] of [[0, POV.h / 2 + 0.05, POV.w + 0.2, 0.1], [0, -POV.h / 2 - 0.05, POV.w + 0.2, 0.1], [-POV.w / 2 - 0.05, 0, 0.1, POV.h + 0.2], [POV.w / 2 + 0.05, 0, 0.1, POV.h + 0.2]])
+        fb.add(UNIT_BOX, ironMat, POV.x + x, POV.y + y, POV.z - 0.02, 0, 0, 0, w, h, 0.05);
+      fb.add(new THREE.CylinderGeometry(0.01, 0.01, 0.6, 6), ironMat, POV.x - 0.5, POV.y + 0.8, POV.z - 0.02);   // cables up into the ceiling
+      fb.add(new THREE.CylinderGeometry(0.01, 0.01, 0.6, 6), ironMat, POV.x + 0.5, POV.y + 0.8, POV.z - 0.02);
+      fb.build(scene);
+      const plaque = new THREE.Mesh(new THREE.PlaneGeometry(0.7, 0.12), new THREE.MeshBasicMaterial({ map: canvasTexture(256, (g, s) => {
+        g.fillStyle = '#1a0a08'; g.fillRect(0, s * 0.38, s, s * 0.24); g.strokeStyle = '#a01810'; g.lineWidth = 3; g.strokeRect(2, s * 0.38 + 2, s - 4, s * 0.24 - 4);
+        g.fillStyle = '#ff6a5a'; g.font = 'bold 30px "Courier New", monospace'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('MONSTER POV', s / 2, s / 2);
+      }), transparent: true, alphaTest: 0.1 }));
+      plaque.geometry.scale(1, 3.6, 1);
+      plaque.position.set(POV.x, POV.y - POV.h / 2 - 0.2, POV.z); scene.add(plaque);
+      const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xff4030, transparent: true, opacity: 0.16, blending: THREE.AdditiveBlending, depthWrite: false }));
+      glow.scale.set(2.6, 1.6, 1); glow.position.set(POV.x, POV.y, POV.z + 0.05); scene.add(glow);
+    }
+    const _povSave = { fog: new THREE.Color(), bg: new THREE.Color(), hc: new THREE.Color(), hg: new THREE.Color() };
+    povScreen.onBeforeRender = (r) => {
+      if (povState.rendered === povState.frame || currentMap !== 'waiting' || titleActive) return;
+      povState.rendered = povState.frame;
+      if (povState.frame % 3 !== 0) return;                          // a few frames a second is plenty for a creepy feed
+      // borrow the map's own fog and moonlight for the shot, then put the waiting room's back
+      _povSave.fog.copy(scene.fog.color); const dens = scene.fog.density; _povSave.bg.copy(scene.background);
+      if (hemiLight) { _povSave.hc.copy(hemiLight.color); _povSave.hg.copy(hemiLight.groundColor); }
+      const hi = hemiLight ? hemiLight.intensity : 0;
+      applyEnv(mapById(povState.map));
+      const hidden = [povScreen, menuGroup, victoryGroup].filter((o) => o.visible);
+      hidden.forEach((o) => { o.visible = false; });
+      const xrOn = r.xr.enabled, shadowAuto = r.shadowMap.autoUpdate, prevRT = r.getRenderTarget();
+      r.xr.enabled = false; r.shadowMap.autoUpdate = false;
+      r.setRenderTarget(povRT);
+      r.clear();
+      r.render(scene, povCam);
+      r.setRenderTarget(prevRT);
+      r.xr.enabled = xrOn; r.shadowMap.autoUpdate = shadowAuto;
+      hidden.forEach((o) => { o.visible = true; });
+      scene.fog.color.copy(_povSave.fog); scene.fog.density = dens; scene.background.copy(_povSave.bg);
+      if (hemiLight) { hemiLight.color.copy(_povSave.hc); hemiLight.groundColor.copy(_povSave.hg); hemiLight.intensity = hi; }
+    };
+    const _povP = new THREE.Vector3(), _povT = new THREE.Vector3();
+    function updatePov(dt) {
+      povState.frame++;
+      povState.t += dt;
+      povMat.uniforms.uTime.value = povState.t;
+      const inRoom = currentMap === 'waiting' && !titleActive;
+      povScreen.visible = true;
+      if (!inRoom) return;
+      if (povState.map !== mapSelected) { povState.map = mapSelected; povState.u = Math.random(); }
+      const curve = povCurves[povState.map];
+      povState.u = (povState.u + dt * 0.75 / curve.getLength()) % 1;
+      curve.getPointAt(povState.u, _povP);
+      curve.getPointAt((povState.u + 0.01) % 1, _povT);
+      const bob = Math.sin(povState.t * 3.2) * 0.025;                 // a heavy, swaying gait
+      povCam.position.copy(_povP); povCam.position.y += bob;
+      _povT.y = _povP.y + Math.sin(povState.t * 0.37) * 0.25;
+      povCam.lookAt(_povT);
+      povCam.rotateY(Math.sin(povState.t * 0.23) * 0.7 + Math.sin(povState.t * 0.71) * 0.15);   // looking about
+      povCam.rotateZ(Math.sin(povState.t * 1.6) * 0.03);
+      povCam.updateMatrixWorld();
+      if ((povState.hudT -= dt) <= 0) { povState.hudT = 0.5; drawPovHud(); }
+    }
+
+    // ---------- the shop corner: a counter, THE TRADER's board, coins earned by escaping ----------
+    const SHOP = {
+      flash: { label: 'FLASHLIGHT', items: [['warm', 'WARM WHITE', 0, 0xfff4d6], ['ice', 'ICE BLUE', 40, 0xa8d8ff], ['blood', 'BLOOD RED', 60, 0xff5a46], ['toxic', 'TOXIC GREEN', 60, 0x8aff78], ['uv', 'UV VIOLET', 90, 0xb48aff]] },
+      band: { label: 'WRIST BAND', items: [['none', 'NONE', 0], ['red', 'RED CORD', 30, 0xa01810], ['glow', 'GLOW BAND', 60, 0x40f0ff], ['gold', 'GOLD CHAIN', 80, 0xd8a83a]] },
+      mask: { label: 'MASK', items: [['classic', 'CLASSIC', 0], ['bone', 'BONE WHITE', 50], ['blood', 'BLOOD SPLATTER', 80], ['iron', 'RUSTED IRON', 100]] },
+      charm: { label: 'CHARM', items: [['none', 'NONE', 0], ['foot', "RABBIT'S FOOT", 30], ['skull', 'TINY SKULL', 60], ['lantern', 'MINI LANTERN', 80]] },
+    };
+    let shopMsg = '', shopMsgT = 0;
+    const SB = { x: WAIT_ROOM.x - WAIT_ROOM.w / 2 + 0.035, y: 1.12, z: WAIT_ROOM.z + 2.0, w: 1.6, h: 1.0 };
+    const shopPanel = makePanel(SB.w, SB.h, 1024, 640, (g, p) => {
+      const W = p.cw, H = p.ch;
+      const grd = g.createLinearGradient(0, 0, 0, H); grd.addColorStop(0, '#1d150f'); grd.addColorStop(1, '#0c0907');
+      g.fillStyle = grd; g.fillRect(0, 0, W, H);
+      g.strokeStyle = 'rgba(216,200,160,0.65)'; g.lineWidth = 5; g.strokeRect(6, 6, W - 12, H - 12);
+      g.fillStyle = '#e8dcc0'; g.font = 'bold 42px Georgia, serif'; g.textBaseline = 'middle'; g.fillText('THE TRADER', 30, 46);
+      g.fillStyle = '#ffd27a'; g.font = 'bold 30px "Courier New", monospace'; g.textAlign = 'right';
+      g.fillText(`${save.coins} COINS`, W - 30, 46); g.textAlign = 'left';
+      g.fillStyle = 'rgba(216,200,160,0.55)'; g.font = '18px "Courier New", monospace';
+      g.fillText('Escape a map to earn coins (+100 first time, +25 after). Pick an item to buy / wear.', 30, 88);
+      const keys = Object.keys(SHOP), colW = (W - 60) / keys.length;
+      keys.forEach((cat, ci) => {
+        const x = 30 + ci * colW;
+        g.fillStyle = '#c8b894'; g.font = 'bold 22px "Courier New", monospace'; g.fillText(SHOP[cat].label, x + 4, 128);
+        SHOP[cat].items.forEach(([id, name, price, col], k) => {
+          const y = 150 + k * 92, w = colW - 14, h = 80, key = `${cat}:${id}`;
+          const owned = save.owned.includes(key), worn = save.equipped[cat] === id;
+          const hov = uiButton(p, 'buy:' + key, x, y, w, h);
+          roundRect(g, x, y, w, h, 10);
+          g.fillStyle = worn ? 'rgba(40,90,40,0.92)' : hov ? 'rgba(70,60,48,0.95)' : 'rgba(30,26,22,0.92)'; g.fill();
+          g.lineWidth = worn || hov ? 4 : 2; g.strokeStyle = worn ? '#8aff9a' : hov ? '#d8c8a0' : 'rgba(216,200,160,0.4)'; g.stroke();
+          if (col !== undefined) { g.fillStyle = '#' + col.toString(16).padStart(6, '0'); g.beginPath(); g.arc(x + 22, y + 28, 10, 0, Math.PI * 2); g.fill(); }
+          g.fillStyle = '#f0e6d0'; g.font = 'bold 19px "Courier New", monospace'; g.fillText(name, x + (col !== undefined ? 40 : 14), y + 28);
+          g.font = '17px "Courier New", monospace';
+          g.fillStyle = worn ? '#8aff9a' : owned ? '#c8e0ff' : save.coins >= price ? '#ffd27a' : '#ff7a6a';
+          g.fillText(worn ? 'EQUIPPED' : owned ? 'OWNED · WEAR' : `${price} COINS`, x + 14, y + 58);
+        });
+      });
+      if (shopMsgT > 0) { g.fillStyle = '#ff8a6a'; g.font = 'bold 22px "Courier New", monospace'; g.textAlign = 'center'; g.fillText(shopMsg, W / 2, H - 22); g.textAlign = 'left'; }
+    }, (id) => {
+      if (!id || !id.startsWith('buy:')) return;
+      const key = id.slice(4), [cat, item] = key.split(':');
+      const def = SHOP[cat].items.find((it) => it[0] === item);
+      if (!save.owned.includes(key)) {
+        if (save.coins < def[2]) { shopMsg = `NOT ENOUGH COINS FOR ${def[1]}`; shopMsgT = 2.5; waitingClick(false); redrawShop(); return; }
+        save.coins -= def[2]; save.owned.push(key); gameAudio.chime(); shopMsg = `BOUGHT ${def[1]}`; shopMsgT = 2;
+      } else waitingClick(false);
+      save.equipped[cat] = item;
+      writeSave();
+      applyCosmetics();
+      redrawShop();
+    });
+    shopPanel.mesh.position.set(SB.x, SB.y, SB.z);
+    shopPanel.mesh.rotation.y = Math.PI / 2;
+    scene.add(shopPanel.mesh);
+    function redrawShop() { redrawPanel(shopPanel); }
+    {
+      // the counter, a few curios on it, a sign and a candle
+      const W = WAIT_ROOM, cb = makeBatch();
+      const cx = W.x - W.w / 2 + 0.55, cz = SB.z;
+      cb.add(UNIT_BOX, plankMat, cx, 0.24, cz, 0, 0, 0, 0.5, 0.48, 1.7);
+      cb.add(UNIT_BOX, trimMat, cx, 0.5, cz, 0, 0, 0, 0.6, 0.04, 1.8);
+      for (let k = 0; k < 5; k++) cb.add(UNIT_BOX, trimMat, cx + 0.251, 0.24, cz - 0.7 + k * 0.35, 0, 0, 0, 0.01, 0.44, 0.05);
+      addBoxCollider(cx, 0, cz, 0.6, 0.52, 1.8);
+      const jarMat = new THREE.MeshStandardMaterial({ color: 0x9ab0a0, transparent: true, opacity: 0.45, roughness: 0.1 });
+      for (const [dz, h] of [[-0.6, 0.16], [-0.42, 0.12]]) { cb.add(new THREE.CylinderGeometry(0.05, 0.05, h, 12), jarMat, cx, 0.52 + h / 2, cz + dz); cb.add(new THREE.SphereGeometry(0.03, 8, 6), skullMat, cx, 0.55, cz + dz); }
+      cb.add(new THREE.CylinderGeometry(0.035, 0.04, 0.02, 12), brassMat, cx + 0.05, 0.53, cz + 0.5);                 // bell
+      cb.add(new THREE.SphereGeometry(0.035, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2), brassMat, cx + 0.05, 0.54, cz + 0.5);
+      for (let k = 0; k < 7; k++) cb.add(new THREE.CylinderGeometry(0.014, 0.014, 0.004, 10), brassMat, cx + 0.08 + (k % 3) * 0.01, 0.524 + k * 0.005, cz + 0.2);   // coins
+      cb.add(new THREE.CylinderGeometry(0.018, 0.02, 0.12, 8), new THREE.MeshStandardMaterial({ color: 0xe8e0c8, roughness: 0.6 }), cx - 0.12, 0.58, cz + 0.72);
+      cb.add(new THREE.SphereGeometry(0.012, 6, 4), glowMatFlame, cx - 0.12, 0.655, cz + 0.72, 0, 0, 0, 1, 2, 1);
+      cb.build(scene, { rayTarget: true });
+      lightSources.push({ x: cx - 0.12, y: 0.75, z: cz + 0.72, color: 0xffa050, intensity: 1.6, distance: 3.5, weight: 2.6, fire: true });
+      const sign = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 0.24), new THREE.MeshStandardMaterial({ map: canvasTexture(256, (g, s) => {
+        g.fillStyle = '#3a2618'; g.fillRect(0, s * 0.39, s, s * 0.22);
+        g.fillStyle = '#e8c87a'; g.font = 'bold 34px Georgia, serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('THE TRADER', s / 2, s / 2);
+      }), transparent: true, alphaTest: 0.1, roughness: 0.8 }));
+      sign.geometry.scale(1, 4.6, 1);
+      sign.position.set(SB.x + 0.01, SB.y + SB.h / 2 + 0.2, SB.z); sign.rotation.y = Math.PI / 2; scene.add(sign);
+    }
+    redrawShop();
+    // ---------- the cosmetics themselves ----------
+    const bandMats = { red: new THREE.MeshStandardMaterial({ color: 0xa01810, roughness: 0.8 }), glow: new THREE.MeshStandardMaterial({ color: 0x103038, emissive: 0x40f0ff, emissiveIntensity: 1.4 }),
+      gold: new THREE.MeshStandardMaterial({ color: 0xd8a83a, roughness: 0.3, metalness: 1 }) };
+    const charmModels = {
+      foot: (() => { const g = new THREE.Group(); const m = new THREE.Mesh(new THREE.CapsuleGeometry(0.008, 0.02, 4, 8), new THREE.MeshStandardMaterial({ color: 0xe8e2d4, roughness: 1 })); m.position.y = -0.028; g.add(m); return g; })(),
+      skull: (() => { const g = new THREE.Group(); const m = new THREE.Mesh(skullGeo, skullMat); m.scale.setScalar(0.28); m.position.y = -0.04; g.add(m); return g; })(),
+      lantern: (() => { const g = new THREE.Group(); const m = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 0.022, 8), new THREE.MeshStandardMaterial({ color: 0x2a1a08, emissive: 0xffa040, emissiveIntensity: 2 })); m.position.y = -0.03; g.add(m); return g; })(),
+    };
+    const cosm = hands.map((h) => {
+      const band = new THREE.Mesh(new THREE.TorusGeometry(0.026, 0.0055, 6, 18), bandMats.red);
+      band.position.set(0.034, 0.064, 0.002); band.rotation.x = Math.PI / 2; band.scale.set(0.82, 1, 1); band.visible = false;
+      h.model.group.add(band);
+      const charmHook = new THREE.Group(); charmHook.position.set(0.06, 0.06, 0.0); h.model.group.add(charmHook);
+      const chain = new THREE.Mesh(new THREE.CylinderGeometry(0.0012, 0.0012, 0.02, 4), ironMat); chain.position.y = -0.01; charmHook.add(chain);
+      const charms = {};
+      for (const [k, m] of Object.entries(charmModels)) { const c = m.clone(); c.visible = false; charmHook.add(c); charms[k] = c; }
+      return { band, charmHook, charms };
+    });
+    {
+      const baseToggle = toggleFlashlight;
+      toggleFlashlight = function (...a) {
+        if (renderer.xr.isPresenting && extraGens.some((g) => g.holding >= 0)) return;   // A is hitting a skill check
+        const r = baseToggle.apply(this, a);
+        applyFlashColour();
+        return r;
+      };
+    }
+    function applyFlashColour() {
+      const def = SHOP.flash.items.find((it) => it[0] === save.equipped.flash) || SHOP.flash.items[0];
+      const d = flashlight.userData;
+      d.spot.color.setHex(def[3]);
+      if (d.on) d.lensMat.color.setHex(def[3]);
+    }
+    function applyCosmetics() {
+      applyFlashColour();
+      for (const c of cosm) {
+        c.band.visible = save.equipped.band !== 'none';
+        if (bandMats[save.equipped.band]) c.band.material = bandMats[save.equipped.band];
+        for (const [k, m] of Object.entries(c.charms)) m.visible = save.equipped.charm === k;
+        c.charmHook.children[0].visible = save.equipped.charm !== 'none';
+      }
+      setMaskVariant(save.equipped.mask);
+    }
+    applyCosmetics();
+    function updateCosmetics(dt) {
+      if (shopMsgT > 0 && (shopMsgT -= dt) <= 0) redrawShop();
+      // the charm hangs from your left wrist (the one with the health display) and swings a little
+      controllers.forEach((c, i) => {
+        const left = c.userData.inputSource?.handedness === 'left';
+        cosm[i].charmHook.visible = left && save.equipped.charm !== 'none';
+        cosm[i].charmHook.rotation.z = Math.sin(performance.now() * 0.004 + i) * 0.3;
+      });
+    }
+
+    // =====================================================================
+    //  THE MACHETE (MONSTER role, in VR): velocity-based hits. Swing it hard into wood and it bites in: wood chips fly,
+    //  a sharp steel-on-wood crack, a slash mark is left behind, and planks, crates, barricades and cabin doors break
+    //  open after a few hits. Window panes shatter. Swing it through a low branch and the branch is cut clean off and
+    //  falls (tumbling, bouncing and settling on the ground) with a snap.
+    // =====================================================================
+    const HACK_SPEED = 1.6;                       // blade speed (m/s in the scaled VR world) that counts as a hit
+    const SLICE_SPEED = 1.3;
+    const DOOR_HITS = 4;                          // hacks to smash a cabin door open
+    // ---------- sliceable branches: the graveyard's dead trees, and dead side branches on the camp's pines ----------
+    {
+      const rng = mulberry32(8080);
+      for (const t of solidTrees) {
+        if (Math.hypot(t.x, t.z) > 27 || inLakeArea(t.x, t.z, 1)) continue;
+        if (rng() < 0.35) continue;
+        hackTrees.push({ map: 'camp', x: t.x, z: t.z, r: t.r * 0.92, h: t.h });
+        const n = 1 + (rng() < 0.4 ? 1 : 0);
+        for (let k = 0; k < n; k++) {
+          const a = rng() * Math.PI * 2, y = 0.5 + rng() * 0.9;
+          const dir = new THREE.Vector3(Math.cos(a), 0.35 + rng() * 0.3, Math.sin(a)).normalize();
+          branchDefs.push({ map: 'camp', base: new THREE.Vector3(t.x + Math.cos(a) * t.r * 0.8, y, t.z + Math.sin(a) * t.r * 0.8), dir, len: 0.45 + rng() * 0.4, r: 0.025 + rng() * 0.015 });
+        }
+      }
+      // the rest of the camp's pines can still be hacked (no branches)
+      for (const t of solidTrees) if (!hackTrees.some((h) => h.map === 'camp' && h.x === t.x && h.z === t.z)) hackTrees.push({ map: 'camp', x: t.x, z: t.z, r: t.r * 0.92, h: t.h });
+    }
+    // a few breakable crates and wooden barricades round the camp too (only where nothing else stands)
+    {
+      const free = (x, z, w, d) => {
+        const b = new THREE.Box3(new THREE.Vector3(x - w / 2 - 0.35, 0.02, z - d / 2 - 0.35), new THREE.Vector3(x + w / 2 + 0.35, 1.6, z + d / 2 + 0.35));
+        return !colliders.some((c) => c.box.intersectsBox(b)) && !inLakeArea(x, z, 1.5) && Math.hypot(x - FIRE.x, z - FIRE.z) > 3 && Math.hypot(x, z) > 2.5;
+      };
+      let n = 0;
+      for (const [x, z, s] of [[-4.5, 3, 0.45], [3.5, 4, 0.4], [-7, -3, 0.45], [6, -12, 0.45], [-9, 6, 0.4], [2, 9, 0.45], [-13, -6, 0.45], [9, 10, 0.4], [-2, 12, 0.45], [12, -12, 0.45]]) {
+        if (n >= 5 || !free(x, z, s, s)) continue;
+        makeCrate('camp', x, 0, z, s, x * 0.3); n++;
+      }
+      n = 0;
+      for (const [x, z, alongZ] of [[-5.5, 6.5, false], [4, -9.5, true], [-10, -1, true], [7, 8.5, false], [-3, -13, false], [11, 3, true]]) {
+        if (n >= 3 || !free(x, z, alongZ ? 0.3 : 1.6, alongZ ? 1.6 : 0.3)) continue;
+        makeBarricade('camp', x, z, 1.6, 0.9, alongZ); n++;
+      }
+    }
+    const branchGeo = new THREE.CylinderGeometry(0.62, 1, 1, 6); branchGeo.translate(0, 0.5, 0);
+    const branchMesh = new THREE.InstancedMesh(branchGeo, barkMat, branchDefs.length);
+    const _brM = new THREE.Matrix4(), _brQ = new THREE.Quaternion(), _brS = new THREE.Vector3(), _brY = new THREE.Vector3(0, 1, 0);
+    function setBranchMatrix(i, len) {
+      const b = branchDefs[i];
+      _brQ.setFromUnitVectors(_brY, b.dir);
+      _brM.compose(b.base, _brQ, _brS.set(b.r, len, b.r));
+      branchMesh.setMatrixAt(i, _brM);
+    }
+    branchDefs.forEach((b, i) => { b.cut = false; b.cur = b.len; setBranchMatrix(i, b.len); });
+    branchMesh.instanceMatrix.needsUpdate = true;
+    branchMesh.castShadow = true; branchMesh.receiveShadow = true;
+    branchMesh.frustumCulled = false;
+    scene.add(branchMesh);
+    // ---------- wood chips (one instanced mesh, recycled) ----------
+    const CHIP_N = 160;
+    const chipMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ color: 0xd2b080, roughness: 0.9 }), CHIP_N);
+    chipMesh.frustumCulled = false;
+    const chips = Array.from({ length: CHIP_N }, () => ({ p: new THREE.Vector3(), v: new THREE.Vector3(), r: new THREE.Euler(), w: new THREE.Vector3(), life: 0, age: 1, s: 0.01, floor: 0 }));
+    const _chM = new THREE.Matrix4(), _chQ = new THREE.Quaternion(), _chS = new THREE.Vector3();
+    for (let i = 0; i < CHIP_N; i++) { chipMesh.setMatrixAt(i, _chM.makeScale(0, 0, 0)); }
+    scene.add(chipMesh);
+    let chipNext = 0;
+    function spawnChips(at, normal, swing, n, color) {
+      for (let k = 0; k < n; k++) {
+        const c = chips[chipNext]; chipNext = (chipNext + 1) % CHIP_N;
+        c.p.copy(at);
+        c.v.copy(normal).multiplyScalar(0.6 + Math.random() * 1.6).addScaledVector(swing, 0.25 + Math.random() * 0.4);
+        c.v.x += (Math.random() - 0.5) * 1.2; c.v.y += Math.random() * 1.4; c.v.z += (Math.random() - 0.5) * 1.2;
+        c.r.set(Math.random() * 6, Math.random() * 6, Math.random() * 6);
+        c.w.set((Math.random() - 0.5) * 30, (Math.random() - 0.5) * 30, (Math.random() - 0.5) * 30);
+        c.s = 0.006 + Math.random() * 0.012; c.life = 1.5 + Math.random() * 2.5; c.age = 0;
+        c.floor = currentMap === 'camp' ? floorAt(at.x, at.z) : 0;
+      }
+      if (color !== undefined) chipMesh.material.color.setHex(color);
+    }
+    function updateChips(dt) {
+      let any = false;
+      for (let i = 0; i < CHIP_N; i++) {
+        const c = chips[i];
+        if (c.age >= c.life) continue;
+        any = true;
+        c.age += dt;
+        if (c.p.y > c.floor + c.s * 0.5) {
+          c.v.y -= GRAVITY * dt;
+          c.p.addScaledVector(c.v, dt);
+          c.r.x += c.w.x * dt; c.r.y += c.w.y * dt; c.r.z += c.w.z * dt;
+          if (c.p.y <= c.floor + c.s * 0.5) { c.p.y = c.floor + c.s * 0.5; c.v.y *= -0.3; c.v.x *= 0.5; c.v.z *= 0.5; c.w.multiplyScalar(0.3); if (Math.abs(c.v.y) > 0.3) c.p.y += 0.001; }
+        }
+        const f = c.age >= c.life ? 0 : Math.min(1, (c.life - c.age) / 0.5);
+        _chM.compose(c.p, _chQ.setFromEuler(c.r), _chS.set(c.s * 1.6 * f, c.s * 0.35 * f, c.s * f));
+        chipMesh.setMatrixAt(i, _chM);
+      }
+      if (any || chipMesh.userData.dirty) { chipMesh.instanceMatrix.needsUpdate = true; chipMesh.userData.dirty = any; }
+    }
+    // ---------- slash marks (recycled decals) ----------
+    const slashTex = (() => {
+      const c = document.createElement('canvas'); c.width = 256; c.height = 64;
+      const g = c.getContext('2d');
+      g.fillStyle = 'rgba(225,195,150,0.9)';                              // pale torn fibres round the cut
+      g.beginPath(); g.moveTo(6, 32); g.quadraticCurveTo(128, 6, 250, 30); g.quadraticCurveTo(128, 58, 6, 32); g.fill();
+      for (let k = 0; k < 40; k++) { const x = 20 + Math.random() * 216; g.fillRect(x, 32 + (Math.random() - 0.5) * 30, 2 + Math.random() * 8, 2); }
+      g.fillStyle = 'rgba(28,16,8,0.95)';                                  // the dark gash itself
+      g.beginPath(); g.moveTo(14, 32); g.quadraticCurveTo(128, 20, 244, 31); g.quadraticCurveTo(128, 42, 14, 32); g.fill();
+      const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+    })();
+    const slashMat = new THREE.MeshStandardMaterial({ map: slashTex, transparent: true, depthWrite: false, roughness: 0.9, polygonOffset: true, polygonOffsetFactor: -4, side: THREE.DoubleSide });
+    const SLASH_N = 70;
+    const slashes = Array.from({ length: SLASH_N }, () => { const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), slashMat); m.visible = false; m.renderOrder = 3; return m; });
+    let slashNext = 0;
+    const _slX = new THREE.Vector3(), _slY = new THREE.Vector3(), _slM = new THREE.Matrix4();
+    function addSlash(parent, pos, normal, swing, len = 0.12) {
+      const m = slashes[slashNext]; slashNext = (slashNext + 1) % SLASH_N;
+      if (m.parent) m.parent.remove(m);
+      parent.add(m);
+      _slX.copy(swing).addScaledVector(normal, -swing.dot(normal));
+      if (_slX.lengthSq() < 1e-6) _slX.set(1, 0, 0).addScaledVector(normal, -normal.x);
+      _slX.normalize(); _slY.crossVectors(normal, _slX);
+      _slM.makeBasis(_slX, _slY, normal);
+      m.quaternion.setFromRotationMatrix(_slM);
+      m.position.copy(pos).addScaledVector(normal, 0.003);
+      m.scale.set(len * (0.8 + Math.random() * 0.5), len * 0.22, 1);
+      m.visible = true;
+    }
+    // ---------- hit handling ----------
+    const bladeLocal = [0.15, 0.35, 0.55, 0.75, 0.95].map((f) => new THREE.Vector3(0, -0.01, MACHETE_BLADE.z0 + (MACHETE_BLADE.z1 - MACHETE_BLADE.z0) * f));
+    const bladeNow = bladeLocal.map(() => new THREE.Vector3()), bladePrev = bladeLocal.map(() => new THREE.Vector3());
+    let bladeOk = false, hackCD = 0;
+    const targetCD = new Map();
+    const _hc = new THREE.Vector3(), _hz = new THREE.Vector3(), _hv = new THREE.Vector3(), _hn = new THREE.Vector3(), _hs = new THREE.Vector3(), _hl = new THREE.Vector3(), _hp = new THREE.Vector3(), _hCam = new THREE.Vector3();
+    const cooled = (key) => (targetCD.get(key) || 0) <= 0;
+    const coolDown = (key, t = 0.3) => targetCD.set(key, t);
+    function rightController() { return controllers.find((c) => c.userData.inputSource?.handedness === 'right') || controllers[1]; }
+    function hackFeedback(at, normal, swing, strength, chipColor) {
+      camera.getWorldPosition(_hCam);
+      gameAudio.hack(_hCam.distanceTo(at), strength);
+      spawnChips(at, normal, swing, 10 + Math.round(strength * 6), chipColor);
+      const rc = rightController(); if (rc) pulse(rc, Math.min(1, 0.5 + strength * 0.3), 70);
+      hackCD = 0.12;
+    }
+    function plankPiece(mat, sx, sy, sz) {                 // a scaled board inside an unscaled group (debris shrinks the group)
+      const g = new THREE.Group(), m = new THREE.Mesh(UNIT_BOX, mat);
+      m.scale.set(sx, sy, sz); m.castShadow = true; g.add(m);
+      return g;
+    }
+    function breakDoor(d, swing) {
+      d.broken = true;
+      d.col.box.min.set(0, -1000, 0); d.col.box.max.set(0, -1000, 0);
+      d.pivot.visible = false;
+      d.grabbed = -1;
+      const ang = d.yaw + d.angle;
+      for (let k = 0; k < 4; k++) {
+        const m = plankPiece(doorWoodMat, d.w / 4 - 0.006, d.h * (0.4 + Math.random() * 0.6), d.t);
+        doorPoint(d, (k + 0.5) * d.w / 4, d.h / 2, 0, m.position);
+        m.rotation.set(0, ang, (Math.random() - 0.5) * 0.4);
+        const v = swing.clone().setLength(1.5 + Math.random() * 2); v.y += 1 + Math.random();
+        spawnDebris(m, v, 35 + Math.random() * 10, d.t / 2);
+      }
+      camera.getWorldPosition(_hCam);
+      gameAudio.smash(_hCam.distanceTo(d.hinge));
+    }
+    function breakBreakable(b, swing) {
+      b.broken = true;
+      b.col.box.min.set(0, -1000, 0); b.col.box.max.set(0, -1000, 0);
+      const c = new THREE.Vector3(); b.box.getCenter(c);
+      if (b.kind === 'crate') {
+        b.group.visible = false;
+        for (let k = 0; k < 6; k++) {
+          const m = plankPiece(plankMat, b.size, b.size * 0.3, 0.03);
+          m.position.copy(c).add(new THREE.Vector3((Math.random() - 0.5) * b.size, (Math.random() - 0.5) * b.size, (Math.random() - 0.5) * b.size));
+          m.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
+          const v = swing.clone().setLength(1 + Math.random() * 1.5); v.y += 1 + Math.random() * 1.5; v.x += (Math.random() - 0.5) * 2; v.z += (Math.random() - 0.5) * 2;
+          spawnDebris(m, v, 30 + Math.random() * 10, 0.015);
+        }
+      }
+      camera.getWorldPosition(_hCam);
+      gameAudio.smash(_hCam.distanceTo(c));
+      spawnChips(c, _hn.set(0, 1, 0), swing, 24);
+    }
+    function knockPlank(b, near, swing) {                  // one board of a barricade splinters off
+      let best = null, bd = Infinity;
+      for (const m of b.planks) { if (!m.visible) continue; m.getWorldPosition(_hp); const d = _hp.distanceTo(near); if (d < bd) { bd = d; best = m; } }
+      if (!best) return;
+      best.visible = false;
+      best.getWorldScale(_hz);
+      const m = plankPiece(plankMat, _hz.x, _hz.y, _hz.z);
+      best.getWorldPosition(m.position); best.getWorldQuaternion(m.quaternion);
+      const v = swing.clone().setLength(1.5 + Math.random() * 1.5); v.y += 0.8 + Math.random();
+      spawnDebris(m, v, 35, 0.02);
+      b.hp = b.planks.filter((p) => p.visible).length;
+    }
+    function tryHit(p, vel, speed) {
+      const swing = _hs.copy(vel).normalize();
+      // cabin doors (the camp)
+      if (currentMap === 'camp') for (const d of doors) {
+        if (d.broken) continue;
+        toDoorLocal(d, p, _hl);
+        if (_hl.x < 0.02 || _hl.x > d.w || _hl.y < 0 || _hl.y > d.h || Math.abs(_hl.z) > d.t / 2 + 0.03) continue;
+        const key = d; if (!cooled(key)) return true;
+        coolDown(key);
+        const side = _hl.z >= 0 ? 1 : -1;
+        const a = d.yaw + d.angle;
+        _hn.set(Math.sin(a) * side, 0, Math.cos(a) * side);                 // the face's normal (door-local +z, turned with the door)
+        _hp.set(_hl.x, _hl.y, side * (d.t / 2 + 0.002));                     // on the face, in the door's own space
+        addSlash(d.pivot, _hp, _hl.set(0, 0, side), _hv.copy(vel).applyAxisAngle(_brY, -a));
+        hackFeedback(p, _hn, swing, speed / 3, 0xd8b488);
+        d.hackHits = (d.hackHits || 0) + 1;
+        if (d.hackHits >= DOOR_HITS) breakDoor(d, swing);
+        return true;
+      }
+      // window panes shatter
+      if (currentMap === 'camp') for (const pn of panes) {
+        if (pn.broken) continue;
+        _hl.subVectors(p, pn.center);
+        if (Math.abs(_hl.dot(pn.normal)) > 0.06 || Math.abs(_hl.dot(pn.right)) > pn.w / 2 || Math.abs(_hl.y) > pn.h / 2) continue;
+        shatterPane(pn, vel.clone());
+        const rc = rightController(); if (rc) pulse(rc, 1, 120);
+        hackCD = 0.12;
+        return true;
+      }
+      // crates and barricades
+      for (const b of breakables) {
+        if (b.broken || b.map !== currentMap) continue;
+        if (!b.box.containsPoint(p)) continue;
+        if (!cooled(b)) return true;
+        coolDown(b);
+        const c = b.box.getCenter(_hc), sz = b.box.getSize(_hz);
+        const rx = (p.x - c.x) / sz.x, ry = (p.y - c.y) / sz.y, rz = (p.z - c.z) / sz.z;
+        if (Math.abs(rx) >= Math.abs(ry) && Math.abs(rx) >= Math.abs(rz)) _hn.set(Math.sign(rx), 0, 0);
+        else if (Math.abs(ry) >= Math.abs(rz)) _hn.set(0, Math.sign(ry), 0); else _hn.set(0, 0, Math.sign(rz));
+        const face = _hl.copy(p);
+        if (_hn.x) face.x = c.x + _hn.x * sz.x / 2; else if (_hn.y) face.y = c.y + _hn.y * sz.y / 2; else face.z = c.z + _hn.z * sz.z / 2;
+        hackFeedback(p, _hn, swing, speed / 3, 0xd8b488);
+        if (b.kind === 'crate') {
+          addSlash(scene, face, _hn, vel);
+          if (--b.hp <= 0) breakBreakable(b, swing);
+        } else {
+          knockPlank(b, p, swing);
+          if (b.hp <= 0) breakBreakable(b, swing);
+        }
+        return true;
+      }
+      // generators: slashing one sparks and knocks back part of its repair progress (sabotage, never repair)
+      for (const g of (currentMap === 'camp' ? generators : extraGens.filter((x) => x.map === currentMap))) {
+        const dx = p.x - g.pos.x, dz = p.z - g.pos.z;
+        if (dx * dx + dz * dz > 0.36 * 0.36 || p.y < g.pos.y || p.y > g.pos.y + 0.56) continue;
+        if (!cooled(g)) return true;
+        coolDown(g, 0.8);
+        sabotageGenerator(g, p, swing);
+        return true;
+      }
+      // tree trunks
+      for (const t of hackTrees) {
+        if (t.map !== currentMap) continue;
+        const dx = p.x - t.x, dz = p.z - t.z;
+        if (dx * dx + dz * dz > (t.r + 0.02) ** 2 || p.y < 0.03 || p.y > Math.min(t.h, 3)) continue;
+        if (!cooled(t)) return true;
+        coolDown(t, 0.25);
+        const d = Math.hypot(dx, dz) || 1;
+        _hn.set(dx / d, 0, dz / d);
+        _hp.set(t.x + _hn.x * (t.r + 0.004), p.y, t.z + _hn.z * (t.r + 0.004));
+        addSlash(scene, _hp, _hn, vel, 0.1);
+        hackFeedback(p, _hn, swing, speed / 3, 0xc8a070);
+        return true;
+      }
+      return false;
+    }
+    // closest distance between segments p1-q1 and p2-q2 (also returns the parameter along the second)
+    const _sd1 = new THREE.Vector3(), _sd2 = new THREE.Vector3(), _sr = new THREE.Vector3(), _sc1 = new THREE.Vector3(), _sc2 = new THREE.Vector3();
+    function segDist(p1, q1, p2, q2) {
+      _sd1.subVectors(q1, p1); _sd2.subVectors(q2, p2); _sr.subVectors(p1, p2);
+      const a = _sd1.dot(_sd1), e = _sd2.dot(_sd2), f = _sd2.dot(_sr);
+      let s, t;
+      const c = _sd1.dot(_sr), b = _sd1.dot(_sd2), den = a * e - b * b;
+      s = den > 1e-9 ? THREE.MathUtils.clamp((b * f - c * e) / den, 0, 1) : 0;
+      t = (b * s + f) / e;
+      if (t < 0) { t = 0; s = THREE.MathUtils.clamp(-c / a, 0, 1); } else if (t > 1) { t = 1; s = THREE.MathUtils.clamp((b - c) / a, 0, 1); }
+      _sc1.copy(p1).addScaledVector(_sd1, s); _sc2.copy(p2).addScaledVector(_sd2, t);
+      return { d: _sc1.distanceTo(_sc2), t };
+    }
+    const _bA = new THREE.Vector3(), _bB = new THREE.Vector3();
+    function trySlice(p1, q1, vel) {
+      for (let i = 0; i < branchDefs.length; i++) {
+        const b = branchDefs[i];
+        if (b.cut || b.map !== currentMap) continue;
+        if (b.base.distanceTo(p1) > b.len + 0.6) continue;
+        _bA.copy(b.base).addScaledVector(b.dir, 0.06);
+        _bB.copy(b.base).addScaledVector(b.dir, b.len);
+        const { d, t } = segDist(p1, q1, _bA, _bB);
+        if (d > b.r + 0.03) continue;
+        // cut: a short stub stays on the tree, the rest drops off as a tumbling, bouncing physics branch
+        const cutAt = 0.06 + t * (b.len - 0.06), rest = b.len - cutAt;
+        b.cut = true; b.cur = Math.max(0.05, cutAt);
+        setBranchMatrix(i, b.cur); branchMesh.instanceMatrix.needsUpdate = true;
+        if (rest > 0.04) {
+          const geo = new THREE.CylinderGeometry(0.62 * b.r, b.r * (1 - 0.38 * cutAt / b.len), rest, 6);
+          const m = new THREE.Mesh(geo, barkMat);
+          m.position.copy(b.base).addScaledVector(b.dir, cutAt + rest / 2);
+          m.quaternion.setFromUnitVectors(_brY, b.dir);
+          const v = vel.clone().multiplyScalar(0.25); v.y += 0.4;
+          spawnDebris(m, v, 40 + Math.random() * 15, b.r);
+          const dd = debris[debris.length - 1]; if (dd) dd.spin.multiplyScalar(0.35);
+        }
+        spawnChips(_bA.copy(b.base).addScaledVector(b.dir, cutAt), _hn.copy(vel).normalize(), _hn, 8, 0xd8c098);
+        camera.getWorldPosition(_hCam);
+        gameAudio.slice(_hCam.distanceTo(b.base));
+        const rc = rightController(); if (rc) pulse(rc, 0.45, 40);
+        return true;
+      }
+      return false;
+    }
+    function updateMachete(dt) {
+      for (const [k, v] of targetCD) { const n = v - dt; if (n <= 0) targetCD.delete(k); else targetCD.set(k, n); }
+      hackCD = Math.max(0, hackCD - dt);
+      const right = hands.find((h, i) => controllers[i].userData.inputSource?.handedness === 'right');
+      const active = playerRole === 'monster' && renderer.xr.isPresenting && !titleActive && monsterModel.visible && right && right.tracked && dt > 0;
+      if (!active) { bladeOk = false; return; }
+      mMachete.updateWorldMatrix(true, false);
+      for (let k = 0; k < bladeLocal.length; k++) { bladePrev[k].copy(bladeNow[k]); mMachete.localToWorld(bladeNow[k].copy(bladeLocal[k])); }
+      if (!bladeOk) { bladeOk = true; return; }
+      if (hackCD > 0) return;
+      // branches: the blade's edge sweeping through them (checked along the blade, between this frame and the last)
+      for (let k = 0; k < bladeLocal.length - 1; k++) {
+        _hv.subVectors(bladeNow[k + 1], bladePrev[k + 1]).divideScalar(dt);
+        if (_hv.length() < SLICE_SPEED) continue;
+        if (trySlice(bladeNow[k], bladeNow[k + 1], _hv) || trySlice(bladePrev[k + 1], bladeNow[k + 1], _hv)) return;
+      }
+      // solid wood: the fastest points along the blade, at this frame and half-way back to the last (fast swings)
+      for (let k = bladeLocal.length - 1; k >= 0; k--) {
+        _hv.subVectors(bladeNow[k], bladePrev[k]).divideScalar(dt);
+        const speed = _hv.length();
+        if (speed < HACK_SPEED) continue;
+        if (tryHit(bladeNow[k], _hv, speed)) return;
+        _hp.lerpVectors(bladePrev[k], bladeNow[k], 0.5);
+        if (tryHit(_hp.clone(), _hv, speed)) return;
+      }
+    }
+
+    // ---------- everything above, once per frame ----------
+    function updateGameExtras(dt) {
+      if (titleActive) return;
+      updateExtraSwimming(dt);
+      updateEngineParts(dt);
+      updateExtraGenerators(dt);
+      updateQuests(dt);
+      updateEscapeBoats(dt);
+      updateFlare();
+      updateEnding(dt);
+      updatePov(dt);
+      updateCosmetics(dt);
+      updateMachete(dt);
+      updateChips(dt);
+      for (const L of extraLakes) L.water.visible = L.map === currentMap;
+      updateRoleRules(dt);
+    }
+
+    // =====================================================================
+    //  ROLE RULES: the MONSTER can't do the survivors' escape work. As the monster you can't start or repair
+    //  generators (no skill checks), fit boat parts, pour fuel, take the tiller, light braziers, carry the skull relics,
+    //  pull the breakers, push the minecart or start an escape boat. Trying it shows a red warning (in front of your eyes
+    //  in VR, on the wrist and on screen on the desktop) with a low growl. The objective text turns into hunting orders,
+    //  and the survivors' prompts (generator signs, the boat's repair board, the objective boards) say what the monster
+    //  can do instead: slash part-repaired generators with the machete to spark them and knock their repairs back.
+    // =====================================================================
+    let roleWarnT = 0, roleWarnCD = 0;
+    const ROLE_WARN = 'MONSTERS CANNOT COMPLETE SURVIVOR QUESTS';
+    // the red warning: a pop-up in front of your eyes (VR) and a banner on the desktop
+    const warnCanvas = document.createElement('canvas'); warnCanvas.width = 1024; warnCanvas.height = 160;
+    const warnTex = new THREE.CanvasTexture(warnCanvas); warnTex.colorSpace = THREE.SRGBColorSpace;
+    {
+      const g = warnCanvas.getContext('2d');
+      g.fillStyle = 'rgba(30,2,2,0.82)'; g.fillRect(0, 0, 1024, 160);
+      g.strokeStyle = '#ff2a1a'; g.lineWidth = 6; g.strokeRect(3, 3, 1018, 154);
+      g.fillStyle = '#ff3a2a'; g.font = 'bold 50px "Courier New", monospace'; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText(ROLE_WARN, 512, 62);
+      g.fillStyle = '#ffb0a0'; g.font = '30px "Courier New", monospace';
+      g.fillText('Hunt them down instead: slash their generators', 512, 118);
+      warnTex.needsUpdate = true;
+    }
+    const warnToast = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.066), new THREE.MeshBasicMaterial({ map: warnTex, transparent: true, opacity: 0, depthTest: false, depthWrite: false, fog: false }));
+    warnToast.position.set(0, 0.03, -0.52); warnToast.renderOrder = 9001; warnToast.visible = false;
+    camera.add(warnToast);
+    const warnEl = document.createElement('div');
+    warnEl.id = 'role-warn'; warnEl.textContent = ROLE_WARN;
+    document.body.appendChild(warnEl);
+    const objEl = document.createElement('div');
+    objEl.id = 'obj-hud';
+    document.body.appendChild(objEl);
+    {
+      const st = document.createElement('style');
+      st.textContent = `#role-warn{position:fixed;left:50%;top:16%;transform:translate(-50%,0) scale(.96);padding:14px 26px;background:rgba(30,2,2,.85);border:2px solid #ff2a1a;
+          border-radius:6px;color:#ff3a2a;font:700 20px/1.2 "Courier New",monospace;letter-spacing:.1em;opacity:0;pointer-events:none;transition:opacity .25s,transform .25s;z-index:25;
+          text-shadow:0 0 10px rgba(255,40,20,.6)}
+        #role-warn.show{opacity:1;transform:translate(-50%,0) scale(1)}
+        #obj-hud{position:fixed;left:14px;bottom:56px;display:none;padding:7px 12px;background:rgba(6,8,10,.7);border:1px solid rgba(220,226,232,.35);border-radius:4px;
+          pointer-events:none;font:700 12px/1.2 "Courier New",monospace;letter-spacing:.12em;color:#ffcf8a;max-width:60vw}
+        #obj-hud.monster{color:#ff5a46;border-color:rgba(255,60,40,.6)}
+        #obj-hud.warn{color:#ff3a2a;border-color:#ff2a1a}`;
+      document.head.appendChild(st);
+    }
+    function monsterWarn(c) {
+      if (roleWarnCD > 0) { roleWarnT = Math.max(roleWarnT, 1.2); return; }
+      roleWarnCD = 1.4; roleWarnT = 2.4;
+      gameAudio.growl();
+      if (c) pulse(c, 0.9, 220); else controllers.forEach((x) => pulse(x, 0.6, 150));
+      warnEl.classList.add('show');
+      survival.shownKey = '';                                       // the wrist shows it too
+      refreshObjectiveHud();
+    }
+    // true (and a warning) if you're the monster: the caller then does nothing
+    function monsterBlocked(c) {
+      if (playerRole !== 'monster') return false;
+      monsterWarn(c);
+      return true;
+    }
+    // ---------- objective text: escape tasks for survivors, hunting orders for the monster ----------
+    function objectiveText() {
+      if (roleWarnT > 0 && playerRole === 'monster') return { text: ROLE_WARN, cls: 'warn' };
+      if (playerRole === 'monster') return { text: 'HUNT SURVIVORS & STOP THEIR ESCAPE', cls: 'monster' };
+      if (currentMap === 'waiting') return { text: 'PICK A MAP ON THE BIG SCREEN', cls: '' };
+      if (ending) return { text: 'YOU ESCAPED', cls: '' };
+      const next = objectiveLines(currentMap).find(([, done]) => !done);
+      return { text: 'ESCAPE: ' + (next ? next[0].replace(/\s+/g, ' ').toUpperCase() : 'GET OUT OF HERE'), cls: '' };
+    }
+    let objShown = '';
+    function refreshObjectiveHud() {
+      const o = objectiveText(), key = o.text + '|' + o.cls;
+      objEl.style.display = titleActive || renderer.xr.isPresenting ? 'none' : 'block';
+      if (key === objShown) return;
+      objShown = key;
+      objEl.textContent = o.text;
+      objEl.className = o.cls;
+    }
+    {
+      // the wrist display gets the objective line along the bottom (when you're not holding your breath)
+      const baseWrist = drawWrist;
+      let wristObj = '';
+      drawWrist = function (...a) {
+        const o = objectiveText(), key = o.text + o.cls;
+        if (key !== wristObj) { wristObj = key; survival.shownKey = ''; }
+        const before = survival.shownKey;
+        const r = baseWrist.apply(this, a);
+        if (survival.shownKey !== before && survival.under <= 0.5) {
+          const g = wristCanvas.getContext('2d');
+          g.fillStyle = o.cls ? '#ff4a3a' : '#ffcf8a';
+          let size = 15;
+          do { g.font = `bold ${size}px "Courier New", monospace`; size--; } while (g.measureText(o.text).width > 232 && size > 8);
+          g.textAlign = 'left'; g.textBaseline = 'middle';
+          g.fillText(o.text, 12, 77);
+          wristTex.needsUpdate = true;
+        }
+        return r;
+      };
+    }
+    // ---------- generators: no grabbing the handle (so no skill checks) as the monster ----------
+    {
+      const baseOne = updateOneGenerator;
+      const never = () => false;
+      updateOneGenerator = function (g, dt, now, pressedNow) {
+        if (playerRole === 'monster' && !g.running) {
+          if (g.holding >= 0) releaseHandle(g);
+          for (let i = 0; i < hands.length; i++) {
+            if ((pressedNow(i, 0) || pressedNow(i, 1)) && nearHandle(g, hands[i])) { monsterWarn(controllers[i]); break; }
+          }
+          return baseOne.call(this, g, dt, now, never);
+        }
+        return baseOne.call(this, g, dt, now, pressedNow);
+      };
+      // signs: the monster sees what slashing will do instead of "repair me" prompts
+      const baseSign = drawGenSign;
+      drawGenSign = function (g) {
+        if (playerRole !== 'monster') return baseSign(g);
+        const c = g.signCanvas.getContext('2d'), W = g.signCanvas.width, H = g.signCanvas.height;
+        c.clearRect(0, 0, W, H);
+        c.fillStyle = 'rgba(14,2,2,0.7)'; c.fillRect(6, 6, W - 12, H - 12);
+        c.strokeStyle = '#d0140c'; c.lineWidth = 4; c.strokeRect(8, 8, W - 16, H - 16);
+        c.textAlign = 'center'; c.textBaseline = 'middle';
+        c.fillStyle = '#ffb0a0'; c.font = 'bold 30px system-ui, sans-serif';
+        c.fillText(`GENERATOR ${g.index + 1} · ${g.site.name}`, W / 2, 42);
+        c.fillStyle = '#ff5a46'; c.font = 'bold 34px system-ui, sans-serif';
+        c.fillText(g.running ? 'RUNNING · TOO LATE' : `REPAIRED ${g.progress}/${GEN_CHECKS_NEEDED}`, W / 2, 92);
+        c.fillStyle = '#ff8a6a'; c.font = '28px system-ui, sans-serif';
+        c.fillText(g.running ? 'Hunt the survivors instead' : g.progress > 0 ? 'Slash it to undo their repairs' : 'Nothing to undo yet', W / 2, 140);
+        g.signTex.needsUpdate = true;
+      };
+    }
+    // ---------- the camp boat: no fitting parts, no pouring fuel, no tiller ----------
+    {
+      const baseInstall = installPart;
+      installPart = function (p) {
+        if (playerRole !== 'monster') return baseInstall(p);
+        monsterWarn();
+        p.held = -1; p.vel.set(0, 0, 0); p.spin.set(0, 0, 0); p.sleep = false; p.rides = null; p.floating = false;   // it just drops
+      };
+      const baseGas = updateGasPour;
+      const _gCap = new THREE.Vector3(), _gNoz = new THREE.Vector3();
+      updateGasPour = function (dt) {
+        if (playerRole !== 'monster') return baseGas(dt);
+        const f0 = boat.fuel;
+        boat.fuel = 100;                               // the tank looks full to the pouring code: nothing goes in
+        try { baseGas(dt); } finally { boat.fuel = f0; }
+        if (gasPart.held >= 0 && f0 < 100) {
+          _gCap.copy(fuelCapLocal).applyMatrix4(boatGroup.matrixWorld);
+          if (gasPart.mesh.getWorldPosition(_gNoz).distanceTo(_gCap) < 0.35) monsterWarn(controllers[gasPart.held]);
+        }
+      };
+      const baseStatus = drawStatus;
+      drawStatus = function () {
+        if (playerRole !== 'monster') return baseStatus();
+        const g = statusCanvas.getContext('2d'), W = statusCanvas.width, H = statusCanvas.height;
+        g.clearRect(0, 0, W, H);
+        g.fillStyle = 'rgba(14,2,2,0.6)'; g.fillRect(6, 6, W - 12, H - 12);
+        g.textAlign = 'center'; g.textBaseline = 'middle';
+        g.fillStyle = '#ff5a46'; g.font = 'bold 34px system-ui, sans-serif';
+        g.fillText(`THE SURVIVORS' BOAT · ${boat.parts}/${PARTS_NEEDED} REPAIRED`, W / 2, 56);
+        g.fillStyle = '#ffb0a0'; g.font = '24px system-ui, sans-serif';
+        g.fillText("You can't repair or drive it. Keep them away from it.", W / 2, 112);
+        statusTex.needsUpdate = true;
+      };
+      // desktop driving (arrow keys) is the survivors' job too
+      window.addEventListener('keydown', (e) => {
+        if (playerRole !== 'monster' || titleActive || renderer.xr.isPresenting) return;
+        if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
+        if (currentMap !== 'camp') return;
+        e.stopImmediatePropagation(); e.preventDefault();
+        monsterWarn();
+      }, true);
+    }
+    // ---------- switching role: drop anything you're holding and redraw every sign ----------
+    function refreshRoleSigns() {
+      generators.forEach(drawGenSign);
+      extraGens.forEach(drawGenSign);
+      drawStatus();
+      ['camp', 'graveyard', 'mine'].forEach(drawObjectives);
+      survival.shownKey = '';
+      objShown = '';
+      refreshObjectiveHud();
+    }
+    {
+      const baseSetRole = setRole;
+      setRole = function (r) {
+        const was = playerRole;
+        baseSetRole(r);
+        if (r === 'monster') {
+          for (const g of [...generators, ...extraGens]) if (g.holding >= 0) releaseHandle(g);
+          boat.holding = -1;
+          for (const s of skulls) if (s.held >= 0) { s.held = -1; s.falling = true; s.vel.set(0, 0, 0); }
+          for (const l of levers) l.held = -1;
+          deskBoat.up = deskBoat.down = deskBoat.left = deskBoat.right = false;
+        }
+        if (r !== 'monster') { roleWarnT = 0; warnEl.classList.remove('show'); }
+        refreshRoleSigns();
+        if (r !== was && !titleActive) {
+          if (r === 'monster') showToast('YOU ARE THE MONSTER', 'Hunt survivors & stop their escape');
+          else showToast('YOU ARE A SURVIVOR', 'Finish the objectives and escape');
+        }
+      };
+    }
+    // ---------- sabotage: the machete on a part-repaired generator (called from the machete's hit code) ----------
+    function sabotageGenerator(g, at, swing) {
+      camera.getWorldPosition(_hCam);
+      gameAudio.hack(_hCam.distanceTo(at), 1.2);
+      horrorAudio.spark();
+      spawnChips(at, _hn.set(0, 1, 0), swing, 10, 0x9aa0a6);
+      g.sparkT = 0.5; g.flashT = 0.6;
+      const rc = rightController(); if (rc) pulse(rc, 1, 160);
+      hackCD = 0.15;
+      if (g.running) { showToast('GENERATOR RUNNING', 'Too late to stop this one'); return; }
+      if (g.progress <= 0) { showToast('NOTHING TO SABOTAGE', "This generator hasn't been repaired yet"); return; }
+      g.progress--;                                                   // one skill check's worth (a fifth of the repair) undone
+      g.active = false; g.cooldown = 1.3; g.check.zone.visible = false;
+      updatePips(g);
+      drawGenSign(g);
+      showToast('GENERATOR SABOTAGED', `Repairs knocked back to ${g.progress}/${GEN_CHECKS_NEEDED}`);
+    }
+    // ---------- every frame ----------
+    let objHudT = 0;
+    function updateRoleRules(dt) {
+      roleWarnCD = Math.max(0, roleWarnCD - dt);
+      if (roleWarnT > 0) {
+        roleWarnT -= dt;
+        if (roleWarnT <= 0) { warnEl.classList.remove('show'); survival.shownKey = ''; }
+      }
+      const vrWarn = roleWarnT > 0 && renderer.xr.isPresenting;
+      warnToast.visible = vrWarn;
+      warnToast.material.opacity = vrWarn ? Math.min(1, roleWarnT / 0.4) : 0;
+      if (playerRole === 'monster') {
+        if (boat.holding >= 0) { const i = boat.holding; boat.holding = -1; monsterWarn(controllers[i]); }
+        zoneMarker.material.opacity = 0;                               // no "drop the part here" glow
+        if (deskBoat.up || deskBoat.down || deskBoat.left || deskBoat.right) deskBoat.up = deskBoat.down = deskBoat.left = deskBoat.right = false;
+        for (const b of Object.values(escapeBoats)) if (b.t < 0) b.glow.material.color.setHex(0xff2a1a);   // no green "start me" light for you
+      }
+      if ((objHudT -= dt) <= 0) { objHudT = 0.25; refreshObjectiveHud(); }
+    }
+    refreshRoleSigns();
 
 
     // ---------- XR session hooks ----------
@@ -8379,6 +10487,7 @@
         updateCampExtras(dt); // cabin and boat lanterns flicker
         controllers.forEach(updatePointer);
         updateUI(); // map screen + settings menu: controller rays / trigger, menu button (B / Y)
+        updateGameExtras(dt); // floating, new-map quests, escape boats, sunrise ending, MONSTER POV, shop, machete
       } catch (err) {
         if (!loopErrorReported) {
           loopErrorReported = true;
