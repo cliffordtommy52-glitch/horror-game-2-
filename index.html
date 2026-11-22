@@ -36,6 +36,7 @@
     Right thumbstick left/right: 45° snap turn.<br />
     Desktop: drag to orbit, <b>F</b> toggles the flashlight (no locomotion).<br />
     Generator: hold Trigger or Grip on its yellow handle, then hit each skill check with the other Trigger (or A / X). Beat 5 to power the floodlights.<br />
+    Lake (east of camp): swim by sweeping your hands through the water. Find the 3 glowing boat parts, carry them with Grip and drop them at the boat's motor; then grab the wheel and use Trigger or the thumbstick to drive.<br />
     Ambient horror music starts when you press ENTER VR (headphones recommended).
   </div>
   <div id="diag"></div>
@@ -331,6 +332,10 @@
     const CABIN = { x: 0, z: -14 * S, w: 5 * S, d: 4 * S, h: 1.6 };
     const GEN_POS = new THREE.Vector3(-2.6, 0, -0.6);               // the old generator
     const FLOOD_POS = [[2.9, -0.9], [-3.6, -2.2], [1.6, -6.2]];     // floodlight poles around the camp
+    const LAKE = { x0: 5, x1: 14, z0: -4, z1: 5 };                  // lake water area (world X/Z), east of the camp
+    const WATER_LEVEL = 0.6;                                         // water surface height (m)
+    const DOCK = { x0: 3.5, x1: 7.4, z0: 0.4, z1: 1.6 };            // wooden dock reaching into the lake
+    const REPAIR_SPOTS = { gas: [1.9, -6.2], prop: [-3.6, -4.9], plug: [-3.25, 0.25] }; // boat parts: cabin, tents, generator
 
     // Bare trampled dirt around the fire
     const clearing = new THREE.Mesh(new THREE.CircleGeometry(5.5 * S, 48),
@@ -348,6 +353,9 @@
       { x: CABIN.x, z: CABIN.z, r: 4.2 * S },    // ranger cabin
       { x: GEN_POS.x, z: GEN_POS.z, r: 0.9 },    // generator
       ...FLOOD_POS.map(([x, z]) => ({ x, z, r: 0.4 })), // floodlight poles
+      { x: (LAKE.x0 + LAKE.x1) / 2, z: (LAKE.z0 + LAKE.z1) / 2, r: 7.2 }, // lake + banks: keep trees/rocks/logs out
+      { x: (DOCK.x0 + DOCK.x1) / 2 - 1, z: (DOCK.z0 + DOCK.z1) / 2, r: 1.6 }, // dock steps
+      ...Object.values(REPAIR_SPOTS).map(([x, z]) => ({ x, z, r: 0.5 })), // boat repair parts
     ];
     function findSpot(radius, range = WORLD_HALF - 1.5, tries = 60) {
       for (let i = 0; i < tries; i++) {
@@ -416,6 +424,7 @@
         const x = rr(-WORLD_HALF, WORLD_HALF), z = rr(-WORLD_HALF, WORLD_HALF);
         if (Math.hypot(x - FIRE.x, z - FIRE.z) < 5.8 * S) continue;
         if (Math.abs(x - CABIN.x) < CABIN.w / 2 + 0.3 && Math.abs(z - CABIN.z) < CABIN.d / 2 + 0.3) continue;
+        if (x > LAKE.x0 - 0.8 && x < LAKE.x1 + 0.8 && z > LAKE.z0 - 0.8 && z < LAKE.z1 + 0.8) continue; // no grass in the lake
         const sc = rr(0.6, 1.6);
         q.setFromEuler(e.set(rr(-0.25, 0.25), rr(0, 6.3), rr(-0.25, 0.25)));
         m.compose(p.set(x, 0, z), q, s.set(sc, sc, sc));
@@ -1097,6 +1106,7 @@
       // Squeeze (grip button) moves the flashlight to that hand
       controller.addEventListener('squeezestart', () => {
         if (isNearHandle(hand)) return; // squeezing the generator handle grabs it instead
+        if (boatGrabHere(hand)) return; // squeezing a boat part or the boat's wheel grabs it instead
         attachFlashlight(controller);
         pulse(controller, 0.6, 60);
       });
@@ -2015,6 +2025,729 @@
       };
     })();
 
+    // =====================================================================
+    //  Lake, swimming and the repairable boat (self-contained; plugs into the loop with
+    //  updateBoat() before locomotion and updateLake() after it)
+    // =====================================================================
+    const BOAT_L = 2.4, BOAT_W = 1.1;                    // boat length (bow points along the boat's local +X) and beam
+    const BOAT_FLOOR = 0.08;                             // walkable floor height above the waterline
+    const BOAT_MAX_FWD = 3.2, BOAT_MAX_REV = 1.2;        // top speeds (m/s)
+    const BOAT_ACCEL = 1.8, BOAT_DRAG = 0.55;            // throttle acceleration (m/s²) and water drag (1/s)
+    const BOAT_TURN = 0.9;                               // turn rate at full lock (rad/s)
+    const WHEEL_LOCK = 2.2;                              // wheel rotation (rad) for full lock
+    const SWIM_STRENGTH = 3.0;                           // how hard a hand sweep through the water pushes you
+    const WATER_DRAG = 1.6;                              // 1/s: slows you while swimming
+    const FLOAT_EYE = 0.12;                              // your eyes float this far above the water surface
+    const FLOAT_SPRING = 22, FLOAT_DAMP = 5;             // buoyancy spring towards the float height
+    const PART_GRAB_RADIUS = 0.18, WHEEL_GRAB_RADIUS = 0.2, REPAIR_ZONE_RADIUS = 0.45;
+    const PARTS_NEEDED = 3;
+
+    const lakeCx = (LAKE.x0 + LAKE.x1) / 2, lakeCz = (LAKE.z0 + LAKE.z1) / 2;
+    const lakeW = LAKE.x1 - LAKE.x0, lakeD = LAKE.z1 - LAKE.z0;
+    const _UPY = new THREE.Vector3(0, 1, 0);
+    const lkRand = (a, b) => a + Math.random() * (b - a);
+    const inLake = (x, z, m = 0) => x > LAKE.x0 + m && x < LAKE.x1 - m && z > LAKE.z0 + m && z < LAKE.z1 - m;
+
+    // ---------- Lake bed, water surface, banks ----------
+    {
+      const bed = new THREE.Mesh(new THREE.PlaneGeometry(lakeW, lakeD),
+        new THREE.MeshStandardMaterial({ color: 0x0b0d0c, roughness: 1, polygonOffset: true, polygonOffsetFactor: -2 }));
+      bed.rotation.x = -Math.PI / 2;
+      bed.position.set(lakeCx, 0.006, lakeCz);
+      bed.receiveShadow = true;
+      scene.add(bed);
+    }
+    const waterGeo = new THREE.PlaneGeometry(lakeW, lakeD, 24, 24);
+    const water = new THREE.Mesh(waterGeo, new THREE.MeshStandardMaterial({
+      color: 0x0a1c26, roughness: 0.12, metalness: 0.35, transparent: true, opacity: 0.8, depthWrite: false }));
+    water.rotation.x = -Math.PI / 2;
+    water.position.set(lakeCx, WATER_LEVEL, lakeCz);
+    water.receiveShadow = true;
+    scene.add(water);
+
+    const bankMat = new THREE.MeshStandardMaterial({ color: 0x241b13, roughness: 1 });
+    const BANK_H = WATER_LEVEL + 0.08, BANK_T = 0.5;
+    solidBox(LAKE.x0 - BANK_T / 2, 0, lakeCz, BANK_T, BANK_H, lakeD + 2 * BANK_T, bankMat); // west bank
+    solidBox(LAKE.x1 + BANK_T / 2, 0, lakeCz, BANK_T, BANK_H, lakeD + 2 * BANK_T, bankMat); // east bank
+    solidBox(lakeCx, 0, LAKE.z0 - BANK_T / 2, lakeW, BANK_H, BANK_T, bankMat);              // north bank
+    solidBox(lakeCx, 0, LAKE.z1 + BANK_T / 2, lakeW, BANK_H, BANK_T, bankMat);              // south bank
+    for (let i = 0; i < 26; i++) { // loose shoreline stones (decoration only)
+      const side = i % 4, t = Math.random();
+      const x = side === 0 ? LAKE.x0 - 0.25 : side === 1 ? LAKE.x1 + 0.25 : LAKE.x0 + t * lakeW;
+      const z = side === 2 ? LAKE.z0 - 0.25 : side === 3 ? LAKE.z1 + 0.25 : LAKE.z0 + t * lakeD;
+      if (x < DOCK.x1 && x > DOCK.x0 - 0.5 && z > DOCK.z0 - 0.3 && z < DOCK.z1 + 0.3) continue; // keep the dock clear
+      const stone = new THREE.Mesh(new THREE.DodecahedronGeometry(lkRand(0.06, 0.14), 0), rockMat);
+      stone.position.set(x + lkRand(-0.15, 0.15), BANK_H, z + lkRand(-0.15, 0.15));
+      stone.rotation.set(lkRand(0, 3), lkRand(0, 3), 0);
+      scene.add(stone);
+    }
+
+    // ---------- Wooden dock (with two steps up from the camp side) ----------
+    {
+      const DECK_TOP = WATER_LEVEL + 0.12, dz = (DOCK.z0 + DOCK.z1) / 2, dw = DOCK.z1 - DOCK.z0;
+      solidBox((DOCK.x0 + DOCK.x1) / 2, DECK_TOP - 0.08, dz, DOCK.x1 - DOCK.x0, 0.08, dw, woodMat);   // deck
+      solidBox((DOCK.x0 + LAKE.x0 - BANK_T) / 2, 0, dz, LAKE.x0 - BANK_T - DOCK.x0, DECK_TOP - 0.08, dw, bankMat); // earth under the land end
+      solidBox(DOCK.x0 - 0.2, 0, dz, 0.4, DECK_TOP * 0.66, dw, plankMat);   // step 2
+      solidBox(DOCK.x0 - 0.6, 0, dz, 0.4, DECK_TOP * 0.33, dw, plankMat);   // step 1
+      for (const x of [LAKE.x0 + 0.3, (LAKE.x0 + DOCK.x1) / 2, DOCK.x1 - 0.08]) for (const z of [DOCK.z0 + 0.06, DOCK.z1 - 0.06]) {
+        const post = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.045, DECK_TOP + 0.12, 8), barkMat);
+        post.position.set(x, (DECK_TOP + 0.12) / 2, z);
+        post.castShadow = true;
+        scene.add(post);
+      }
+    }
+
+    // ---------- The boat ----------
+    const boat = {
+      pos: new THREE.Vector3(6.6, WATER_LEVEL, DOCK.z1 + BOAT_W / 2 + 0.12), // moored alongside the dock
+      yaw: 0, speed: 0, wheelAngle: 0, wheelPrev: 0, holding: -1, parts: 0,
+      prevThr: false, warnT: 0, sparkT: 0, time: 0, hapticT: 0, engineLevel: 0,
+    };
+    const boatGroup = new THREE.Group();
+    scene.add(boatGroup);
+    const hullMat = new THREE.MeshStandardMaterial({ map: woodTex, color: 0xb08a66, roughness: 0.85, side: THREE.DoubleSide });
+    const darkMetal = new THREE.MeshStandardMaterial({ color: 0x1e2022, roughness: 0.5, metalness: 0.7 });
+    const motorMat = new THREE.MeshStandardMaterial({ color: 0x5a6670, roughness: 0.45, metalness: 0.6 });
+    let wheelInner, motorGroup, propSlot;
+    {
+      const L2 = BOAT_L / 2, W2 = BOAT_W / 2, T = 0.05;
+      const outline = (inset) => {
+        const s = new THREE.Shape();
+        s.moveTo(-L2 + inset, -W2 + inset); s.lineTo(L2 * 0.35, -W2 + inset);
+        s.lineTo(L2 - inset * 2.5, 0); s.lineTo(L2 * 0.35, W2 - inset); s.lineTo(-L2 + inset, W2 - inset); s.closePath();
+        return s;
+      };
+      const ring = outline(0);
+      ring.holes.push(new THREE.Path(outline(T).getPoints()));
+      const hullGeo = new THREE.ExtrudeGeometry(ring, { depth: 0.55, bevelEnabled: false });
+      hullGeo.rotateX(-Math.PI / 2); hullGeo.translate(0, -0.15, 0);        // hull sides from 0.15 below to 0.4 above the waterline
+      const hull = new THREE.Mesh(hullGeo, hullMat);
+      hull.castShadow = hull.receiveShadow = true;
+      boatGroup.add(hull);
+      const bottomGeo = new THREE.ShapeGeometry(outline(0)); bottomGeo.rotateX(-Math.PI / 2);
+      const bottom = new THREE.Mesh(bottomGeo, hullMat); bottom.position.y = -0.15; boatGroup.add(bottom);
+      const floorGeo = new THREE.ShapeGeometry(outline(T)); floorGeo.rotateX(-Math.PI / 2);
+      const floorMesh = new THREE.Mesh(floorGeo, plankMat); floorMesh.position.y = BOAT_FLOOR; floorMesh.receiveShadow = true;
+      boatGroup.add(floorMesh);
+      // gunwale rails
+      for (const side of [-1, 1]) {
+        const rail = new THREE.Mesh(new THREE.BoxGeometry(L2 * 1.35, 0.03, 0.06), plankMat);
+        rail.position.set(-L2 * 0.32, 0.41, side * (W2 - 0.03));
+        boatGroup.add(rail);
+      }
+      // seats
+      for (const x of [-0.55, 0.12]) {
+        const seat = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.05, BOAT_W - 0.12), plankMat);
+        seat.position.set(x, BOAT_FLOOR + 0.24, 0);
+        seat.castShadow = true;
+        boatGroup.add(seat);
+      }
+      // helm console + steering wheel at the front
+      const console_ = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.32, 0.36), plankMat);
+      console_.position.set(0.66, BOAT_FLOOR + 0.16, 0);
+      boatGroup.add(console_);
+      const helmTilt = new THREE.Group();
+      helmTilt.position.set(0.58, BOAT_FLOOR + 0.42, 0);
+      helmTilt.rotation.z = -0.5;
+      boatGroup.add(helmTilt);
+      const wheelSpin = new THREE.Group();
+      wheelSpin.rotation.y = Math.PI / 2;      // wheel faces aft, towards the driver
+      helmTilt.add(wheelSpin);
+      wheelInner = new THREE.Group();
+      wheelSpin.add(wheelInner);
+      const wheelMat = new THREE.MeshStandardMaterial({ color: 0x6b4423, roughness: 0.6, emissive: 0x1a0d00 });
+      wheelInner.add(new THREE.Mesh(new THREE.TorusGeometry(0.11, 0.014, 8, 28), wheelMat));
+      for (let k = 0; k < 3; k++) {
+        const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.22, 0.012), wheelMat);
+        spoke.rotation.z = (k / 3) * Math.PI;
+        wheelInner.add(spoke);
+      }
+      wheelInner.add(new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.03, 12).rotateX(Math.PI / 2), darkMetal));
+      boatGroup.userData.helm = helmTilt;
+      // outboard motor at the back
+      motorGroup = new THREE.Group();
+      motorGroup.position.set(-L2 - 0.07, 0, 0);
+      boatGroup.add(motorGroup);
+      const head = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.22, 0.18), motorMat);
+      head.position.y = 0.33; head.castShadow = true; motorGroup.add(head);
+      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.5, 8), darkMetal);
+      shaft.position.y = 0.0; motorGroup.add(shaft);
+      const skeg = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.05, 0.03), darkMetal);
+      skeg.position.set(-0.02, -0.24, 0); motorGroup.add(skeg);
+      const tiller = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.3, 6), darkMetal);
+      tiller.rotation.z = Math.PI / 2; tiller.position.set(0.2, 0.36, 0); motorGroup.add(tiller);
+      propSlot = new THREE.Group(); propSlot.position.set(-0.07, -0.2, 0); motorGroup.add(propSlot);
+    }
+    const wheelWorld = new THREE.Vector3();
+    const repairZoneLocal = new THREE.Vector3(-BOAT_L / 2 + 0.05, 0.3, 0);
+    const repairZoneWorld = new THREE.Vector3();
+
+    // Repair zone marker (only shown while you carry a part) and a spark flash for the broken engine
+    const zoneMarker = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xffd040, transparent: true,
+      opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+    zoneMarker.scale.set(0.5, 0.5, 1);
+    zoneMarker.position.copy(repairZoneLocal);
+    boatGroup.add(zoneMarker);
+    const boatSpark = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xfff0a0, transparent: true,
+      opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+    boatSpark.position.set(-BOAT_L / 2 - 0.07, 0.35, 0);
+    boatGroup.add(boatSpark);
+
+    // Floating status text above the boat
+    const statusCanvas = document.createElement('canvas');
+    statusCanvas.width = 512; statusCanvas.height = 160;
+    const statusTex = new THREE.CanvasTexture(statusCanvas);
+    statusTex.colorSpace = THREE.SRGBColorSpace;
+    const statusSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: statusTex, transparent: true, depthWrite: false, fog: false }));
+    statusSprite.scale.set(0.8, 0.25, 1);
+    statusSprite.position.set(0, BOAT_FLOOR + 0.95, 0);
+    boatGroup.add(statusSprite);
+
+    // Floor colliders: 4 boxes along the hull, re-fitted to the boat's position and heading every frame
+    const boatColliders = [0, 1, 2, 3].map(() => {
+      const c = { box: new THREE.Box3() };
+      colliders.push(c);
+      return c;
+    });
+    function updateBoatColliders() {
+      const c = Math.cos(boat.yaw), s = Math.sin(boat.yaw);
+      const seg = BOAT_L / 4, hx = seg / 2, hz = BOAT_W / 2 - 0.06;
+      const ex = Math.abs(c) * hx + Math.abs(s) * hz, ez = Math.abs(s) * hx + Math.abs(c) * hz;
+      const top = WATER_LEVEL + BOAT_FLOOR;
+      boatColliders.forEach((col, i) => {
+        const lx = -BOAT_L / 2 + seg * (i + 0.5);
+        const cx = boat.pos.x + lx * c, cz = boat.pos.z - lx * s;
+        col.box.min.set(cx - ex, top - 0.3, cz - ez);
+        col.box.max.set(cx + ex, top, cz + ez);
+      });
+    }
+    // world <-> boat-local (yaw only)
+    function toBoatLocal(x, z, out) {
+      const dx = x - boat.pos.x, dz = z - boat.pos.z, c = Math.cos(boat.yaw), s = Math.sin(boat.yaw);
+      out.x = dx * c - dz * s; out.z = dx * s + dz * c;
+      return out;
+    }
+    const onBoatXZ = (x, z, m = 0) => {
+      const l = toBoatLocal(x, z, {});
+      return Math.abs(l.x) < BOAT_L / 2 - m && Math.abs(l.z) < BOAT_W / 2 - m;
+    };
+
+    // ---------- Repair parts ----------
+    function makePart(kind) {
+      const g = new THREE.Group();
+      if (kind === 'gas') {
+        const red = new THREE.MeshStandardMaterial({ color: 0xc81e12, roughness: 0.5, metalness: 0.3, emissive: 0x300400 });
+        const body = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.2, 0.09), red); body.position.y = 0.1; g.add(body);
+        const handle = new THREE.Mesh(new THREE.TorusGeometry(0.035, 0.01, 6, 12, Math.PI), red);
+        handle.position.set(0.02, 0.2, 0); g.add(handle);
+        const spout = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.016, 0.07, 8),
+          new THREE.MeshStandardMaterial({ color: 0xe0c020, roughness: 0.5 }));
+        spout.position.set(-0.07, 0.22, 0); spout.rotation.z = 0.6; g.add(spout);
+      } else if (kind === 'prop') {
+        const metal = new THREE.MeshStandardMaterial({ color: 0xa8b4bc, roughness: 0.3, metalness: 0.9, emissive: 0x0a1418 });
+        const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.06, 10).rotateZ(Math.PI / 2), metal);
+        g.add(hub);
+        for (let k = 0; k < 3; k++) {
+          const blade = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.09, 0.045), metal);
+          const arm = new THREE.Group(); arm.rotation.x = (k / 3) * Math.PI * 2;
+          blade.position.y = 0.06; blade.rotation.y = 0.5;
+          arm.add(blade); g.add(arm);
+        }
+      } else { // spark plug
+        const ceramic = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.017, 0.09, 10),
+          new THREE.MeshStandardMaterial({ color: 0xf0ece0, roughness: 0.35, emissive: 0x201c10 }));
+        ceramic.position.y = 0.1; g.add(ceramic);
+        const hex = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.024, 0.03, 6),
+          new THREE.MeshStandardMaterial({ color: 0xb0b6ba, roughness: 0.3, metalness: 0.9 }));
+        hex.position.y = 0.045; g.add(hex);
+        const thread = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.011, 0.04, 8), darkMetal);
+        thread.position.y = 0.015; g.add(thread);
+        const tip = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.03, 6), darkMetal);
+        tip.position.y = 0.16; g.add(tip);
+      }
+      g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+      return g;
+    }
+    const PART_DEFS = [
+      { kind: 'gas',  name: 'Red Gas Can',   glow: 0xff3a20, at: REPAIR_SPOTS.gas,
+        installAt: [-BOAT_L / 2 + 0.3, BOAT_FLOOR, 0.3], installParent: 'boat' },
+      { kind: 'prop', name: 'Propeller',     glow: 0x80c8ff, at: REPAIR_SPOTS.prop,
+        installAt: [0, 0, 0], installParent: 'prop' },
+      { kind: 'plug', name: 'Spark Plug',    glow: 0xffa040, at: REPAIR_SPOTS.plug,
+        installAt: [0, 0.44, 0], installParent: 'motor' },
+    ];
+    const parts = PART_DEFS.map((d) => {
+      const mesh = makePart(d.kind);
+      const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: d.glow, transparent: true, opacity: 0.6,
+        blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+      glow.scale.set(0.4, 0.4, 1); glow.position.y = 0.1;
+      mesh.add(glow);
+      const home = new THREE.Vector3(d.at[0], 0.03, d.at[1]);
+      mesh.position.copy(home);
+      scene.add(mesh);
+      const inst = makePart(d.kind);
+      inst.position.set(...d.installAt);
+      inst.visible = false;
+      (d.installParent === 'boat' ? boatGroup : d.installParent === 'motor' ? motorGroup : propSlot).add(inst);
+      return { ...d, mesh, glow, inst, home, held: -1, installed: false, rides: null, floating: false, phase: Math.random() * 6 };
+    });
+
+    function drawStatus() {
+      const g = statusCanvas.getContext('2d'), W = statusCanvas.width, H = statusCanvas.height;
+      g.clearRect(0, 0, W, H);
+      g.fillStyle = 'rgba(0,0,0,0.55)';
+      g.fillRect(6, 6, W - 12, H - 12);
+      const ready = boat.parts >= PARTS_NEEDED;
+      const fit = (text, size, weight) => {
+        let s = size;
+        do { g.font = `${weight} ${s}px system-ui, sans-serif`; s -= 2; } while (g.measureText(text).width > W - 40 && s > 12);
+      };
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      const line1 = `${boat.parts}/${PARTS_NEEDED} Parts Repaired` + (ready ? ' — Ready to Drive!' : '');
+      fit(line1, 38, 'bold');
+      g.fillStyle = ready ? '#6dff8a' : '#ffcf5a';
+      g.fillText(line1, W / 2, 56);
+      const missing = parts.filter((p) => !p.installed).map((p) => p.name);
+      const line2 = boat.warnT > 0
+        ? `Engine won't start: ${PARTS_NEEDED - boat.parts} part${PARTS_NEEDED - boat.parts === 1 ? '' : 's'} missing!`
+        : ready ? 'Grab the wheel · Trigger or stick = throttle' : 'Find: ' + missing.join(', ');
+      fit(line2, 26, 'normal');
+      g.fillStyle = boat.warnT > 0 ? '#ff6a5a' : '#cfd8dc';
+      g.fillText(line2, W / 2, 112);
+      statusTex.needsUpdate = true;
+    }
+    drawStatus();
+
+    // ---------- Boat sounds (their own small Web Audio graph; the music code is untouched) ----------
+    const boatAudio = (() => {
+      let ctx = null, out = null, noise = null, eng = null;
+      function build() {
+        ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const comp = ctx.createDynamicsCompressor();
+        comp.threshold.value = -18; comp.knee.value = 10; comp.ratio.value = 6;
+        out = ctx.createGain(); out.gain.value = 0.5;
+        out.connect(comp); comp.connect(ctx.destination);
+        const len = ctx.sampleRate * 2;
+        noise = ctx.createBuffer(1, len, ctx.sampleRate);
+        const d = noise.getChannelData(0);
+        for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+        // engine: low saw/square through a lowpass, pulsed by an LFO for the "putt-putt"
+        const g = ctx.createGain(); g.gain.value = 0; g.connect(out);
+        const chug = ctx.createGain(); chug.gain.value = 0.55; chug.connect(g);
+        const lfo = ctx.createOscillator(); lfo.type = 'square'; lfo.frequency.value = 9;
+        const lfoAmt = ctx.createGain(); lfoAmt.gain.value = 0.4;
+        lfo.connect(lfoAmt); lfoAmt.connect(chug.gain); lfo.start();
+        const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 300; lp.Q.value = 3;
+        lp.connect(chug);
+        const o1 = ctx.createOscillator(); o1.type = 'sawtooth'; o1.frequency.value = 45;
+        const o2 = ctx.createOscillator(); o2.type = 'square'; o2.frequency.value = 90;
+        const g2 = ctx.createGain(); g2.gain.value = 0.25;
+        o1.connect(lp); o2.connect(g2); g2.connect(lp); o1.start(); o2.start();
+        const ns = ctx.createBufferSource(); ns.buffer = noise; ns.loop = true;
+        const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 800; bp.Q.value = 1;
+        const ng = ctx.createGain(); ng.gain.value = 0.15;
+        ns.connect(bp); bp.connect(ng); ng.connect(chug); ns.start();
+        eng = { g, lp, o1, o2, lfo };
+      }
+      function hit(t, { type = 'bandpass', freq, q = 1, peak, decay, pan = 0 }) {
+        const src = ctx.createBufferSource(); src.buffer = noise;
+        const f = ctx.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q;
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(peak, t + 0.002);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.002 + decay);
+        const p = ctx.createStereoPanner(); p.pan.value = pan;
+        src.connect(f); f.connect(g); g.connect(p); p.connect(out);
+        src.start(t, Math.random()); src.stop(t + decay + 0.05);
+      }
+      function thump(t, f0, f1, peak, dur) {
+        const o = ctx.createOscillator(); o.type = 'sine';
+        o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + dur);
+        const g = ctx.createGain(); g.gain.setValueAtTime(peak, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+        o.connect(g); g.connect(out); o.start(t); o.stop(t + dur + 0.05);
+      }
+      const ok = () => ctx && ctx.state !== 'closed';
+      return {
+        start() { try { if (!ctx) build(); ctx.resume(); } catch (e) { console.warn('Boat audio could not start:', e); } },
+        stop() { if (ctx) ctx.suspend(); },
+        setEngine(on, level, dist) {
+          if (!ok()) return;
+          const t = ctx.currentTime, atten = 1 / (1 + (dist / 2.5) * (dist / 2.5));
+          eng.g.gain.setTargetAtTime(on ? (0.07 + 0.13 * level) * atten : 0, t, 0.15);
+          eng.lp.frequency.setTargetAtTime(250 + 700 * level, t, 0.1);
+          eng.o1.frequency.setTargetAtTime(45 + 35 * level, t, 0.1);
+          eng.o2.frequency.setTargetAtTime(90 + 70 * level, t, 0.1);
+          eng.lfo.frequency.setTargetAtTime(9 + 14 * level, t, 0.1);
+        },
+        sputter() { // a few weak coughs, a pop, then nothing
+          if (!ok()) return;
+          let t = ctx.currentTime + 0.01;
+          const n = 4 + Math.floor(Math.random() * 3);
+          for (let k = 0; k < n; k++) {
+            hit(t, { type: 'lowpass', freq: 500, q: 1, peak: 0.5 * (1 - k / n) + 0.15, decay: 0.07 });
+            thump(t, 70, 40, 0.35 * (1 - k / n) + 0.1, 0.08);
+            t += lkRand(0.09, 0.2) * (1 + k * 0.25);
+          }
+          hit(t, { type: 'bandpass', freq: 1800, q: 3, peak: 0.6, decay: 0.05 });   // backfire pop
+          for (let k = 0; k < 8; k++) hit(t + lkRand(0, 0.25), { freq: lkRand(3000, 6000), q: 6, peak: 0.25, decay: 0.008 }); // sparks
+        },
+        crank() { // starter whirr, then the engine catches
+          if (!ok()) return;
+          const t = ctx.currentTime + 0.01;
+          const o = ctx.createOscillator(); o.type = 'sawtooth';
+          o.frequency.setValueAtTime(25, t); o.frequency.linearRampToValueAtTime(60, t + 0.5);
+          const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 500;
+          const g = ctx.createGain(); g.gain.setValueAtTime(0.18, t); g.gain.linearRampToValueAtTime(0.0001, t + 0.55);
+          o.connect(f); f.connect(g); g.connect(out); o.start(t); o.stop(t + 0.6);
+          for (let k = 0; k < 4; k++) hit(t + k * 0.12, { type: 'lowpass', freq: 400, peak: 0.35, decay: 0.06 });
+        },
+        clunk() { // part snaps into place
+          if (!ok()) return;
+          const t = ctx.currentTime + 0.01;
+          [1, 2.6, 4.1].forEach((r, i) => {
+            const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = 420 * r;
+            const g = ctx.createGain(); g.gain.setValueAtTime(0.18 / (i + 1), t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
+            o.connect(g); g.connect(out); o.start(t); o.stop(t + 0.4);
+          });
+          thump(t, 160, 60, 0.4, 0.15);
+          hit(t, { freq: 2200, q: 2, peak: 0.4, decay: 0.025 });
+        },
+        pickup() {
+          if (!ok()) return;
+          const t = ctx.currentTime + 0.01;
+          hit(t, { freq: 1200, q: 2, peak: 0.25, decay: 0.03 });
+          thump(t, 300, 180, 0.12, 0.06);
+        },
+        splash(strength) {
+          if (!ok()) return;
+          const t = ctx.currentTime + 0.01, s = Math.min(1, strength);
+          hit(t, { type: 'lowpass', freq: 1400, q: 0.7, peak: 0.25 + 0.45 * s, decay: 0.5 });
+          for (let k = 0; k < 6; k++) hit(t + lkRand(0.05, 0.4), { freq: lkRand(500, 1500), q: 8, peak: 0.12, decay: 0.04 }); // bubbles
+        },
+        stroke() { // soft water swish while swimming
+          if (!ok()) return;
+          hit(ctx.currentTime + 0.01, { type: 'bandpass', freq: lkRand(500, 900), q: 1.2, peak: 0.12, decay: 0.25 });
+        },
+        bump() {
+          if (!ok()) return;
+          const t = ctx.currentTime + 0.01;
+          thump(t, 90, 45, 0.5, 0.25);
+          hit(t, { type: 'lowpass', freq: 600, peak: 0.4, decay: 0.15 });
+        },
+      };
+    })();
+    vrButton.addEventListener('click', () => boatAudio.start());
+    renderer.xr.addEventListener('sessionstart', () => boatAudio.start());
+    renderer.xr.addEventListener('sessionend', () => {
+      boatAudio.stop();
+      boatAudio.setEngine(false, 0, 0);
+      for (const p of parts) if (p.held >= 0) releasePart(p);
+      boat.holding = -1;
+      swimming = false;
+    });
+
+    // ---------- Helpers ----------
+    const _lkHead = new THREE.Vector3(), _lkHand = new THREE.Vector3(), _lkRel = new THREE.Vector3();
+    const _lkVel = new THREE.Vector3(), _lkPivot = new THREE.Vector3(), _lkQ = new THREE.Quaternion();
+    const _lkLocal = { x: 0, z: 0 };
+
+    function surfaceBelow(p) { // highest solid top under a point (for dropping parts)
+      let best = 0;
+      for (const c of colliders) {
+        const b = c.box;
+        if (p.x >= b.min.x && p.x <= b.max.x && p.z >= b.min.z && p.z <= b.max.z && b.max.y <= p.y + 0.05 && b.max.y > best) best = b.max.y;
+      }
+      return best;
+    }
+    function nearestFreePart(hand, radius) {
+      let best = null, bestD = radius;
+      for (const p of parts) {
+        if (p.installed) continue;
+        const d = hand.last.distanceTo(p.mesh.position);
+        if (d < bestD) { best = p; bestD = d; }
+      }
+      return best;
+    }
+    // Used by the grip handler so squeezing a part or the wheel grabs it instead of moving the flashlight
+    function boatGrabHere(hand) {
+      if (!hand.tracked) return false;
+      return !!nearestFreePart(hand, PART_GRAB_RADIUS) || hand.last.distanceTo(wheelWorld) < WHEEL_GRAB_RADIUS;
+    }
+    function installPart(p) {
+      p.installed = true;
+      p.held = -1;
+      p.mesh.visible = false;
+      p.inst.visible = true;
+      boat.parts++;
+      drawStatus();
+      boatAudio.clunk();
+      controllers.forEach((c) => pulse(c, 0.6, 60));
+    }
+    function releasePart(p) {
+      const pos = p.mesh.position;
+      p.held = -1;
+      if (pos.distanceTo(repairZoneWorld) < REPAIR_ZONE_RADIUS) return installPart(p);
+      p.mesh.rotation.set(0, Math.random() * Math.PI * 2, 0);
+      if (onBoatXZ(pos.x, pos.z, 0.05)) {                 // dropped in the boat: it rides along on the floor
+        p.rides = boatGroup.worldToLocal(pos.clone());
+        p.rides.y = BOAT_FLOOR;
+      } else if (inLake(pos.x, pos.z)) {                  // dropped in the lake: it floats where it landed
+        p.floating = true;
+      } else {                                            // dropped on land: it lands on whatever is below
+        pos.y = surfaceBelow(pos) + 0.01;
+        p.home.copy(pos);
+      }
+    }
+    function boatSputter() {
+      boatAudio.sputter();
+      boat.sparkT = 0.45;
+      boat.warnT = 2;
+      drawStatus();
+      if (boat.holding >= 0) pulse(controllers[boat.holding], 0.9, 300);
+    }
+    function wheelHandAngle(hand) { // hand angle around the wheel's axis, in the boat's frame
+      const dx = hand.last.x - wheelWorld.x, dy = hand.last.y - wheelWorld.y, dz = hand.last.z - wheelWorld.z;
+      const lz = dx * Math.sin(boat.yaw) + dz * Math.cos(boat.yaw);
+      return Math.atan2(dy, lz);
+    }
+
+    // =====================================================================
+    //  updateBoat(dt): drive the boat and carry anyone standing in it.
+    //  Runs before updateLocomotion so the physics sees the boat's new floor this frame.
+    // =====================================================================
+    function updateBoat(dt) {
+      boat.time += dt;
+      const prevX = boat.pos.x, prevZ = boat.pos.z, prevYaw = boat.yaw;
+
+      // Is the player standing in the boat? (checked with last frame's boat position)
+      let aboard = false;
+      if (renderer.xr.isPresenting && locomotionReady) {
+        headWorld(_lkHead);
+        toBoatLocal(_lkHead.x, _lkHead.z, _lkLocal);
+        const floorTop = WATER_LEVEL + BOAT_FLOOR;
+        aboard = Math.abs(_lkLocal.x) < BOAT_L / 2 + 0.05 && Math.abs(_lkLocal.z) < BOAT_W / 2 + 0.05 &&
+                 _lkHead.y > floorTop + 0.15 && _lkHead.y < floorTop + 1.6;
+      }
+      boat.aboard = aboard;
+
+      // ---- controls ----
+      let throttle = 0, stickSteer = 0;
+      if (boat.holding >= 0) {
+        const src = controllers[boat.holding].userData.inputSource;
+        const gp = src?.gamepad, ax = gp?.axes || [];
+        const sx = ax.length >= 4 ? ax[2] : (ax[0] ?? 0);
+        const sy = ax.length >= 4 ? ax[3] : (ax[1] ?? 0);
+        const gripping = !!gp?.buttons[1]?.pressed;
+        const trig = gp?.buttons[0]?.value ?? 0;
+        throttle = THREE.MathUtils.clamp((gripping ? trig : 0) - sy, -1, 1); // trigger (while gripping) or stick forward
+        if (src?.handedness === 'left') stickSteer = sx;  // the right stick's X stays your snap turn
+      } else {
+        boat.wheelAngle *= Math.exp(-3 * dt);             // wheel drifts back to centre when let go
+      }
+      const ready = boat.parts >= PARTS_NEEDED;
+      const thrActive = Math.abs(throttle) > 0.3;
+      if (!ready) {
+        if (boat.holding >= 0 && thrActive && !boat.prevThr) boatSputter();
+        throttle = 0;
+      }
+      boat.prevThr = thrActive;
+
+      // ---- motion ----
+      boat.speed += throttle * BOAT_ACCEL * dt;
+      boat.speed *= Math.exp(-BOAT_DRAG * dt);
+      boat.speed = THREE.MathUtils.clamp(boat.speed, -BOAT_MAX_REV, BOAT_MAX_FWD);
+      const steer = THREE.MathUtils.clamp(boat.wheelAngle / WHEEL_LOCK + stickSteer, -1, 1);
+      const grip = Math.min(1, Math.abs(boat.speed) / 0.8);  // rudder needs water flowing past it
+      boat.yaw -= steer * BOAT_TURN * grip * Math.sign(boat.speed) * dt;
+      boat.pos.x += Math.cos(boat.yaw) * boat.speed * dt;
+      boat.pos.z -= Math.sin(boat.yaw) * boat.speed * dt;
+
+      // ---- shoreline and dock bounds ----
+      const m = BOAT_L / 2 + 0.1;
+      let bumped = false;
+      if (boat.pos.x < LAKE.x0 + m) { boat.pos.x = LAKE.x0 + m; bumped = true; }
+      if (boat.pos.x > LAKE.x1 - m) { boat.pos.x = LAKE.x1 - m; bumped = true; }
+      if (boat.pos.z < LAKE.z0 + m) { boat.pos.z = LAKE.z0 + m; bumped = true; }
+      if (boat.pos.z > LAKE.z1 - m) { boat.pos.z = LAKE.z1 - m; bumped = true; }
+      { // keep the boat's centre out of the dock (grown by the beam / half length)
+        const x0 = DOCK.x0 - m, x1 = DOCK.x1 + m, z0 = DOCK.z0 - 0.6, z1 = DOCK.z1 + 0.6;
+        if (boat.pos.x > x0 && boat.pos.x < x1 && boat.pos.z > z0 && boat.pos.z < z1) {
+          const pens = [[boat.pos.x - x0, 'x', x0], [x1 - boat.pos.x, 'x', x1], [boat.pos.z - z0, 'z', z0], [z1 - boat.pos.z, 'z', z1]];
+          pens.sort((a, b) => a[0] - b[0]);
+          boat.pos[pens[0][1]] = pens[0][2];
+          bumped = true;
+        }
+      }
+      if (bumped && Math.abs(boat.speed) > 0.3) {
+        boatAudio.bump();
+        controllers.forEach((c) => pulse(c, 0.7, 120));
+      }
+      if (bumped) boat.speed *= -0.25;
+
+      // ---- visuals ----
+      const bob = 0.012 * Math.sin(boat.time * 1.6);
+      boatGroup.position.set(boat.pos.x, WATER_LEVEL + bob, boat.pos.z);
+      boatGroup.rotation.set(0.02 * Math.sin(boat.time * 1.1), boat.yaw, 0.012 * Math.sin(boat.time * 0.8) - boat.speed * 0.01);
+      wheelInner.rotation.z = boat.wheelAngle;
+      if (ready && boat.holding >= 0) motorGroup.position.y = (Math.random() - 0.5) * 0.004; // engine running
+      const propPart = parts.find((p) => p.kind === 'prop');
+      if (propPart.installed) propPart.inst.rotation.x += boat.speed * 25 * dt;
+      boatGroup.updateMatrixWorld(true);
+      boatGroup.userData.helm.getWorldPosition(wheelWorld);
+      repairZoneWorld.copy(repairZoneLocal).applyMatrix4(boatGroup.matrixWorld);
+      updateBoatColliders();
+
+      // ---- carry the player (and everything the physics remembers) with the boat ----
+      const dYaw = boat.yaw - prevYaw, dx = boat.pos.x - prevX, dz = boat.pos.z - prevZ;
+      if (aboard && (dYaw !== 0 || dx !== 0 || dz !== 0)) {
+        _lkPivot.set(prevX, 0, prevZ);
+        const carry = (v) => v.sub(_lkPivot).applyAxisAngle(_UPY, dYaw).add(_lkPivot).add({ x: dx, y: 0, z: dz });
+        carry(playerRig.position);
+        _lkQ.setFromAxisAngle(_UPY, dYaw);
+        playerRig.quaternion.premultiply(_lkQ);
+        for (const h of hands) carry(h.last);
+        carry(lastHeadPosition);
+        carry(lastPosition);          // the boat's motion isn't counted as your own push-off speed
+        denormalizedVelocityAverage.applyAxisAngle(_UPY, dYaw);
+        for (const v of velocityHistory) v.applyAxisAngle(_UPY, dYaw);
+      }
+
+      // ---- engine sound + haptics ----
+      const running = ready && boat.holding >= 0;
+      boat.engineLevel += ((running ? Math.abs(throttle) : 0) - boat.engineLevel) * Math.min(1, dt * 4);
+      camera.getWorldPosition(_lkHead);
+      boatAudio.setEngine(running || (ready && Math.abs(boat.speed) > 0.3), boat.engineLevel, _lkHead.distanceTo(repairZoneWorld));
+      if (running && (boat.hapticT -= dt) <= 0) {
+        boat.hapticT = 0.06;
+        pulse(controllers[boat.holding], 0.05 + 0.25 * boat.engineLevel, 40);
+      }
+    }
+
+    // =====================================================================
+    //  updateLake(dt): water surface, swimming, carrying/installing parts, the wheel
+    // =====================================================================
+    let swimming = false, strokeT = 0;
+    const prevRel = [new THREE.Vector3(), new THREE.Vector3()], prevRelOk = [false, false];
+    let lakePrev = [[false, false], [false, false]]; // [grip, trigger] per controller
+
+    function updateLake(dt) {
+      // gentle waves on the water surface
+      const pos = waterGeo.attributes.position, t = boat.time;
+      for (let i = 0; i < pos.count; i++) {
+        const x = pos.getX(i), y = pos.getY(i);
+        pos.setZ(i, 0.012 * Math.sin(x * 1.3 + t * 1.2) + 0.01 * Math.sin(y * 1.7 - t * 0.9));
+      }
+      pos.needsUpdate = true;
+      waterGeo.computeVertexNormals();
+
+      // parts: idle bob, floating, riding the boat
+      for (const p of parts) {
+        if (p.installed || p.held >= 0) continue;
+        p.glow.material.opacity = 0.45 + 0.25 * Math.sin(t * 3 + p.phase);
+        if (p.rides) { p.mesh.position.copy(p.rides).applyMatrix4(boatGroup.matrixWorld); continue; }
+        if (p.floating) { p.mesh.position.y = WATER_LEVEL - 0.03 + 0.015 * Math.sin(t * 1.7 + p.phase); continue; }
+        p.mesh.position.y = p.home.y + 0.03 + 0.02 * Math.sin(t * 2 + p.phase);
+        p.mesh.rotation.y += dt * 0.8;
+      }
+
+      // fading effects
+      boat.sparkT = Math.max(0, boat.sparkT - dt);
+      boatSpark.material.opacity = boat.sparkT > 0 ? Math.random() : 0;
+      boatSpark.scale.setScalar(0.15 + Math.random() * 0.3);
+      if (boat.warnT > 0 && (boat.warnT -= dt) <= 0) drawStatus();
+
+      if (!renderer.xr.isPresenting) { zoneMarker.material.opacity = 0; return; }
+
+      // ---------- grabbing: parts (Grip) and the wheel (Grip or Trigger) ----------
+      let carrying = false;
+      for (let i = 0; i < controllers.length; i++) {
+        const c = controllers[i], h = hands[i];
+        const grip = btn(c, 1), trig = btn(c, 0);
+        const gripEdge = grip && !lakePrev[i][0], trigEdge = trig && !lakePrev[i][1];
+        lakePrev[i] = [grip, trig];
+        const held = parts.find((p) => p.held === i);
+        if (!h.tracked) { if (held) releasePart(held); if (boat.holding === i) boat.holding = -1; continue; }
+
+        if (held && !grip) releasePart(held);
+        if (boat.holding === i && (!(grip || trig) || h.last.distanceTo(wheelWorld) > 0.45)) boat.holding = -1;
+
+        let grabbed = false;
+        if (gripEdge && !held) {
+          const p = nearestFreePart(h, PART_GRAB_RADIUS);
+          if (p) {                                   // pick it up (or take it from your other hand)
+            p.held = i; p.rides = null; p.floating = false;
+            grabbed = true;
+            boatAudio.pickup();
+            pulse(c, 0.4, 40);
+          }
+        }
+        if (!grabbed && (gripEdge || trigEdge) && boat.holding < 0 && !parts.some((p) => p.held === i) &&
+            h.last.distanceTo(wheelWorld) < WHEEL_GRAB_RADIUS) {
+          boat.holding = i;
+          boat.wheelPrev = wheelHandAngle(h);
+          pulse(c, 0.4, 40);
+          if (boat.parts < PARTS_NEEDED) boatSputter(); else boatAudio.crank();
+        }
+      }
+      // carried parts follow the hand
+      for (const p of parts) {
+        if (p.held < 0) continue;
+        carrying = true;
+        const h = hands[p.held];
+        p.mesh.position.copy(h.last);
+        p.mesh.quaternion.copy(h.follower.quaternion);
+        p.glow.material.opacity = 0.7;
+      }
+      // repair zone glows while you carry a part (green when you're close enough to drop it in)
+      if (carrying) {
+        const close = parts.some((p) => p.held >= 0 && p.mesh.position.distanceTo(repairZoneWorld) < REPAIR_ZONE_RADIUS);
+        zoneMarker.material.color.setHex(close ? 0x40ff70 : 0xffd040);
+        zoneMarker.material.opacity = close ? 0.9 : 0.45 + 0.2 * Math.sin(t * 4);
+      } else zoneMarker.material.opacity = 0;
+
+      // turning the wheel with your hand
+      if (boat.holding >= 0) {
+        const h = hands[boat.holding];
+        const a = wheelHandAngle(h);
+        let d = a - boat.wheelPrev;
+        if (d > Math.PI) d -= Math.PI * 2;
+        if (d < -Math.PI) d += Math.PI * 2;
+        boat.wheelPrev = a;
+        const r = Math.hypot(h.last.y - wheelWorld.y, h.last.x - wheelWorld.x, h.last.z - wheelWorld.z);
+        if (r > 0.03) boat.wheelAngle = THREE.MathUtils.clamp(boat.wheelAngle - d, -WHEEL_LOCK, WHEEL_LOCK);
+      }
+
+      // ---------- swimming ----------
+      headWorld(_lkHead);
+      const inWater = !boat.aboard && inLake(_lkHead.x, _lkHead.z, -0.05) && _lkHead.y < WATER_LEVEL + 0.35;
+      if (inWater && !swimming && rigVelocity.y < -0.4) boatAudio.splash(-rigVelocity.y / 3);
+      swimming = inWater;
+      if (!inWater) { prevRelOk[0] = prevRelOk[1] = false; return; }
+
+      // buoyancy: cancel gravity and spring your eyes towards a gently bobbing float height
+      const target = WATER_LEVEL + FLOAT_EYE + 0.025 * Math.sin(t * 1.7);
+      rigVelocity.y += (GRAVITY + FLOAT_SPRING * (target - _lkHead.y) - FLOAT_DAMP * rigVelocity.y) * dt;
+      rigVelocity.multiplyScalar(Math.exp(-WATER_DRAG * dt)); // water drag
+
+      // Gorilla-style strokes: a hand sweeping through the water pushes you the opposite way
+      let stroking = false;
+      for (let i = 0; i < hands.length; i++) {
+        const h = hands[i];
+        if (!h.tracked) { prevRelOk[i] = false; continue; }
+        currentHandPosition(h, _lkHand);
+        _lkRel.subVectors(_lkHand, _lkHead);       // hand relative to your head, so your own drift doesn't count
+        if (prevRelOk[i] && _lkHand.y < WATER_LEVEL) {
+          _lkVel.subVectors(_lkRel, prevRel[i]).divideScalar(dt);
+          if (_lkVel.length() > 4) _lkVel.setLength(4);
+          rigVelocity.addScaledVector(_lkVel, -SWIM_STRENGTH * dt);
+          if (_lkVel.length() > 1.2) stroking = true;
+        }
+        prevRel[i].copy(_lkRel);
+        prevRelOk[i] = true;
+      }
+      if (rigVelocity.length() > 3) rigVelocity.setLength(3);
+      if (stroking && (strokeT -= dt) <= 0) { strokeT = 0.35; boatAudio.stroke(); }
+    }
+
     // ---------- XR session hooks ----------
     renderer.xr.addEventListener('sessionstart', () => {
       horrorAudio.start(); // backup in case the click handler didn't get to run
@@ -2053,10 +2786,12 @@
         camera.getWorldPosition(_camWorld);
         horrorAudio.setFireDistance(_camWorld.distanceTo(_fireSound));
 
+        updateBoat(dt); // lake & boat: move the boat (and carry you if you're aboard) before the physics runs
         if (renderer.xr.isPresenting && dt > 0) {
           updateLocomotion(dt, frame);
           playerRig.updateMatrixWorld(true); // so the rays use this frame's rig position
         }
+        updateLake(dt); // lake & boat: water, swimming, repair parts, steering wheel
 
         pollAButton();
         updateGenerator(dt);
