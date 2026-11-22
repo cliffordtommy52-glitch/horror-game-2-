@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>WebXR Starter – Flashlight + Gorilla Locomotion</title>
+  <title>WebXR Night Forest Campsite – Flashlight + Gorilla Locomotion</title>
   <style>
     html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font-family: system-ui, sans-serif; }
     #info {
@@ -31,7 +31,7 @@
 <body>
   <div id="info">
     <b>WebXR Flashlight Starter + Gorilla Locomotion</b><br />
-    VR: push off the floor, walls and blocks with your hands to move and jump (the blue block is slippery).<br />
+    VR: push off the ground, trees, rocks, tents and the cabin with your hands to move, jump and climb (the mossy log is slippery).<br />
     <b>A</b> (right controller) toggles the flashlight; grip moves it to that hand.<br />
     Desktop: drag to orbit, <b>F</b> toggles the flashlight (no locomotion).<br />
     Ambient horror music starts when you press ENTER VR (headphones recommended).
@@ -161,8 +161,10 @@
 
     // ---------- Scene, player rig & camera ----------
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x000000);
-    scene.fog = new THREE.Fog(0x000000, 4, 22);
+    // Thick blue-black night fog: the flashlight beam and the campfire glow cut through it
+    const NIGHT = 0x04060c;
+    scene.background = new THREE.Color(NIGHT);
+    scene.fog = new THREE.FogExp2(NIGHT, 0.085);
 
     // playerRig = the GorillaPlayer transform: moving it moves the head and both hands.
     const playerRig = new THREE.Group();
@@ -173,95 +175,513 @@
     playerRig.add(camera); // camera must be in the scene graph so its children (flashlight) render
 
     const orbit = new OrbitControls(camera, renderer.domElement);
-    orbit.target.set(0, 1.2, -1);
+    orbit.target.set(0, 0.8, -4.5); // look at the campfire on desktop
     orbit.update();
 
-    // Very faint ambient so the world isn't pitch black
-    scene.add(new THREE.HemisphereLight(0x223344, 0x000000, 0.15));
+    // Very faint cold moonlight so the world isn't pitch black
+    scene.add(new THREE.HemisphereLight(0x1b2a4a, 0x050403, 0.25));
 
-    // ---------- Colliders (axis-aligned boxes) ----------
+    // =====================================================================
+    //  Creepy night-time forest campsite
+    //  Every solid thing (trunks, cabin, tents, rocks, logs) registers an axis-aligned box
+    //  in `colliders`, so the hands can push off and climb it.
+    // =====================================================================
     // Each collider: { box: THREE.Box3, slipPercentage?: number }  (slipPercentage = Surface.cs)
     const colliders = [];
-    // The floor is a thick box whose top face sits at y = 0
-    colliders.push({ box: new THREE.Box3(new THREE.Vector3(-50, -10, -50), new THREE.Vector3(50, 0, 50)) });
+    const rayTargets = []; // solid meshes the controller pointer rays stop at
 
-    // ---------- Dark floor ----------
-    const ROOM_HALF = 10;
-    const floor = new THREE.Mesh(
-      new THREE.PlaneGeometry(ROOM_HALF * 2, ROOM_HALF * 2),
-      new THREE.MeshStandardMaterial({ color: 0x111114, roughness: 0.95, metalness: 0.0 })
-    );
-    floor.rotation.x = -Math.PI / 2;
-    floor.receiveShadow = true;
-    scene.add(floor);
-
-    const grid = new THREE.GridHelper(ROOM_HALF * 2, ROOM_HALF * 2, 0x222833, 0x16191f);
-    grid.position.y = 0.001;
-    scene.add(grid);
-
-    // ---------- Walls & obstacles ----------
-    const wallMat  = new THREE.MeshStandardMaterial({ color: 0x15161a, roughness: 0.9 });
-    const blockMat = new THREE.MeshStandardMaterial({ color: 0x2a2c33, roughness: 0.8, metalness: 0.1 });
-    const iceMat   = new THREE.MeshStandardMaterial({ color: 0x3a5a7a, roughness: 0.15, metalness: 0.2 });
-
-    function addBlock(x, z, w, h, d, mat, slipPercentage) {
+    function addBoxCollider(cx, y0, cz, w, h, d, slipPercentage) {
+      colliders.push({
+        box: new THREE.Box3(new THREE.Vector3(cx - w / 2, y0, cz - d / 2), new THREE.Vector3(cx + w / 2, y0 + h, cz + d / 2)),
+        slipPercentage,
+      });
+    }
+    // A visible box that is also solid
+    function solidBox(x, y0, z, w, h, d, mat) {
       const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
-      mesh.position.set(x, h / 2, z);
+      mesh.position.set(x, y0 + h / 2, z);
       mesh.castShadow = mesh.receiveShadow = true;
       scene.add(mesh);
-      mesh.updateMatrixWorld();
-      const collider = { box: new THREE.Box3().setFromObject(mesh), slipPercentage };
-      colliders.push(collider);
-      return collider;
+      rayTargets.push(mesh);
+      addBoxCollider(x, y0, z, w, h, d);
+      return mesh;
     }
 
-    const WALL_H = 4, WALL_T = 0.4;
-    addBlock(0, -ROOM_HALF, ROOM_HALF * 2, WALL_H, WALL_T, wallMat); // north
-    addBlock(0,  ROOM_HALF, ROOM_HALF * 2, WALL_H, WALL_T, wallMat); // south
-    addBlock(-ROOM_HALF, 0, WALL_T, WALL_H, ROOM_HALF * 2, wallMat); // west
-    addBlock( ROOM_HALF, 0, WALL_T, WALL_H, ROOM_HALF * 2, wallMat); // east
+    // The ground is a thick box whose top face sits at y = 0
+    colliders.push({ box: new THREE.Box3(new THREE.Vector3(-50, -10, -50), new THREE.Vector3(50, 0, 50)) });
 
-    const obstacleBoxes = [
-      // x,    z,    w,   h,   d
-      [-3,   -3,   0.6, 3.0, 0.6], // pillars
-      [ 3,   -4,   0.6, 3.0, 0.6],
-      [-5,    2.5, 0.6, 3.0, 0.6],
-      [ 5,    3,   0.6, 3.0, 0.6],
-      [-6.5, -6.5, 2.2, 1.8, 2.2], // tall block to climb
-      [ 6,   -2,   1.2, 0.6, 1.2], // step...
-      [ 7.4, -2,   1.2, 1.3, 1.2], // ...up to a higher step
-    ].map(([x, z, w, h, d]) => addBlock(x, z, w, h, d, blockMat).box);
-    // A slippery block (like a Surface component with a high slipPercentage)
-    obstacleBoxes.push(addBlock(0, -6, 1.5, 0.9, 1.5, iceMat, 0.7).box);
+    // Invisible walls just inside the dense tree line, so you can never leave the forest
+    const WORLD_HALF = 19.3;
+    addBoxCollider(0, -1, -WORLD_HALF - 0.5, 60, 41, 1);
+    addBoxCollider(0, -1,  WORLD_HALF + 0.5, 60, 41, 1);
+    addBoxCollider(-WORLD_HALF - 0.5, -1, 0, 1, 41, 60);
+    addBoxCollider( WORLD_HALF + 0.5, -1, 0, 1, 41, 60);
 
-    // ---------- Some things to discover with the light ----------
-    const targets = new THREE.Group();
-    scene.add(targets);
-    const geos = [
-      new THREE.BoxGeometry(0.5, 0.5, 0.5),
-      new THREE.SphereGeometry(0.3, 32, 16),
-      new THREE.ConeGeometry(0.3, 0.6, 24),
-      new THREE.TorusKnotGeometry(0.2, 0.07, 100, 16),
-      new THREE.CylinderGeometry(0.25, 0.25, 0.7, 24),
-    ];
-    const tmpBox = new THREE.Box3();
-    for (let i = 0; i < 24; i++) {
-      const mat = new THREE.MeshStandardMaterial({
-        color: new THREE.Color().setHSL(Math.random(), 0.6, 0.5),
-        roughness: 0.4, metalness: 0.2,
-      });
-      const mesh = new THREE.Mesh(geos[i % geos.length], mat);
-      // Pick a spot that doesn't overlap an obstacle
-      for (let tries = 0; tries < 20; tries++) {
-        const angle = (i / 24) * Math.PI * 2 + Math.random() * 0.2;
-        const radius = 2.5 + Math.random() * 6;
-        mesh.position.set(Math.cos(angle) * radius, 0.35 + Math.random() * 1.2, Math.sin(angle) * radius);
-        const clear = obstacleBoxes.every((b) => !tmpBox.copy(b).expandByScalar(0.6).containsPoint(mesh.position));
-        if (clear) break;
+    // Seeded random so the forest is the same every visit
+    function mulberry32(a) {
+      return function () {
+        a |= 0; a = (a + 0x6D2B79F5) | 0;
+        let t = Math.imul(a ^ (a >>> 15), 1 | a);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+    const rng = mulberry32(1337);
+    const rr = (a, b) => a + rng() * (b - a);
+
+    // ---------- Procedural textures ----------
+    function canvasTexture(size, draw, repeat) {
+      const c = document.createElement('canvas');
+      c.width = c.height = size;
+      draw(c.getContext('2d'), size);
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      if (repeat) tex.repeat.set(repeat, repeat);
+      tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      return tex;
+    }
+
+    const groundTex = canvasTexture(512, (g, s) => {
+      g.fillStyle = '#17110c'; g.fillRect(0, 0, s, s);
+      for (let i = 0; i < 9000; i++) { // dirt grit
+        const v = rr(10, 40) | 0;
+        g.fillStyle = `rgba(${v + 12},${v + 4},${Math.max(0, v - 4)},${rr(0.2, 0.6).toFixed(2)})`;
+        g.fillRect(rr(0, s), rr(0, s), rr(1, 3), rr(1, 3));
       }
-      mesh.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, 0);
-      mesh.castShadow = mesh.receiveShadow = true;
-      targets.add(mesh);
+      for (let i = 0; i < 14; i++) { // grass patches (drawn wrapped so the texture tiles)
+        const x = rr(0, s), y = rr(0, s), r = rr(30, 90);
+        for (const dx of [-s, 0, s]) for (const dy of [-s, 0, s]) {
+          const grd = g.createRadialGradient(x + dx, y + dy, 0, x + dx, y + dy, r);
+          grd.addColorStop(0, 'rgba(22,38,16,0.9)'); grd.addColorStop(1, 'rgba(22,38,16,0)');
+          g.fillStyle = grd; g.beginPath(); g.arc(x + dx, y + dy, r, 0, Math.PI * 2); g.fill();
+        }
+      }
+      for (let i = 0; i < 4000; i++) { // little grass strokes
+        g.strokeStyle = `rgba(${rr(20, 40) | 0},${rr(45, 70) | 0},${rr(18, 30) | 0},0.5)`;
+        const x = rr(0, s), y = rr(0, s);
+        g.beginPath(); g.moveTo(x, y); g.lineTo(x + rr(-2, 2), y - rr(3, 7)); g.stroke();
+      }
+    }, 14);
+
+    const woodTex = canvasTexture(256, (g, s) => {
+      g.fillStyle = '#3b2d21'; g.fillRect(0, 0, s, s);
+      const rows = 8, ph = s / rows;
+      for (let r = 0; r < rows; r++) {
+        const v = rr(-12, 12) | 0;
+        g.fillStyle = `rgb(${52 + v},${40 + v},${30 + v})`; g.fillRect(0, r * ph, s, ph - 2);
+        for (let k = 0; k < 18; k++) { // grain
+          g.strokeStyle = `rgba(20,14,10,${rr(0.15, 0.4).toFixed(2)})`;
+          const y = r * ph + rr(2, ph - 3);
+          g.beginPath(); g.moveTo(0, y); g.bezierCurveTo(s * 0.3, y + rr(-2, 2), s * 0.6, y + rr(-2, 2), s, y); g.stroke();
+        }
+        g.fillStyle = '#120c08'; g.fillRect(0, r * ph + ph - 2, s, 2); // gaps between planks
+      }
+    });
+    woodTex.repeat.set(2, 1.5);
+
+    const glowTex = canvasTexture(128, (g, s) => {
+      const grd = g.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+      grd.addColorStop(0, 'rgba(255,255,255,1)'); grd.addColorStop(0.25, 'rgba(255,255,255,0.45)');
+      grd.addColorStop(1, 'rgba(255,255,255,0)');
+      g.fillStyle = grd; g.fillRect(0, 0, s, s);
+    });
+
+    const clearingTex = canvasTexture(256, (g, s) => {
+      const grd = g.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+      grd.addColorStop(0, 'rgba(48,36,26,0.95)'); grd.addColorStop(0.7, 'rgba(40,30,22,0.8)');
+      grd.addColorStop(1, 'rgba(40,30,22,0)');
+      g.fillStyle = grd; g.fillRect(0, 0, s, s);
+      for (let i = 0; i < 2500; i++) {
+        const a = rr(0, Math.PI * 2), d = Math.sqrt(rng()) * s * 0.45;
+        g.fillStyle = `rgba(${rr(15, 35) | 0},${rr(12, 25) | 0},${rr(8, 18) | 0},0.6)`;
+        g.fillRect(s / 2 + Math.cos(a) * d, s / 2 + Math.sin(a) * d, 2, 2);
+      }
+    });
+
+    // ---------- Materials ----------
+    const barkMat   = new THREE.MeshStandardMaterial({ color: 0x2b1d14, roughness: 1 });
+    const needleMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95 }); // tinted per tree
+    const rockMat   = new THREE.MeshStandardMaterial({ color: 0x3a3b3d, roughness: 0.95, flatShading: true });
+    const mossMat   = new THREE.MeshStandardMaterial({ color: 0x24321c, roughness: 0.7 });
+    const woodMat   = new THREE.MeshStandardMaterial({ map: woodTex, roughness: 0.9 });
+    const woodMat2  = new THREE.MeshStandardMaterial({ map: woodTex, roughness: 0.9, side: THREE.DoubleSide });
+    const roofMat   = new THREE.MeshStandardMaterial({ color: 0x1c1714, roughness: 1 });
+    const plankMat  = new THREE.MeshStandardMaterial({ color: 0x4a3626, roughness: 0.9 });
+
+    // ---------- Ground: dark dirt + grass ----------
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(60, 60),
+      new THREE.MeshStandardMaterial({ map: groundTex, roughness: 1 }));
+    ground.rotation.x = -Math.PI / 2;
+    ground.receiveShadow = true;
+    scene.add(ground);
+
+    // Layout of the camp
+    const FIRE = new THREE.Vector3(0, 0, -4.5);
+    const CABIN = { x: 0, z: -14, w: 5, d: 4, h: 2.6 };
+
+    // Bare trampled dirt around the fire
+    const clearing = new THREE.Mesh(new THREE.CircleGeometry(5.5, 48),
+      new THREE.MeshStandardMaterial({ map: clearingTex, transparent: true, depthWrite: false, roughness: 1,
+                                       polygonOffset: true, polygonOffsetFactor: -1 }));
+    clearing.rotation.x = -Math.PI / 2;
+    clearing.position.set(FIRE.x, 0.004, FIRE.z);
+    clearing.receiveShadow = true;
+    scene.add(clearing);
+
+    // Places already taken, so scattered props don't overlap the camp or each other
+    const occupied = [
+      { x: 0, z: 0, r: 2.0 },                    // where you spawn
+      { x: FIRE.x, z: FIRE.z, r: 6.0 },          // campsite clearing
+      { x: CABIN.x, z: CABIN.z, r: 4.2 },        // ranger cabin
+    ];
+    function findSpot(radius, range = WORLD_HALF - 1.5, tries = 60) {
+      for (let i = 0; i < tries; i++) {
+        const x = rr(-range, range), z = rr(-range, range);
+        if (occupied.every((o) => Math.hypot(o.x - x, o.z - z) > o.r + radius)) {
+          occupied.push({ x, z, r: radius });
+          return { x, z };
+        }
+      }
+      return null;
+    }
+
+    // ---------- Pine trees (instanced: one draw call for all trunks, one for all needles) ----------
+    const trees = [];
+    for (let i = 0; i < 30; i++) { // climbable pines scattered through the woods
+      const r = rr(0.22, 0.38);
+      const spot = findSpot(1.2);
+      if (spot) trees.push({ ...spot, h: rr(8, 13), r, solid: true });
+    }
+    let perimeterCount = 0;
+    while (perimeterCount < 190) { // dense tree line around the edge
+      const x = rr(-26, 26), z = rr(-26, 26);
+      if (Math.max(Math.abs(x), Math.abs(z)) < WORLD_HALF + 0.4) continue;
+      trees.push({ x, z, h: rr(9, 16), r: rr(0.25, 0.45), solid: false });
+      perimeterCount++;
+    }
+
+    const LAYERS = 4;
+    const trunkGeo = new THREE.CylinderGeometry(0.7, 1, 1, 8); trunkGeo.translate(0, 0.5, 0);
+    const coneGeo = new THREE.ConeGeometry(1, 1, 8); coneGeo.translate(0, 0.5, 0);
+    const trunks = new THREE.InstancedMesh(trunkGeo, barkMat, trees.length);
+    const needles = new THREE.InstancedMesh(coneGeo, needleMat, trees.length * LAYERS);
+    {
+      const m = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), s = new THREE.Vector3();
+      const up = new THREE.Vector3(0, 1, 0), col = new THREE.Color();
+      trees.forEach((t, i) => {
+        m.compose(p.set(t.x, 0, t.z), q.identity(), s.set(t.r, t.h, t.r));
+        trunks.setMatrixAt(i, m);
+        for (let k = 0; k < LAYERS; k++) {
+          const rad = t.h * (0.17 - 0.035 * k);
+          q.setFromAxisAngle(up, rng() * Math.PI * 2);
+          m.compose(p.set(t.x, t.h * (0.3 + 0.16 * k), t.z), q, s.set(rad, t.h * 0.34, rad));
+          needles.setMatrixAt(i * LAYERS + k, m);
+          needles.setColorAt(i * LAYERS + k, col.setRGB(rr(0.04, 0.07), rr(0.09, 0.14), rr(0.06, 0.09)));
+        }
+        // trunk collider (a square box inside the round trunk); perimeter trees sit behind the invisible wall
+        if (t.solid) addBoxCollider(t.x, 0, t.z, t.r * 1.7, t.h, t.r * 1.7);
+      });
+      trunks.instanceMatrix.needsUpdate = needles.instanceMatrix.needsUpdate = true;
+      needles.instanceColor.needsUpdate = true;
+      trunks.computeBoundingSphere(); needles.computeBoundingSphere();
+      trunks.castShadow = trunks.receiveShadow = true;
+      needles.castShadow = needles.receiveShadow = true;
+      scene.add(trunks, needles);
+      rayTargets.push(trunks);
+    }
+
+    // ---------- Grass tufts (instanced, no collision) ----------
+    {
+      const tuftGeo = new THREE.ConeGeometry(0.035, 0.28, 4); tuftGeo.translate(0, 0.14, 0);
+      const tufts = new THREE.InstancedMesh(tuftGeo, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1 }), 2200);
+      const m = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), s = new THREE.Vector3();
+      const e = new THREE.Euler(), col = new THREE.Color();
+      let n = 0;
+      while (n < tufts.count) {
+        const x = rr(-WORLD_HALF, WORLD_HALF), z = rr(-WORLD_HALF, WORLD_HALF);
+        if (Math.hypot(x - FIRE.x, z - FIRE.z) < 5.8) continue;
+        if (Math.abs(x - CABIN.x) < CABIN.w / 2 + 0.3 && Math.abs(z - CABIN.z) < CABIN.d / 2 + 0.3) continue;
+        const sc = rr(0.6, 1.6);
+        q.setFromEuler(e.set(rr(-0.25, 0.25), rr(0, 6.3), rr(-0.25, 0.25)));
+        m.compose(p.set(x, 0, z), q, s.set(sc, sc, sc));
+        tufts.setMatrixAt(n, m);
+        tufts.setColorAt(n, col.setRGB(rr(0.05, 0.09), rr(0.1, 0.17), rr(0.04, 0.07)));
+        n++;
+      }
+      tufts.instanceMatrix.needsUpdate = true; tufts.instanceColor.needsUpdate = true;
+      tufts.computeBoundingSphere();
+      tufts.receiveShadow = true;
+      scene.add(tufts);
+    }
+
+    // ---------- Boulders ----------
+    for (let i = 0; i < 14; i++) {
+      const sx = rr(0.5, 1.4), sy = rr(0.4, 1.1), sz = rr(0.5, 1.3);
+      const spot = findSpot(Math.max(sx, sz) + 0.4);
+      if (!spot) continue;
+      const geo = new THREE.DodecahedronGeometry(1, 1);
+      const pos = geo.attributes.position;
+      for (let v = 0; v < pos.count; v++) { // lumpy rock
+        const k = 1 + rr(-0.12, 0.12);
+        pos.setXYZ(v, pos.getX(v) * k, pos.getY(v) * k, pos.getZ(v) * k);
+      }
+      geo.computeVertexNormals();
+      const rock = new THREE.Mesh(geo, rockMat);
+      rock.scale.set(sx, sy, sz);
+      rock.position.set(spot.x, sy * 0.35, spot.z); // partly buried
+      rock.rotation.y = rr(0, Math.PI * 2);
+      rock.castShadow = rock.receiveShadow = true;
+      scene.add(rock);
+      rayTargets.push(rock);
+      rock.updateMatrixWorld();
+      // collider: the rock's bounding box shrunk a little so hands meet roughly the rock surface
+      const bb = new THREE.Box3().setFromObject(rock);
+      const c = bb.getCenter(new THREE.Vector3()), size = bb.getSize(new THREE.Vector3());
+      addBoxCollider(c.x, 0, c.z, size.x * 0.8, bb.max.y * 0.92, size.z * 0.8);
+    }
+
+    // ---------- Fallen logs (lying along x or z so their box collider fits) & stumps ----------
+    function addLog(x, z, len, r, alongX, mat = barkMat, slipPercentage) {
+      const log = new THREE.Mesh(new THREE.CylinderGeometry(r, r * 1.05, len, 10), mat);
+      if (alongX) log.rotation.z = Math.PI / 2; else log.rotation.x = Math.PI / 2;
+      log.position.set(x, r, z);
+      log.castShadow = log.receiveShadow = true;
+      scene.add(log);
+      rayTargets.push(log);
+      addBoxCollider(x, 0, z, alongX ? len : r * 2, r * 2, alongX ? r * 2 : len, slipPercentage);
+      return log;
+    }
+    for (let i = 0; i < 8; i++) {
+      const len = rr(2.5, 5), r = rr(0.2, 0.35);
+      const spot = findSpot(len / 2 + 0.3);
+      if (spot) addLog(spot.x, spot.z, len, r, rng() < 0.5);
+    }
+    { // one wet, mossy log: slippery like the old blue block (Surface slipPercentage)
+      const spot = findSpot(2.4);
+      if (spot) addLog(spot.x, spot.z, 4, 0.3, true, mossMat, 0.7);
+    }
+    for (let i = 0; i < 6; i++) {
+      const spot = findSpot(0.7);
+      if (!spot) continue;
+      const r = rr(0.25, 0.45), h = rr(0.3, 0.7);
+      const stump = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.9, r * 1.1, h, 10), barkMat);
+      stump.position.set(spot.x, h / 2, spot.z);
+      stump.castShadow = stump.receiveShadow = true;
+      scene.add(stump);
+      rayTargets.push(stump);
+      addBoxCollider(spot.x, 0, spot.z, r * 1.6, h, r * 1.6);
+    }
+
+    // ---------- Campsite: log benches + a plank bench around the fire ----------
+    addLog(FIRE.x, FIRE.z + 2.3, 2.2, 0.22, true);
+    addLog(FIRE.x, FIRE.z - 2.3, 2.2, 0.22, true);
+    addLog(FIRE.x + 2.3, FIRE.z, 2.0, 0.2, false);
+    { // plank bench on the west side
+      const bx = FIRE.x - 2.4, bz = FIRE.z;
+      const seat = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.07, 1.8), plankMat);
+      seat.position.set(bx, 0.45, bz);
+      for (const dz of [-0.7, 0.7]) {
+        const leg = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.42, 0.08), plankMat);
+        leg.position.set(bx, 0.21, bz + dz);
+        leg.castShadow = true;
+        scene.add(leg);
+      }
+      seat.castShadow = seat.receiveShadow = true;
+      scene.add(seat);
+      rayTargets.push(seat);
+      addBoxCollider(bx, 0, bz, 0.4, 0.49, 1.8);
+    }
+
+    // ---------- Pitched A-frame tents (stepped box colliders follow the slope so you can climb them) ----------
+    function addTent(x, z, color, w = 2.2, h = 1.5, len = 2.6) {
+      const shape = new THREE.Shape();
+      shape.moveTo(-w / 2, 0); shape.lineTo(w / 2, 0); shape.lineTo(0, h); shape.closePath();
+      const geo = new THREE.ExtrudeGeometry(shape, { depth: len, bevelEnabled: false });
+      geo.translate(0, 0, -len / 2);
+      const tent = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color, roughness: 0.95, side: THREE.DoubleSide }));
+      tent.position.set(x, 0, z);
+      tent.castShadow = tent.receiveShadow = true;
+      scene.add(tent);
+      rayTargets.push(tent);
+      // dark open door flap on the side facing the fire
+      const door = new THREE.Shape();
+      door.moveTo(-w * 0.22, 0); door.lineTo(w * 0.22, 0); door.lineTo(0, h * 0.72); door.closePath();
+      const doorMesh = new THREE.Mesh(new THREE.ShapeGeometry(door), new THREE.MeshBasicMaterial({ color: 0x030303 }));
+      doorMesh.position.set(x, 0.01, z + len / 2 + 0.01);
+      scene.add(doorMesh);
+      // ridge poles
+      for (const dz of [-len / 2 - 0.05, len / 2 + 0.05]) {
+        const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, h + 0.15, 6), plankMat);
+        pole.position.set(x, (h + 0.15) / 2, z + dz);
+        scene.add(pole);
+      }
+      const steps = 3;
+      for (let k = 0; k < steps; k++) {
+        const y0 = (h * k) / steps, y1 = (h * (k + 1)) / steps;
+        addBoxCollider(x, y0, z, w * (1 - (k + 0.5) / steps), y1 - y0, len);
+      }
+    }
+    addTent(-4.8, -7.6, 0x3a4a2e);
+    addTent(4.6, -7.3, 0x5a3a1e);
+
+    // ---------- Abandoned ranger cabin with an open doorway facing the camp ----------
+    let cabinLantern, cabinLanternMesh;
+    {
+      const { x: cx, z: cz, w: W, d: D, h: H } = CABIN;
+      const T = 0.2, DOOR_W = 1.1, DOOR_H = 2.0, RISE = 1.2;
+      // walls
+      solidBox(cx, 0, cz - D / 2 + T / 2, W, H, T, woodMat);                 // back
+      solidBox(cx - W / 2 + T / 2, 0, cz, T, H, D, woodMat);                 // left
+      solidBox(cx + W / 2 - T / 2, 0, cz, T, H, D, woodMat);                 // right
+      const segW = (W - DOOR_W) / 2;
+      solidBox(cx - W / 2 + segW / 2, 0, cz + D / 2 - T / 2, segW, H, T, woodMat); // front, left of door
+      solidBox(cx + W / 2 - segW / 2, 0, cz + D / 2 - T / 2, segW, H, T, woodMat); // front, right of door
+      solidBox(cx, DOOR_H, cz + D / 2 - T / 2, DOOR_W, H - DOOR_H, T, woodMat);   // lintel above the door
+      solidBox(cx, 0, cz, W - 2 * T, 0.08, D - 2 * T, plankMat);             // floorboards
+
+      // gable roof (visual) ...
+      const slopeLen = Math.hypot(D / 2 + 0.3, RISE + 0.18);
+      const angle = Math.atan2(RISE + 0.18, D / 2 + 0.3);
+      for (const side of [1, -1]) {
+        const slab = new THREE.Mesh(new THREE.BoxGeometry(W + 0.5, 0.1, slopeLen), roofMat);
+        slab.position.set(cx, H - 0.18 + (RISE + 0.18) / 2, cz + side * (D / 2 + 0.3) / 2);
+        slab.rotation.x = side * angle;
+        slab.castShadow = slab.receiveShadow = true;
+        scene.add(slab);
+        rayTargets.push(slab);
+      }
+      const gable = new THREE.Shape();
+      gable.moveTo(-D / 2, 0); gable.lineTo(D / 2, 0); gable.lineTo(0, RISE); gable.closePath();
+      for (const side of [1, -1]) {
+        const g = new THREE.Mesh(new THREE.ShapeGeometry(gable), woodMat2);
+        g.rotation.y = Math.PI / 2;
+        g.position.set(cx + side * (W / 2 - T / 2), H, cz);
+        scene.add(g);
+      }
+      // ... and its colliders: a ceiling slab plus stepped boxes up to the ridge, so you can climb onto the roof
+      addBoxCollider(cx, H, cz, W, 0.15, D);
+      addBoxCollider(cx, H + 0.15, cz, W, 0.35, D * 0.66);
+      addBoxCollider(cx, H + 0.5, cz, W, 0.35, D * 0.4);
+      addBoxCollider(cx, H + 0.85, cz, W, 0.35, D * 0.15);
+
+      // inside: an old table, a cot, and a dying lantern
+      solidBox(cx + 1.3, 0, cz - 0.9, 1.2, 0.75, 0.7, plankMat);
+      solidBox(cx - 1.5, 0, cz - 0.4, 0.8, 0.4, 1.8, roofMat);
+      const lantern = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.07, 0.18, 8),
+        new THREE.MeshStandardMaterial({ color: 0x223322, emissive: 0x6f9f5f, emissiveIntensity: 1 }));
+      lantern.position.set(cx + 1.4, 0.84, cz - 0.9);
+      scene.add(lantern);
+      cabinLantern = new THREE.PointLight(0x9fdc8a, 2.5, 6, 2);
+      cabinLantern.position.set(cx + 1.4, 1.0, cz - 0.9);
+      scene.add(cabinLantern);
+      cabinLanternMesh = lantern;
+    }
+
+    // ---------- Campfire: stones, burning logs, flames, glow, flickering light and embers ----------
+    const fire = new THREE.Group();
+    fire.position.copy(FIRE);
+    scene.add(fire);
+    for (let i = 0; i < 11; i++) {
+      const a = (i / 11) * Math.PI * 2;
+      const stone = new THREE.Mesh(new THREE.DodecahedronGeometry(rr(0.1, 0.15), 0), rockMat);
+      stone.position.set(Math.cos(a) * 0.55, 0.06, Math.sin(a) * 0.55);
+      stone.rotation.set(rr(0, 3), rr(0, 3), 0);
+      stone.castShadow = true;
+      fire.add(stone);
+    }
+    addBoxCollider(FIRE.x, 0, FIRE.z, 1.3, 0.25, 1.3); // the stone ring is solid
+
+    const charMat = new THREE.MeshStandardMaterial({ color: 0x1a120c, emissive: 0x4a1606, roughness: 1 });
+    for (let i = 0; i < 5; i++) { // logs leaning into a teepee
+      const holder = new THREE.Group();
+      holder.rotation.y = (i / 5) * Math.PI * 2;
+      const log = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.06, 0.75, 6), charMat);
+      log.position.set(0.18, 0.22, 0);
+      log.rotation.z = 0.85;
+      holder.add(log);
+      fire.add(holder);
+    }
+
+    const flameMat = (color, opacity) => new THREE.MeshBasicMaterial({
+      color, transparent: true, opacity, blending: THREE.AdditiveBlending, depthWrite: false, fog: false });
+    const flames = [
+      [0.24, 0.75, 0xff4a10, 0.55],
+      [0.16, 0.6, 0xff8a24, 0.7],
+      [0.09, 0.42, 0xffd27a, 0.85],
+    ].map(([r, h, color, op]) => {
+      const geo = new THREE.ConeGeometry(r, h, 10, 1, true); geo.translate(0, h / 2, 0);
+      const f = new THREE.Mesh(geo, flameMat(color, op));
+      f.position.y = 0.1;
+      fire.add(f);
+      return f;
+    });
+
+    const glow = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: glowTex, color: 0xff7a2a, transparent: true, opacity: 0.5,
+      blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+    glow.scale.set(3.5, 3.5, 1);
+    glow.position.y = 0.5;
+    fire.add(glow);
+
+    // Warm orange flickering light (no shadows, to keep frame rate up in the headset)
+    const fireLight = new THREE.PointLight(0xff8a3c, 30, 22, 2);
+    fireLight.position.y = 0.6;
+    fire.add(fireLight);
+
+    // Floating embers
+    const EMBERS = 90;
+    const emberPos = new Float32Array(EMBERS * 3), emberCol = new Float32Array(EMBERS * 3);
+    const emberVel = new Float32Array(EMBERS * 3), emberAge = new Float32Array(EMBERS), emberLife = new Float32Array(EMBERS);
+    function resetEmber(i, age = 0) {
+      const a = Math.random() * Math.PI * 2, d = Math.random() * 0.25;
+      emberPos.set([Math.cos(a) * d, 0.2, Math.sin(a) * d], i * 3);
+      emberVel.set([(Math.random() - 0.5) * 0.3, 0.5 + Math.random() * 0.8, (Math.random() - 0.5) * 0.3], i * 3);
+      emberLife[i] = 1.5 + Math.random() * 2;
+      emberAge[i] = age;
+    }
+    for (let i = 0; i < EMBERS; i++) resetEmber(i, Math.random() * 3);
+    const emberGeo = new THREE.BufferGeometry();
+    emberGeo.setAttribute('position', new THREE.BufferAttribute(emberPos, 3));
+    emberGeo.setAttribute('color', new THREE.BufferAttribute(emberCol, 3));
+    const embers = new THREE.Points(emberGeo, new THREE.PointsMaterial({
+      size: 0.035, vertexColors: true, transparent: true, blending: THREE.AdditiveBlending,
+      depthWrite: false, fog: false, sizeAttenuation: true }));
+    embers.frustumCulled = false;
+    fire.add(embers);
+
+    let flick = 0, flickTarget = 0, lanternFlicker = 1, elapsed = 0;
+    function updateFire(dt) {
+      elapsed += dt;
+      if (Math.random() < dt * 12) flickTarget = Math.random();
+      flick += (flickTarget - flick) * Math.min(1, dt * 10);
+      fireLight.intensity = 22 + flick * 16;
+      fireLight.position.set(Math.sin(elapsed * 7) * 0.05, 0.6 + flick * 0.1, Math.cos(elapsed * 5) * 0.05);
+      flames.forEach((f, i) => {
+        const sy = 0.85 + 0.15 * Math.sin(elapsed * (9 + i * 3) + i) + flick * 0.25;
+        f.scale.set(1 - flick * 0.1, sy, 1 - flick * 0.1);
+        f.rotation.y += dt * (1 + i);
+      });
+      glow.material.opacity = 0.35 + flick * 0.25;
+
+      for (let i = 0; i < EMBERS; i++) {
+        emberAge[i] += dt;
+        if (emberAge[i] > emberLife[i]) resetEmber(i);
+        const j = i * 3;
+        emberVel[j] += Math.sin(elapsed * 3 + i) * dt * 0.3;      // drift
+        emberVel[j + 2] += Math.cos(elapsed * 2.6 + i) * dt * 0.3;
+        emberPos[j] += emberVel[j] * dt; emberPos[j + 1] += emberVel[j + 1] * dt; emberPos[j + 2] += emberVel[j + 2] * dt;
+        const fade = Math.max(0, 1 - emberAge[i] / emberLife[i]);
+        emberCol[j] = fade; emberCol[j + 1] = fade * 0.45; emberCol[j + 2] = fade * 0.1;
+      }
+      emberGeo.attributes.position.needsUpdate = true;
+      emberGeo.attributes.color.needsUpdate = true;
+
+      // the cabin lantern mostly glows, but now and then it almost dies
+      if (Math.random() < dt * 0.3) lanternFlicker = Math.random() * 0.3;
+      lanternFlicker += (1 - lanternFlicker) * dt * 1.5;
+      cabinLantern.intensity = 2.5 * lanternFlicker * (0.9 + Math.random() * 0.1);
+      cabinLanternMesh.material.emissiveIntensity = lanternFlicker;
     }
 
     // ---------- Flashlight ----------
@@ -859,8 +1279,9 @@
       if (playerRig.position.y < -20) resetLocomotion();
     }
 
-    // ---------- Simple pointer raycasting (highlights what you aim at) ----------
+    // ---------- Controller pointer rays stop at whatever solid scenery you aim at ----------
     const raycaster = new THREE.Raycaster();
+    raycaster.far = 5;
     const tmpMatrix = new THREE.Matrix4();
 
     function updatePointer(controller) {
@@ -871,18 +1292,8 @@
       raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
       raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tmpMatrix);
 
-      const hit = raycaster.intersectObjects(targets.children, false)[0];
-      if (ud.hovered && ud.hovered !== hit?.object) {
-        ud.hovered.material.emissive.setHex(0x000000);
-        ud.hovered = null;
-      }
-      if (hit) {
-        hit.object.material.emissive.setHex(0x223344);
-        ud.hovered = hit.object;
-        ud.ray.scale.z = hit.distance / playerRig.scale.x; // ray lives in the (scaled) rig
-      } else {
-        ud.ray.scale.z = 5 / playerRig.scale.x;
-      }
+      const hit = raycaster.intersectObjects(rayTargets, false)[0];
+      ud.ray.scale.z = (hit ? hit.distance : 5) / playerRig.scale.x; // ray lives in the (scaled) rig
     }
 
     // =====================================================================
@@ -892,6 +1303,7 @@
     const horrorAudio = (() => {
       const MASTER_VOLUME = 0.45; // overall level (0–1). The compressor below also stops sudden peaks.
       let ctx = null, master = null, reverbSend = null, delaySend = null, noise = null, wind = null;
+      let fireBus = null; // campfire crackle, volume follows your distance to the fire
       let running = false;
       const timers = [];
       const rand = (a, b) => a + Math.random() * (b - a);
@@ -957,6 +1369,34 @@
 
         buildDrone();
         buildWind();
+        buildFire();
+      }
+
+      // 5) Campfire: a low rumble plus random crackles and pops, faded by distance to the fire
+      function buildFire() {
+        fireBus = ctx.createGain(); fireBus.gain.value = 0;
+        fireBus.connect(master);
+        const verb = ctx.createGain(); verb.gain.value = 0.2; fireBus.connect(verb); verb.connect(reverbSend);
+        const src = ctx.createBufferSource(); src.buffer = noise; src.loop = true;
+        const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 320;
+        const g = ctx.createGain(); g.gain.value = 0.25;
+        src.connect(lp); lp.connect(g); g.connect(fireBus);
+        src.start();
+      }
+
+      function crackle() {
+        if (!running) return;
+        const t = ctx.currentTime + 0.01;
+        const pop = Math.random() < 0.08; // occasional louder pop
+        const src = ctx.createBufferSource(); src.buffer = noise;
+        const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = pop ? rand(600, 1200) : rand(1500, 4000);
+        const g = ctx.createGain();
+        const dur = pop ? rand(0.03, 0.07) : rand(0.008, 0.03);
+        g.gain.setValueAtTime(pop ? rand(0.5, 0.8) : rand(0.12, 0.4), t);
+        g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+        src.connect(hp); hp.connect(g); g.connect(fireBus);
+        src.start(t, rand(0, 5)); src.stop(t + dur + 0.02);
+        setTimeout(crackle, rand(30, 220)); // not kept in `timers`: it checks `running` itself
       }
 
       // 1) Sub-bass drone: E1 with a slightly detuned twin (slow beating), its octave, and a tritone (B♭1)
@@ -1100,12 +1540,17 @@
             master.gain.setValueAtTime(master.gain.value, t);
             master.gain.linearRampToValueAtTime(MASTER_VOLUME, t + 5); // slow fade-in
             gust();
+            crackle();
             later(chord, 2000);
             later(metal, 6000);
             later(whisper, 12000);
           } catch (err) {
             console.warn('Audio could not start:', err);
           }
+        },
+        setFireDistance(d) {
+          if (!fireBus) return;
+          fireBus.gain.setTargetAtTime(0.35 / (1 + (d / 2.5) * (d / 2.5)), ctx.currentTime, 0.2);
         },
         stop() {
           if (!ctx || !running) return;
@@ -1145,12 +1590,17 @@
     });
 
     const clock = new THREE.Clock();
+    const _camWorld = new THREE.Vector3();
+    const _fireSound = FIRE.clone().setY(0.3);
     let loopErrorReported = false;
     renderer.setAnimationLoop((time, frame) => {
       const dt = Math.min(clock.getDelta(), 1 / 30); // clamp so a hitch can't fling you through walls
       // An uncaught error here would stop the XR frame loop (frozen headset), so catch and report it once.
       try {
-        targets.children.forEach((m, i) => { m.rotation.y += dt * (0.2 + (i % 5) * 0.05); });
+        updateFire(dt);
+        // campfire crackle gets louder as you get closer
+        camera.getWorldPosition(_camWorld);
+        horrorAudio.setFireDistance(_camWorld.distanceTo(_fireSound));
 
         if (renderer.xr.isPresenting && dt > 0) {
           updateLocomotion(dt, frame);
