@@ -7912,11 +7912,12 @@
     const uiPanels = [];
     const _uiRay = new THREE.Raycaster(), _uiM = new THREE.Matrix4(), _uiO = new THREE.Vector3(), _uiD = new THREE.Vector3();
     const UI_FONT = '"Courier New", monospace';
-    function makePanel(w, h, cw, ch, draw, onClick, { onTop = false } = {}) {
+    function makePanel(w, h, cw, ch, draw, onClick, { onTop = false, opaque = false } = {}) {
       const canvas = document.createElement('canvas'); canvas.width = cw; canvas.height = ch;
       const tex = new THREE.CanvasTexture(canvas); tex.colorSpace = THREE.SRGBColorSpace;
       tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
-      const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, fog: false, toneMapped: false, depthTest: !onTop, depthWrite: !onTop });
+      const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: !opaque, fog: false, toneMapped: false, depthTest: !onTop, depthWrite: !onTop,
+        polygonOffset: opaque, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });   // wall screens: solid, pulled towards you (no z-fighting)
       const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
       if (onTop) mesh.renderOrder = 9990;
       const p = { mesh, canvas, g: canvas.getContext('2d'), tex, cw, ch, buttons: [], hover: null, draw, onClick };
@@ -8044,8 +8045,8 @@
     }, (id) => {
       if (id === 'launch') { goTo(mapSelected); redrawPanel(mapScreen); waitingClick(true); }
       else if (id && id.startsWith('map:')) { mapSelected = id.slice(4); redrawPanel(mapScreen); waitingClick(false); }
-    });
-    mapScreen.mesh.position.set(WAIT_ROOM.x, 0.95, WAIT_ROOM.z - WAIT_ROOM.d / 2 + 0.04);
+    }, { opaque: true });
+    mapScreen.mesh.position.set(WAIT_ROOM.x, 0.95, WAIT_ROOM.z - WAIT_ROOM.d / 2 + 0.07);   // 0.02 in front of the frame's face (wall + 0.05)
     scene.add(mapScreen.mesh);
     redrawPanel(mapScreen);
     {
@@ -8056,7 +8057,7 @@
         fb.add(UNIT_BOX, trimMat, WAIT_ROOM.x + x, 0.95 + y, Z, 0, 0, 0, w, h, 0.05);
       fb.build(scene);
       const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0x9ab8d8, transparent: true, opacity: 0.18, blending: THREE.AdditiveBlending, depthWrite: false }));
-      glow.scale.set(4.2, 2.6, 1); glow.position.set(WAIT_ROOM.x, 0.95, Z + 0.06);
+      glow.scale.set(4.2, 2.6, 1); glow.position.set(WAIT_ROOM.x, 0.95, Z + 0.005);   // behind the screen: only the halo round its edge shows
       scene.add(glow);
     }
     // a soft click (and a deeper thud for LAUNCH) from its own tiny audio graph
@@ -8936,6 +8937,29 @@
             setTimeout(() => { try { e.o.stop(); e.lfo.stop(); } catch (er) { /* already stopped */ } }, 900);
           }
         },
+        clink(strength = 1) {                         // steel knocking on something hard (stone, iron, bark): a short bright clink
+          if (!ok()) return; const t = ctx.currentTime + 0.005, a = Math.min(1, 0.3 + strength * 0.4);
+          burst(t, { type: 'highpass', f0: 2500, peak: 0.35 * a, decay: 0.03 });
+          for (const f of [2120, 3340, 5010]) tone(t, f * (0.97 + Math.random() * 0.06), f * 0.99, 0.06 * a, 0.22);
+          tone(t, 240, 120, 0.12 * a, 0.06, 'triangle');
+        },
+        scrape(speed = 1) {                           // the blade dragging along a hard surface
+          if (!ok()) return; const t = ctx.currentTime + 0.005, a = Math.min(0.6, 0.12 + speed * 0.12);
+          burst(t, { f0: 3800 + Math.random() * 1200, f1: 2600, q: 6, peak: a, attack: 0.01, decay: 0.12 });
+          burst(t, { type: 'highpass', f0: 6000, peak: a * 0.4, attack: 0.01, decay: 0.08 });
+        },
+        glass(dist = 0) {                             // a window shattering: a hard crack, a crystalline burst, shards tinkling down
+          if (!ok()) return; const t = ctx.currentTime + 0.005, a = att(dist);
+          burst(t, { type: 'highpass', f0: 3000, peak: 1.0 * a, decay: 0.09 });
+          burst(t, { f0: 6500, f1: 4200, q: 2, peak: 0.65 * a, decay: 0.2 });
+          burst(t + 0.01, { type: 'highpass', f0: 8000, peak: 0.45 * a, attack: 0.004, decay: 0.35 });
+          tone(t, 190, 80, 0.16 * a, 0.18, 'triangle');
+          for (let k = 0; k < 34; k++) {
+            const tt = t + 0.015 + Math.random() * (k < 14 ? 0.3 : 1.1), f = 2400 + Math.random() * 6800;
+            tone(tt, f, f * (0.995 + Math.random() * 0.01), (0.03 + Math.random() * 0.08) * a, 0.05 + Math.random() * 0.28);
+          }
+          for (let k = 0; k < 14; k++) burst(t + 0.2 + Math.random() * 1.1, { type: 'highpass', f0: 4000 + Math.random() * 3000, peak: (0.08 + Math.random() * 0.14) * a, decay: 0.015 + Math.random() * 0.03 });
+        },
         growl() {                                      // the "you can't do that" warning: a low, wet growl and a dull double buzz
           if (!ok()) return; const t = ctx.currentTime + 0.01;
           const o = ctx.createOscillator(); o.type = 'sawtooth';
@@ -9568,131 +9592,144 @@
     // =====================================================================
     //  WAITING ROOM: the MONSTER POV monitor and the shop corner
     // =====================================================================
-    // ---------- MONSTER POV: a live feed from the monster's eyes as it prowls the map picked on the big screen ----------
-    // There's no computer-driven monster in the maps, so the feed follows an unseen prowler that stalks a slow loop
-    // round the selected map at monster eye height, looking about. It's rendered into a WebGLRenderTarget a few times a
-    // second while you're in the waiting room, then shown through a dark-vision shader with a HUD on top.
-    const POV = { w: 1.6, h: 0.9, x: WAIT_ROOM.x + 2.75, y: 1.05, z: WAIT_ROOM.z - WAIT_ROOM.d / 2 + 0.045 };
+    // ---------- MONSTER POV ----------
+    // OFFLINE (static, "SIGNAL OFFLINE — NO ACTIVE MONSTER") while nobody is the monster. As soon as someone switches to
+    // MONSTER, a camera rides on the monster's head (at eye level, looking where the mask looks) and the monitor shows
+    // that exact head-tracked view, live, through a dark-vision filter. Back to SURVIVOR and it drops to OFFLINE again.
+    // The offscreen pass runs in the frame loop (never in the middle of the headset's own render): it saves the active
+    // render target, turns XR off for the shot, holds the shadows and tone mapping, then puts every one of them back.
+    const POV = { w: 1.6, h: 0.9, x: WAIT_ROOM.x + 2.75, y: 1.05, z: WAIT_ROOM.z - WAIT_ROOM.d / 2 + 0.065 };
+    const POV_FRAME_Z = WAIT_ROOM.z - WAIT_ROOM.d / 2 + 0.025;      // the iron frame (0.05 deep: its face is at wall + 0.045)
     const povRT = new THREE.WebGLRenderTarget(384, 216, { depthBuffer: true });
-    const povCam = new THREE.PerspectiveCamera(78, 16 / 9, 0.05, 70);
-    const povPaths = {
-      camp: [[0, -1], [-6, -5], [-11, -9], [-13, -13], [-6, -15], [2, -13], [5, -8], [5, -2], [4, 5], [-1, 9], [-6, 8], [-9, 3], [-4, 1]],
-      graveyard: [[0, 14], [0, 6], [-5, 2], [-10, 0], [-12, -8], [-6, -10], [0, -8.5], [4, -4], [3, 4], [8, 6], [10, 12], [4, 13]].map(([x, z]) => [GRAVE.x + x, GRAVE.z + z]),
-      mine: [[MN.ex + 5, 0], [MN.ex + 1.5, 0], [MINE.x + 4, 0], [MINE.x - 3, 0.3], [MINE.x - 3, 8], [MINE.x - 3, 11.5], [MINE.x - 3.2, 4], [MINE.x - 8, 0], [MINE.x - 12, 0.5],
-             [MINE.x - 8, -0.3], [MINE.x + 3, 0], [MINE.x + 3, -8], [MINE.x + 3, -1.5], [MN.ex + 2, -1]].map(([x, z]) => [x, MINE.z + z]),
-    };
-    const povCurves = {};
-    for (const [k, pts] of Object.entries(povPaths)) povCurves[k] = new THREE.CatmullRomCurve3(pts.map(([x, z]) => new THREE.Vector3(x, 0.55, z)), true, 'centripetal');
-    const povState = { u: 0, t: 0, frame: 0, rendered: -1, hudT: 0, map: 'camp' };
+    const monsterPovCamera = new THREE.PerspectiveCamera(80, 16 / 9, 0.06, 70);
+    const povState = { t: 0, frame: 0, hudT: 0, live: false, shownLive: null };
     const povHudCanvas = document.createElement('canvas'); povHudCanvas.width = 512; povHudCanvas.height = 288;
     const povHudTex = new THREE.CanvasTexture(povHudCanvas); povHudTex.colorSpace = THREE.SRGBColorSpace;
+    const placeName = () => (currentMap === 'waiting' ? 'WAITING ROOM' : mapById(currentMap).name);
     function drawPovHud() {
       const g = povHudCanvas.getContext('2d'), W = 512, H = 288;
       g.clearRect(0, 0, W, H);
+      g.textBaseline = 'middle';
+      if (!povState.live) {
+        g.fillStyle = 'rgba(0,0,0,0.55)'; g.fillRect(40, 104, W - 80, 80);
+        g.strokeStyle = 'rgba(255,80,60,0.8)'; g.lineWidth = 2; g.strokeRect(40, 104, W - 80, 80);
+        g.textAlign = 'center';
+        g.fillStyle = '#ff5a46'; g.font = 'bold 28px "Courier New", monospace'; g.fillText('SIGNAL OFFLINE', W / 2, 130);
+        g.fillStyle = 'rgba(255,200,190,0.9)'; g.font = 'bold 18px "Courier New", monospace'; g.fillText('— NO ACTIVE MONSTER —', W / 2, 162);
+        g.fillStyle = 'rgba(255,230,220,0.85)'; g.font = 'bold 20px "Courier New", monospace'; g.textAlign = 'left'; g.fillText('MONSTER POV', 28, 34);
+        g.font = '14px "Courier New", monospace'; g.fillStyle = 'rgba(255,200,190,0.6)'; g.fillText('Switch to MONSTER in the menu (B / Y) to go live', 28, H - 28);
+        povHudTex.needsUpdate = true;
+        return;
+      }
       g.strokeStyle = 'rgba(255,90,70,0.85)'; g.lineWidth = 3;
       for (const [x, y, sx, sy] of [[14, 14, 1, 1], [W - 14, 14, -1, 1], [14, H - 14, 1, -1], [W - 14, H - 14, -1, -1]]) {   // corner brackets
         g.beginPath(); g.moveTo(x, y + sy * 26); g.lineTo(x, y); g.lineTo(x + sx * 26, y); g.stroke();
       }
       g.beginPath(); g.moveTo(W / 2 - 14, H / 2); g.lineTo(W / 2 + 14, H / 2); g.moveTo(W / 2, H / 2 - 14); g.lineTo(W / 2, H / 2 + 14); g.stroke();   // crosshair
-      g.font = 'bold 22px "Courier New", monospace'; g.textBaseline = 'middle';
+      g.font = 'bold 22px "Courier New", monospace'; g.textAlign = 'left';
       g.fillStyle = 'rgba(255,230,220,0.95)'; g.fillText('MONSTER POV', 28, 34);
-      if (Math.floor(povState.t * 1.2) % 2 === 0) { g.fillStyle = '#ff2a1a'; g.beginPath(); g.arc(W - 96, 34, 8, 0, Math.PI * 2); g.fill(); }
-      g.fillStyle = 'rgba(255,230,220,0.95)'; g.fillText('REC', W - 82, 34);
+      if (Math.floor(povState.t * 1.2) % 2 === 0) { g.fillStyle = '#ff2a1a'; g.beginPath(); g.arc(W - 106, 34, 8, 0, Math.PI * 2); g.fill(); }
+      g.fillStyle = 'rgba(255,230,220,0.95)'; g.fillText('LIVE', W - 92, 34);
       g.font = '16px "Courier New", monospace';
-      g.fillText(mapById(povState.map).name, 28, H - 30);
+      g.fillText(placeName(), 28, H - 30);
       const s = Math.floor(povState.t), tc = `${String(Math.floor(s / 3600)).padStart(2, '0')}:${String(Math.floor(s / 60) % 60).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
       g.textAlign = 'right'; g.fillText(`NIGHT ${tc}`, W - 28, H - 30); g.textAlign = 'left';
-      g.fillStyle = 'rgba(255,120,100,0.7)'; g.fillText('DARK VISION', 28, 58);
+      g.fillStyle = 'rgba(255,120,100,0.7)'; g.fillText('DARK VISION · HEAD CAM', 28, 58);
       povHudTex.needsUpdate = true;
     }
     drawPovHud();
     const povMat = new THREE.ShaderMaterial({
-      uniforms: { tFeed: { value: povRT.texture }, tHud: { value: povHudTex }, uTime: { value: 0 }, uOn: { value: 1 } },
+      uniforms: { tFeed: { value: povRT.texture }, tHud: { value: povHudTex }, uTime: { value: 0 }, uLive: { value: 0 } },
       vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
       fragmentShader: `
-        uniform sampler2D tFeed; uniform sampler2D tHud; uniform float uTime; uniform float uOn; varying vec2 vUv;
+        uniform sampler2D tFeed; uniform sampler2D tHud; uniform float uTime; uniform float uLive; varying vec2 vUv;
         float rand(vec2 c){ return fract(sin(dot(c, vec2(12.9898, 78.233))) * 43758.5453); }
         void main(){
           vec2 uv = vUv;
-          float band = step(0.985, rand(vec2(floor(uv.y * 60.0), floor(uTime * 8.0))));            // rolling glitch lines
-          uv.x += (rand(vec2(floor(uv.y * 140.0), floor(uTime * 24.0))) - 0.5) * (0.003 + band * 0.03);
-          vec3 c = texture2D(tFeed, uv).rgb;
-          float l = dot(c, vec3(0.299, 0.587, 0.114));
-          l = pow(clamp(l * 4.0, 0.0, 1.0), 0.55);                                                  // dark vision: the night lifted
-          vec3 col = vec3(1.0, 0.32, 0.22) * l + vec3(0.25, 0.9, 0.55) * l * l * 0.25;              // a bloody red cast
-          col += (rand(uv * 640.0 + uTime) - 0.5) * 0.14;                                         // sensor noise
+          vec3 col;
+          if (uLive > 0.5) {
+            float band = step(0.985, rand(vec2(floor(uv.y * 60.0), floor(uTime * 8.0))));            // rolling glitch lines
+            uv.x += (rand(vec2(floor(uv.y * 140.0), floor(uTime * 24.0))) - 0.5) * (0.003 + band * 0.03);
+            vec3 c = texture2D(tFeed, clamp(uv, 0.0, 1.0)).rgb;
+            float l = dot(c, vec3(0.299, 0.587, 0.114));
+            l = pow(clamp(l * 4.0, 0.0, 1.0), 0.55);                                                  // dark vision: the night lifted
+            col = vec3(1.0, 0.32, 0.22) * l + vec3(0.25, 0.9, 0.55) * l * l * 0.25;                  // a bloody red cast
+            col += (rand(uv * 640.0 + uTime) - 0.5) * 0.14;                                         // sensor noise
+          } else {
+            float n = rand(floor(vUv * vec2(192.0, 108.0)) + floor(uTime * 30.0));                 // dead-channel static
+            col = vec3(n * n) * 0.32 + vec3(0.05, 0.01, 0.01);
+            col += step(0.97, rand(vec2(floor(vUv.y * 40.0), floor(uTime * 6.0)))) * 0.12;          // the odd bright line rolling through
+          }
           col *= 0.82 + 0.18 * sin(vUv.y * 860.0 + uTime * 6.0);                                  // scanlines
           col *= smoothstep(0.95, 0.35, length((vUv - 0.5) * vec2(1.25, 1.0)));                   // vignette
-          col *= uOn;
           vec4 hud = texture2D(tHud, vUv);
           col = mix(col, hud.rgb, hud.a);
           gl_FragColor = vec4(pow(max(col, 0.0), vec3(1.0 / 2.2)), 1.0);
         }`,
-      fog: false, toneMapped: false,
+      fog: false, toneMapped: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
     });
     const povScreen = new THREE.Mesh(new THREE.PlaneGeometry(POV.w, POV.h), povMat);
-    povScreen.position.set(POV.x, POV.y, POV.z);
+    povScreen.position.set(POV.x, POV.y, POV.z);                       // 0.02 in front of the frame's face
     scene.add(povScreen);
     {
       const fb = makeBatch();
       for (const [x, y, w, h] of [[0, POV.h / 2 + 0.05, POV.w + 0.2, 0.1], [0, -POV.h / 2 - 0.05, POV.w + 0.2, 0.1], [-POV.w / 2 - 0.05, 0, 0.1, POV.h + 0.2], [POV.w / 2 + 0.05, 0, 0.1, POV.h + 0.2]])
-        fb.add(UNIT_BOX, ironMat, POV.x + x, POV.y + y, POV.z - 0.02, 0, 0, 0, w, h, 0.05);
-      fb.add(new THREE.CylinderGeometry(0.01, 0.01, 0.6, 6), ironMat, POV.x - 0.5, POV.y + 0.8, POV.z - 0.02);   // cables up into the ceiling
-      fb.add(new THREE.CylinderGeometry(0.01, 0.01, 0.6, 6), ironMat, POV.x + 0.5, POV.y + 0.8, POV.z - 0.02);
+        fb.add(UNIT_BOX, ironMat, POV.x + x, POV.y + y, POV_FRAME_Z, 0, 0, 0, w, h, 0.05);
+      fb.add(UNIT_BOX, new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.9 }), POV.x, POV.y, POV_FRAME_Z - 0.01, 0, 0, 0, POV.w + 0.02, POV.h + 0.02, 0.03);   // dark backing
+      fb.add(new THREE.CylinderGeometry(0.01, 0.01, 0.6, 6), ironMat, POV.x - 0.5, POV.y + 0.8, POV_FRAME_Z);   // cables up into the ceiling
+      fb.add(new THREE.CylinderGeometry(0.01, 0.01, 0.6, 6), ironMat, POV.x + 0.5, POV.y + 0.8, POV_FRAME_Z);
       fb.build(scene);
       const plaque = new THREE.Mesh(new THREE.PlaneGeometry(0.7, 0.12), new THREE.MeshBasicMaterial({ map: canvasTexture(256, (g, s) => {
         g.fillStyle = '#1a0a08'; g.fillRect(0, s * 0.38, s, s * 0.24); g.strokeStyle = '#a01810'; g.lineWidth = 3; g.strokeRect(2, s * 0.38 + 2, s - 4, s * 0.24 - 4);
         g.fillStyle = '#ff6a5a'; g.font = 'bold 30px "Courier New", monospace'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('MONSTER POV', s / 2, s / 2);
-      }), transparent: true, alphaTest: 0.1 }));
+      }), transparent: true, alphaTest: 0.1, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }));
       plaque.geometry.scale(1, 3.6, 1);
-      plaque.position.set(POV.x, POV.y - POV.h / 2 - 0.2, POV.z); scene.add(plaque);
+      plaque.position.set(POV.x, POV.y - POV.h / 2 - 0.2, WAIT_ROOM.z - WAIT_ROOM.d / 2 + 0.02); scene.add(plaque);
       const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xff4030, transparent: true, opacity: 0.16, blending: THREE.AdditiveBlending, depthWrite: false }));
-      glow.scale.set(2.6, 1.6, 1); glow.position.set(POV.x, POV.y, POV.z + 0.05); scene.add(glow);
+      glow.scale.set(2.6, 1.6, 1); glow.position.set(POV.x, POV.y, POV_FRAME_Z - 0.02); scene.add(glow);   // behind the screen: a halo round its edge
+      povState.glow = glow;
     }
-    const _povSave = { fog: new THREE.Color(), bg: new THREE.Color(), hc: new THREE.Color(), hg: new THREE.Color() };
-    povScreen.onBeforeRender = (r) => {
-      if (povState.rendered === povState.frame || currentMap !== 'waiting' || titleActive) return;
-      povState.rendered = povState.frame;
-      if (povState.frame % 3 !== 0) return;                          // a few frames a second is plenty for a creepy feed
-      // borrow the map's own fog and moonlight for the shot, then put the waiting room's back
-      _povSave.fog.copy(scene.fog.color); const dens = scene.fog.density; _povSave.bg.copy(scene.background);
-      if (hemiLight) { _povSave.hc.copy(hemiLight.color); _povSave.hg.copy(hemiLight.groundColor); }
-      const hi = hemiLight ? hemiLight.intensity : 0;
-      applyEnv(mapById(povState.map));
-      const hidden = [povScreen, menuGroup, victoryGroup].filter((o) => o.visible);
-      hidden.forEach((o) => { o.visible = false; });
-      const xrOn = r.xr.enabled, shadowAuto = r.shadowMap.autoUpdate, prevRT = r.getRenderTarget();
-      r.xr.enabled = false; r.shadowMap.autoUpdate = false;
-      r.setRenderTarget(povRT);
-      r.clear();
-      r.render(scene, povCam);
-      r.setRenderTarget(prevRT);
-      r.xr.enabled = xrOn; r.shadowMap.autoUpdate = shadowAuto;
-      hidden.forEach((o) => { o.visible = true; });
-      scene.fog.color.copy(_povSave.fog); scene.fog.density = dens; scene.background.copy(_povSave.bg);
-      if (hemiLight) { hemiLight.color.copy(_povSave.hc); hemiLight.groundColor.copy(_povSave.hg); hemiLight.intensity = hi; }
-    };
-    const _povP = new THREE.Vector3(), _povT = new THREE.Vector3();
+    // the offscreen pass: the monster's head cam into povRT, with every bit of renderer state put back afterwards
+    const _povQ = new THREE.Quaternion(), _povFlip = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
+    function renderMonsterPov() {
+      const r = renderer;
+      // things that sit right in front of the head and must not be in the shot: the monster's own head and mask,
+      // pop-ups and fades fixed to your eyes, the floating menu and victory panel, and the monitor itself
+      const hide = [povScreen, menuGroup, victoryGroup, mHead, ...camera.children.filter((o) => o.isMesh || o.isSprite)].filter((o) => o.visible);
+      hide.forEach((o) => { o.visible = false; });
+      const prevRT = r.getRenderTarget(), xrOn = r.xr.enabled, shadowAuto = r.shadowMap.autoUpdate, tone = r.toneMapping, exposure = r.toneMappingExposure;
+      try {
+        r.xr.enabled = false;                       // a plain camera shot, not the headset's stereo views
+        r.shadowMap.autoUpdate = false;             // reuse this frame's shadow maps
+        r.toneMapping = THREE.NoToneMapping;        // linear into the target; the monitor's shader grades it
+        r.setRenderTarget(povRT);
+        r.clear();
+        r.render(scene, monsterPovCamera);
+      } finally {
+        r.setRenderTarget(prevRT);
+        r.xr.enabled = xrOn;
+        r.shadowMap.autoUpdate = shadowAuto;
+        r.toneMapping = tone; r.toneMappingExposure = exposure;
+        hide.forEach((o) => { o.visible = true; });
+      }
+    }
     function updatePov(dt) {
       povState.frame++;
       povState.t += dt;
       povMat.uniforms.uTime.value = povState.t;
-      const inRoom = currentMap === 'waiting' && !titleActive;
-      povScreen.visible = true;
-      if (!inRoom) return;
-      if (povState.map !== mapSelected) { povState.map = mapSelected; povState.u = Math.random(); }
-      const curve = povCurves[povState.map];
-      povState.u = (povState.u + dt * 0.75 / curve.getLength()) % 1;
-      curve.getPointAt(povState.u, _povP);
-      curve.getPointAt((povState.u + 0.01) % 1, _povT);
-      const bob = Math.sin(povState.t * 3.2) * 0.025;                 // a heavy, swaying gait
-      povCam.position.copy(_povP); povCam.position.y += bob;
-      _povT.y = _povP.y + Math.sin(povState.t * 0.37) * 0.25;
-      povCam.lookAt(_povT);
-      povCam.rotateY(Math.sin(povState.t * 0.23) * 0.7 + Math.sin(povState.t * 0.71) * 0.15);   // looking about
-      povCam.rotateZ(Math.sin(povState.t * 1.6) * 0.03);
-      povCam.updateMatrixWorld();
+      const live = playerRole === 'monster' && !titleActive;
+      if (live !== povState.live) { povState.live = live; povState.hudT = 0; }
+      povMat.uniforms.uLive.value = live ? 1 : 0;
+      povState.glow.material.opacity = live ? 0.2 : 0.07;
       if ((povState.hudT -= dt) <= 0) { povState.hudT = 0.5; drawPovHud(); }
+      if (!live || currentMap !== 'waiting') return;               // the monitor only hangs in the waiting room
+      // the head cam: on the monster's head at eye level, looking the way the mask faces (+z of the head)
+      mHead.updateWorldMatrix(true, false);
+      mHead.getWorldPosition(monsterPovCamera.position);
+      mHead.getWorldQuaternion(_povQ);
+      monsterPovCamera.quaternion.copy(_povQ).multiply(_povFlip);   // a camera looks down its -z
+      monsterPovCamera.updateMatrixWorld(true);
+      if (povState.frame % 2 === 0) renderMonsterPov();
     }
 
     // ---------- the shop corner: a counter, THE TRADER's board, coins earned by escaping ----------
@@ -9745,7 +9782,7 @@
       writeSave();
       applyCosmetics();
       redrawShop();
-    });
+    }, { opaque: true });
     shopPanel.mesh.position.set(SB.x, SB.y, SB.z);
     shopPanel.mesh.rotation.y = Math.PI / 2;
     scene.add(shopPanel.mesh);
@@ -10182,6 +10219,7 @@
       updateEnding(dt);
       updatePov(dt);
       updateCosmetics(dt);
+      clampMachete(dt);                 // the blade can't pass through solid things
       updateMachete(dt);
       updateChips(dt);
       for (const L of extraLakes) L.water.visible = L.map === currentMap;
@@ -10427,6 +10465,71 @@
       if ((objHudT -= dt) <= 0) { objHudT = 0.25; refreshObjectiveHud(); }
     }
     refreshRoleSigns();
+
+    // =====================================================================
+    //  THE MACHETE AGAINST SOLID THINGS: every frame the blade is cast from hilt to tip against the world's solid
+    //  colliders (walls, rocks, stone, iron, generator housings, boat hulls, the ground, tree trunks). If it would go
+    //  in, the hand is held back so the tip rests on the surface (it slides along as you move) with a clink or a scrape,
+    //  and nothing is damaged. Wood that breaks (doors, crates, barricades), glass panes and sliceable branches aren't
+    //  solid to it: the blade still goes into those, so hacking, smashing and slicing work as before.
+    // =====================================================================
+    const HILT_LOCAL = new THREE.Vector3(0, -0.004, -0.07), TIP_LOCAL = new THREE.Vector3(0, -0.004, MACHETE_BLADE.z1);
+    const _mcH = new THREE.Vector3(), _mcT = new THREE.Vector3(), _mcD = new THREE.Vector3(), _mcHit = new THREE.Vector3(), _mcW = new THREE.Vector3();
+    const _mcS = new THREE.Vector3(), _mcWr = new THREE.Vector3(), _mcTipPrev = new THREE.Vector3();
+    const _mcRay = new THREE.Ray();
+    let bladeContact = false, scrapeT = 0, tipPrevOk = false;
+    const passThrough = new Set();
+    function refreshPassThrough() {
+      passThrough.clear();
+      for (const d of doors) passThrough.add(d.col);
+      for (const p of panes) if (p.col) passThrough.add(p.col);
+      for (const b of breakables) passThrough.add(b.col);
+    }
+    refreshPassThrough();
+    function clampMachete(dt) {
+      if (playerRole !== 'monster' || !renderer.xr.isPresenting || !monsterModel.visible || titleActive) { bladeContact = false; tipPrevOk = false; return; }
+      const arm = mArms[0];
+      mMachete.updateWorldMatrix(true, false);
+      mMachete.localToWorld(_mcH.copy(HILT_LOCAL));
+      mMachete.localToWorld(_mcT.copy(TIP_LOCAL));
+      _mcD.subVectors(_mcT, _mcH);
+      const len = _mcD.length();
+      if (len < 1e-4) return;
+      _mcD.divideScalar(len);
+      _mcRay.set(_mcH, _mcD);
+      let best = len;
+      for (const c of colliders) {
+        if (passThrough.has(c)) continue;
+        const b = c.box;
+        if (b.max.y < -500 || b.isEmpty()) continue;                     // switched-off colliders (open doors, broken things)
+        if (b.distanceToPoint(_mcH) > best) continue;
+        if (b.containsPoint(_mcH)) continue;                             // (the hand itself is kept out of walls by the physics)
+        if (_mcRay.intersectBox(b, _mcHit)) { const d = _mcH.distanceTo(_mcHit); if (d < best) best = d; }
+      }
+      const contact = best < len - 0.003;
+      if (contact) {
+        // hold the hand back along the blade so the tip just touches the surface
+        const push = Math.min(0.3, len - best + 0.004);
+        arm.hand.getWorldPosition(_mcW).addScaledVector(_mcD, -push);
+        monsterModel.worldToLocal(_mcW);
+        arm.hand.position.copy(_mcW);
+        _mcS.set(arm.side * 0.23, -0.14, -0.1);
+        _mcWr.copy(WRIST_LOCAL).multiply(arm.hand.scale).applyQuaternion(arm.hand.quaternion).add(arm.hand.position);
+        solveArm(arm, _mcS, _mcWr);
+        mMachete.updateWorldMatrix(true, false);
+        mMachete.localToWorld(_mcT.copy(TIP_LOCAL));
+      }
+      // sounds: a clink when it lands on something hard, a scrape while it's dragged along it
+      const speed = tipPrevOk && dt > 0 ? _mcT.distanceTo(_mcTipPrev) / dt : 0;
+      scrapeT -= dt;
+      const rc = rightController();
+      if (contact && !bladeContact) { gameAudio.clink(Math.min(2, speed)); if (rc) pulse(rc, 0.35, 30); scrapeT = 0.15; }
+      else if (contact && speed > 0.35 && scrapeT <= 0) { gameAudio.scrape(speed); if (rc) pulse(rc, 0.15, 25); scrapeT = 0.12; }
+      bladeContact = contact;
+      _mcTipPrev.copy(_mcT); tipPrevOk = true;
+    }
+    // ---------- the glass-breaking sound: windows smashed by a fist, a thrown part or the machete ----------
+    cabinAudio.glass = (dist) => { gameAudio.unlock(); gameAudio.glass(dist); };
 
 
     // ---------- XR session hooks ----------
