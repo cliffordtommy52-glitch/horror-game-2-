@@ -8960,6 +8960,11 @@
           }
           for (let k = 0; k < 14; k++) burst(t + 0.2 + Math.random() * 1.1, { type: 'highpass', f0: 4000 + Math.random() * 3000, peak: (0.08 + Math.random() * 0.14) * a, decay: 0.015 + Math.random() * 0.03 });
         },
+        thud(dist = 0) {                              // a heavy knuckle hitting the ground
+          if (!ok()) return; const t = ctx.currentTime + 0.005, a = att(dist) * 0.8;
+          tone(t, 85, 40, 0.5 * a, 0.14);
+          burst(t, { type: 'lowpass', f0: 260, f1: 90, peak: 0.45 * a, decay: 0.1 });
+        },
         growl() {                                      // the "you can't do that" warning: a low, wet growl and a dull double buzz
           if (!ok()) return; const t = ctx.currentTime + 0.01;
           const o = ctx.createOscillator(); o.type = 'sawtooth';
@@ -9605,7 +9610,7 @@
     const povState = { t: 0, frame: 0, hudT: 0, live: false, shownLive: null };
     const povHudCanvas = document.createElement('canvas'); povHudCanvas.width = 512; povHudCanvas.height = 288;
     const povHudTex = new THREE.CanvasTexture(povHudCanvas); povHudTex.colorSpace = THREE.SRGBColorSpace;
-    const placeName = () => (currentMap === 'waiting' ? 'WAITING ROOM' : mapById(currentMap).name);
+    const placeName = () => { const m = povState.src ? povState.src.map : currentMap; return m === 'waiting' ? 'WAITING ROOM' : mapById(m).name; };
     function drawPovHud() {
       const g = povHudCanvas.getContext('2d'), W = 512, H = 288;
       g.clearRect(0, 0, W, H);
@@ -9617,7 +9622,7 @@
         g.fillStyle = '#ff5a46'; g.font = 'bold 28px "Courier New", monospace'; g.fillText('SIGNAL OFFLINE', W / 2, 130);
         g.fillStyle = 'rgba(255,200,190,0.9)'; g.font = 'bold 18px "Courier New", monospace'; g.fillText('— NO ACTIVE MONSTER —', W / 2, 162);
         g.fillStyle = 'rgba(255,230,220,0.85)'; g.font = 'bold 20px "Courier New", monospace'; g.textAlign = 'left'; g.fillText('MONSTER POV', 28, 34);
-        g.font = '14px "Courier New", monospace'; g.fillStyle = 'rgba(255,200,190,0.6)'; g.fillText('Switch to MONSTER in the menu (B / Y) to go live', 28, H - 28);
+        g.font = '14px "Courier New", monospace'; g.fillStyle = 'rgba(255,200,190,0.6)'; g.fillText('Play MONSTER (menu: B / Y), or let the AI hunt', 28, H - 28);
         povHudTex.needsUpdate = true;
         return;
       }
@@ -9634,7 +9639,7 @@
       g.fillText(placeName(), 28, H - 30);
       const s = Math.floor(povState.t), tc = `${String(Math.floor(s / 3600)).padStart(2, '0')}:${String(Math.floor(s / 60) % 60).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
       g.textAlign = 'right'; g.fillText(`NIGHT ${tc}`, W - 28, H - 30); g.textAlign = 'left';
-      g.fillStyle = 'rgba(255,120,100,0.7)'; g.fillText('DARK VISION · HEAD CAM', 28, 58);
+      g.fillStyle = 'rgba(255,120,100,0.7)'; g.fillText(`DARK VISION · HEAD CAM · ${povState.src && povState.src.who === 'AI' ? 'AI HUNTER' : 'PLAYER'}`, 28, 58);
       povHudTex.needsUpdate = true;
     }
     drawPovHud();
@@ -9691,12 +9696,17 @@
     }
     // the offscreen pass: the monster's head cam into povRT, with every bit of renderer state put back afterwards
     const _povQ = new THREE.Quaternion(), _povFlip = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
-    function renderMonsterPov() {
+    function renderMonsterPov(src) {
       const r = renderer;
       // things that sit right in front of the head and must not be in the shot: the monster's own head and mask,
       // pop-ups and fades fixed to your eyes, the floating menu and victory panel, and the monitor itself
-      const hide = [povScreen, menuGroup, victoryGroup, mHead, ...camera.children.filter((o) => o.isMesh || o.isSprite)].filter((o) => o.visible);
+      const hide = [povScreen, menuGroup, victoryGroup, src.head, ...camera.children.filter((o) => o.isMesh || o.isSprite)].filter((o) => o.visible);
       hide.forEach((o) => { o.visible = false; });
+      // the AI can be prowling a different map from the room you're in: borrow that map's fog and moonlight for the shot
+      const swapEnv = src.map && src.map !== currentMap;
+      const fogC = scene.fog.color.getHex(), fogD = scene.fog.density, bg = scene.background.getHex();
+      const hemi = hemiLight ? [hemiLight.color.getHex(), hemiLight.groundColor.getHex(), hemiLight.intensity] : null;
+      if (swapEnv) applyEnv(mapById(src.map));
       const prevRT = r.getRenderTarget(), xrOn = r.xr.enabled, shadowAuto = r.shadowMap.autoUpdate, tone = r.toneMapping, exposure = r.toneMappingExposure;
       try {
         r.xr.enabled = false;                       // a plain camera shot, not the headset's stereo views
@@ -9711,25 +9721,37 @@
         r.shadowMap.autoUpdate = shadowAuto;
         r.toneMapping = tone; r.toneMappingExposure = exposure;
         hide.forEach((o) => { o.visible = true; });
+        if (swapEnv) {
+          scene.fog.color.setHex(fogC); scene.fog.density = fogD; scene.background.setHex(bg);
+          if (hemi) { hemiLight.color.setHex(hemi[0]); hemiLight.groundColor.setHex(hemi[1]); hemiLight.intensity = hemi[2]; }
+        }
       }
+    }
+    // whose eyes the monitor sees through: a player monster, or else the AI monster when it's hunting
+    function povSource() {
+      if (playerRole === 'monster' && !titleActive) return { head: mHead, map: currentMap, who: 'PLAYER' };
+      if (ai.active && aiRoot.visible) return { head: aiParts.head, map: ai.map, who: 'AI' };
+      return null;
     }
     function updatePov(dt) {
       povState.frame++;
       povState.t += dt;
       povMat.uniforms.uTime.value = povState.t;
-      const live = playerRole === 'monster' && !titleActive;
+      const src = povSource();
+      const live = !!src;
+      povState.src = src;
       if (live !== povState.live) { povState.live = live; povState.hudT = 0; }
       povMat.uniforms.uLive.value = live ? 1 : 0;
       povState.glow.material.opacity = live ? 0.2 : 0.07;
       if ((povState.hudT -= dt) <= 0) { povState.hudT = 0.5; drawPovHud(); }
       if (!live || currentMap !== 'waiting') return;               // the monitor only hangs in the waiting room
       // the head cam: on the monster's head at eye level, looking the way the mask faces (+z of the head)
-      mHead.updateWorldMatrix(true, false);
-      mHead.getWorldPosition(monsterPovCamera.position);
-      mHead.getWorldQuaternion(_povQ);
+      src.head.updateWorldMatrix(true, false);
+      src.head.getWorldPosition(monsterPovCamera.position);
+      src.head.getWorldQuaternion(_povQ);
       monsterPovCamera.quaternion.copy(_povQ).multiply(_povFlip);   // a camera looks down its -z
       monsterPovCamera.updateMatrixWorld(true);
-      if (povState.frame % 2 === 0) renderMonsterPov();
+      if (povState.frame % 2 === 0) renderMonsterPov(src);
     }
 
     // ---------- the shop corner: a counter, THE TRADER's board, coins earned by escaping ----------
@@ -10531,6 +10553,803 @@
     // ---------- the glass-breaking sound: windows smashed by a fist, a thrown part or the machete ----------
     cabinAudio.glass = (dist) => { gameAudio.unlock(); gameAudio.glass(dist); };
 
+    // =====================================================================
+    //  AI MONSTER: when you're a SURVIVOR and nobody is playing the MONSTER, the masked, chained ape hunts you.
+    //  It spawns on the far side of the map from you, patrols the generators, objectives and paths, stops to look
+    //  round, goes to investigate loud noises (a failed skill check, smashed glass, running), and when it reaches a
+    //  part-repaired generator or a finished objective it slashes it back. If it sees you it charges, knuckle-walking
+    //  like a gorilla, with a chase beat that builds the closer it gets. If it catches you: a third-person machete
+    //  takedown and YOU WERE CAUGHT. Switch to MONSTER and it vanishes; back to SURVIVOR and it comes back. In the
+    //  waiting room it prowls the map chosen on the big screen, so the MONSTER POV monitor shows what it sees.
+    //  (Chases and takedowns happen in VR; on the desktop it patrols and sabotages.)
+    // =====================================================================
+    const AI_SCALE = 0.85;                                  // a bit bigger than a player monster
+    const AI_HEAD_H = 0.47 * AI_SCALE + 0.05;               // eye height above the ground
+    const AI_R = 0.27;                                      // body radius for collisions and the nav grid
+    const AI_SPEED = { patrol: 1.0, investigate: 1.6, search: 1.8, chase: 2.6, chaseMax: 3.1 };
+    const AI_SIGHT = 13, AI_SIGHT_LIT = 17, AI_FOV_COS = Math.cos(THREE.MathUtils.degToRad(62)), AI_SENSE = 2.2;
+    const AI_CATCH = 0.72;
+
+    // ---------- the model: a copy of the monster (same mask, coat, chains, claws and machete) ----------
+    const aiRoot = monsterModel.clone(true);
+    aiRoot.visible = false;
+    scene.add(aiRoot);
+    const aiParts = (() => {
+      const k = aiRoot.children;
+      const torso = k[0];
+      const head = torso.children.find((c) => c.isGroup);
+      const arms = [0, 1].map((n) => {
+        const upper = k[1 + n * 3], fore = k[2 + n * 3], hand = k[3 + n * 3];
+        const wrist = fore.children[1];
+        return { side: n === 0 ? -1 : 1, upper, fore, foreSleeve: fore.children[0], wrist, hand, dangle: wrist.children[wrist.children.length - 1] };
+      });
+      return { torso, head, arms };
+    })();
+    aiRoot.scale.setScalar(AI_SCALE);
+    aiParts.head.visible = true;
+    const aiCol = { box: new THREE.Box3(new THREE.Vector3(0, -1000, 0), new THREE.Vector3(0, -1000, 0)) };   // so survivors bump into it
+    colliders.push(aiCol);
+
+    // ---------- navigation: a walkable grid per map (built once, A* paths, line-of-sight checks) ----------
+    const NAV_DEF = {
+      camp: { x0: -31, x1: 31, z0: -31, z1: 31, step: 1.5 },
+      graveyard: { x0: GRAVE.x - 15.5, x1: GRAVE.x + 15.5, z0: GRAVE.z - 15.5, z1: GRAVE.z + 15.5, step: 1 },
+      mine: { x0: MINE.x - 34, x1: MINE.x + 18.6, z0: MINE.z - 14, z1: MINE.z + 14.5, step: 1 },
+    };
+    const dynamicCols = new Set([mineCart.col, ...Object.values(escapeBoats).map((b) => b.col), aiCol]);
+    for (const c of boatColliders) dynamicCols.add(c);
+    const doorCols = new Set(doors.map((d) => d.col));
+    const paneCols = new Set(panes.map((p) => p.col).filter(Boolean));   // glass: you can be seen through it
+    const NAV = {};
+    function inAnyLake(map, x, z, pad) {
+      if (map === 'camp') return inLakeArea(x, z, pad);
+      return extraLakes.some((l) => l.map === map && x > l.x0 - pad && x < l.x1 + pad && z > l.z0 - pad && z < l.z1 + pad);
+    }
+    const groundY = (map, x, z) => (map === 'camp' ? floorAt(x, z) : 0);
+    function buildNav(map) {
+      const D = NAV_DEF[map];
+      // the solid things in this map at body height, bucketed in 2 m cells
+      const cols = colliders.filter((c) => c !== aiCol && c.box.max.y > 0.12 && c.box.min.y < 1.2 && c.box.max.x > D.x0 - 2 && c.box.min.x < D.x1 + 2 &&
+        c.box.max.z > D.z0 - 2 && c.box.min.z < D.z1 + 2 && c.box.max.y > -500);
+      const B = 2, bx0 = D.x0 - 2, bz0 = D.z0 - 2, bnx = Math.ceil((D.x1 - D.x0 + 4) / B), bnz = Math.ceil((D.z1 - D.z0 + 4) / B);
+      const buckets = Array.from({ length: bnx * bnz }, () => []);
+      for (const c of cols) {
+        const i0 = Math.max(0, Math.floor((c.box.min.x - bx0) / B)), i1 = Math.min(bnx - 1, Math.floor((c.box.max.x - bx0) / B));
+        const j0 = Math.max(0, Math.floor((c.box.min.z - bz0) / B)), j1 = Math.min(bnz - 1, Math.floor((c.box.max.z - bz0) / B));
+        for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) buckets[i * bnz + j].push(c);
+      }
+      const bucketAt = (x, z) => {
+        const i = Math.floor((x - bx0) / B), j = Math.floor((z - bz0) / B);
+        return i >= 0 && j >= 0 && i < bnx && j < bnz ? buckets[i * bnz + j] : [];
+      };
+      const nx = Math.floor((D.x1 - D.x0) / D.step) + 1, nz = Math.floor((D.z1 - D.z0) / D.step) + 1;
+      const free = new Uint8Array(nx * nz), ys = new Float32Array(nx * nz);
+      const nav = { map, D, nx, nz, free, ys, cols, bucketAt };
+      for (let i = 0; i < nx; i++) for (let j = 0; j < nz; j++) {
+        const x = D.x0 + i * D.step, z = D.z0 + j * D.step, n = i * nz + j;
+        ys[n] = groundY(map, x, z);
+        free[n] = !inAnyLake(map, x, z, 0.45) && circleFree(nav, x, z, AI_R + 0.05, ys[n], true) ? 1 : 0;
+      }
+      // keep only edges whose midpoint is clear too (checked when searching)
+      NAV[map] = nav;
+      return nav;
+    }
+    // is a circle at (x, z) clear of solid things at body height? (doors don't count for planning: it hacks through them)
+    function circleFree(nav, x, z, r, y0, planning) {
+      for (const c of nav.bucketAt(x, z)) {
+        if (planning && (doorCols.has(c) || dynamicCols.has(c))) continue;
+        const b = c.box;
+        if (b.max.y < y0 + 0.12 || b.min.y > y0 + 1.0 || b.max.y < -500) continue;
+        const dx = Math.max(b.min.x - x, 0, x - b.max.x), dz = Math.max(b.min.z - z, 0, z - b.max.z);
+        if (dx * dx + dz * dz < r * r) return false;
+      }
+      return true;
+    }
+    const nodeOf = (nav, x, z) => {
+      const i = THREE.MathUtils.clamp(Math.round((x - nav.D.x0) / nav.D.step), 0, nav.nx - 1), j = THREE.MathUtils.clamp(Math.round((z - nav.D.z0) / nav.D.step), 0, nav.nz - 1);
+      return i * nav.nz + j;
+    };
+    const nodeX = (nav, n) => nav.D.x0 + Math.floor(n / nav.nz) * nav.D.step, nodeZ = (nav, n) => nav.D.z0 + (n % nav.nz) * nav.D.step;
+    function nearestFree(nav, x, z) {                          // the closest walkable node to a point
+      const c = nodeOf(nav, x, z);
+      if (nav.free[c]) return c;
+      const ci = Math.floor(c / nav.nz), cj = c % nav.nz;
+      for (let r = 1; r < 8; r++) {
+        let best = -1, bd = Infinity;
+        for (let i = ci - r; i <= ci + r; i++) for (let j = cj - r; j <= cj + r; j++) {
+          if (i < 0 || j < 0 || i >= nav.nx || j >= nav.nz || (Math.abs(i - ci) !== r && Math.abs(j - cj) !== r)) continue;
+          const n = i * nav.nz + j; if (!nav.free[n]) continue;
+          const d = Math.hypot(nodeX(nav, n) - x, nodeZ(nav, n) - z); if (d < bd) { bd = d; best = n; }
+        }
+        if (best >= 0) return best;
+      }
+      return -1;
+    }
+    const NB = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+    function neighbours(nav, n, out) {
+      out.length = 0;
+      const i = Math.floor(n / nav.nz), j = n % nav.nz;
+      for (const [di, dj] of NB) {
+        const a = i + di, b = j + dj;
+        if (a < 0 || b < 0 || a >= nav.nx || b >= nav.nz) continue;
+        const m = a * nav.nz + b;
+        if (!nav.free[m]) continue;
+        if (di && dj && (!nav.free[a * nav.nz + j] || !nav.free[i * nav.nz + b])) continue;   // no cutting corners
+        out.push(m);
+      }
+      return out;
+    }
+    // A* (to the goal, or as close to it as can be reached)
+    const _nbr = [];
+    function findPath(nav, from, to) {
+      if (from < 0 || to < 0) return null;
+      const N = nav.nx * nav.nz, g = new Float32Array(N).fill(Infinity), came = new Int32Array(N).fill(-1), closed = new Uint8Array(N);
+      const tx = nodeX(nav, to), tz = nodeZ(nav, to);
+      const hFn = (n) => Math.hypot(nodeX(nav, n) - tx, nodeZ(nav, n) - tz);
+      const heap = [];                                           // binary heap of [f, node]
+      const push = (f, n) => { heap.push([f, n]); let i = heap.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
+      const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = i * 2 + 1, r = l + 1; let m = i; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } } return top; };
+      g[from] = 0; push(hFn(from), from);
+      let best = from, bestH = hFn(from), expanded = 0;
+      while (heap.length && expanded < 6000) {
+        const [, n] = pop();
+        if (closed[n]) continue;
+        closed[n] = 1; expanded++;
+        const h = hFn(n); if (h < bestH) { bestH = h; best = n; }
+        if (n === to) { best = n; break; }
+        for (const m of neighbours(nav, n, _nbr)) {
+          if (closed[m]) continue;
+          const cost = g[n] + Math.hypot(nodeX(nav, m) - nodeX(nav, n), nodeZ(nav, m) - nodeZ(nav, n));
+          if (cost < g[m]) { g[m] = cost; came[m] = n; push(cost + hFn(m), m); }
+        }
+      }
+      const path = [];
+      for (let n = best; n >= 0; n = came[n]) { path.push(new THREE.Vector3(nodeX(nav, n), nav.ys[n], nodeZ(nav, n))); if (n === from) break; }
+      return path.reverse();
+    }
+    // breadth-first walking distances from a node (for "the far side of the map")
+    function walkDistances(nav, from) {
+      const N = nav.nx * nav.nz, dist = new Int32Array(N).fill(-1), q = [from];
+      if (from < 0) return dist;
+      dist[from] = 0;
+      for (let h = 0; h < q.length; h++) { const n = q[h]; for (const m of neighbours(nav, n, _nbr)) if (dist[m] < 0) { dist[m] = dist[n] + 1; q.push(m); } }
+      return dist;
+    }
+    // line of sight between two points (eye to eye), through the solid things in this map
+    const _losP = new THREE.Vector3();
+    function lineOfSight(nav, a, b) {
+      const d = a.distanceTo(b), steps = Math.ceil(d / 0.2);
+      for (let k = 1; k < steps; k++) {
+        _losP.lerpVectors(a, b, k / steps);
+        for (const c of nav.bucketAt(_losP.x, _losP.z)) {
+          if (c === aiCol || paneCols.has(c) || (dynamicCols.has(c) && c !== mineCart.col)) continue;
+          if (c.box.max.y < -500) continue;
+          if (c.box.containsPoint(_losP)) return false;
+        }
+      }
+      return true;
+    }
+    function segmentWalkable(nav, a, b) {                     // straight-line shortcut check for path smoothing
+      const d = Math.hypot(b.x - a.x, b.z - a.z), steps = Math.max(1, Math.ceil(d / 0.3));
+      for (let k = 1; k <= steps; k++) {
+        const x = a.x + (b.x - a.x) * k / steps, z = a.z + (b.z - a.z) * k / steps;
+        if (inAnyLake(nav.map, x, z, 0.3) || !circleFree(nav, x, z, AI_R, groundY(nav.map, x, z), true)) return false;
+      }
+      return true;
+    }
+    for (const m of ['camp', 'graveyard', 'mine']) buildNav(m);
+    {
+      // clearing the rock fall opens the way to the cavern: rebuild the mine's grid
+      const baseClear = clearRubble;
+      clearRubble = function (...a) { const r = baseClear.apply(this, a); buildNav('mine'); return r; };
+    }
+
+    // ---------- where it likes to go ----------
+    function patrolSpots(map) {
+      const spots = [];
+      if (map === 'camp') {
+        for (const g of generators) spots.push({ p: g.pos, kind: 'gen', g });
+        spots.push({ p: new THREE.Vector3((DOCK.x0 + DOCK.x1) / 2 - 1.5, 0, (DOCK.z0 + DOCK.z1) / 2) }, { p: new THREE.Vector3(FIRE.x + 1.5, 0, FIRE.z) });
+      } else if (map === 'graveyard') {
+        for (const g of mapGens('graveyard')) spots.push({ p: g.pos, kind: 'gen', g });
+        for (const b of braziers) spots.push({ p: b.p, kind: 'brazier', b });
+        spots.push({ p: GY.altar, kind: 'altar' }, { p: new THREE.Vector3(GY.dock.x0 - 0.8, 0, (GY.dock.z0 + GY.dock.z1) / 2) }, { p: new THREE.Vector3(GRAVE.x, 0, GRAVE.z + 12) });
+      } else {
+        for (const g of mapGens('mine')) spots.push({ p: g.pos, kind: 'gen', g });
+        spots.push({ p: MN.breaker, kind: 'breaker' }, { p: new THREE.Vector3(MINE.x - 12, 0, MINE.z) }, { p: new THREE.Vector3(MINE.x + 3, 0, MINE.z - 10) },
+          { p: new THREE.Vector3(MINE.x - 20, 0, MINE.z + 3) }, { p: new THREE.Vector3(MN.ex + 4, 0, MINE.z) });
+      }
+      return spots;
+    }
+    // something worth wrecking near here? (part-repaired generators, lit braziers, skulls on the altar, pulled breakers)
+    function sabotageTarget(map, p) {
+      const near = (q, r) => Math.hypot(q.x - p.x, q.z - p.z) < r;
+      const gens = map === 'camp' ? generators : mapGens(map);
+      for (const g of gens) if (!g.running && g.progress > 0 && near(g.pos, 1.3)) return { kind: 'gen', g, at: g.pos };
+      if (map === 'graveyard') {
+        for (const b of braziers) if (b.lit && near(b.p, 1.3)) return { kind: 'brazier', b, at: b.p };
+        if (near(GY.altar, 1.6)) { const slot = altarSlots.find((s) => s.skull); if (slot) return { kind: 'skull', slot, at: GY.altar }; }
+      }
+      if (map === 'mine' && near(MN.breaker, 1.6)) { const l = levers.find((x) => x.pulled); if (l) return { kind: 'lever', l, at: MN.breaker }; }
+      return null;
+    }
+    function applySabotage(t) {
+      camera.getWorldPosition(_hCam);
+      const dist = _hCam.distanceTo(t.at);
+      gameAudio.hack(dist, 1.3);
+      if (dist < 25) horrorAudio.spark();
+      spawnChips(new THREE.Vector3(t.at.x, 0.4, t.at.z), new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 1, 0), 14, 0x9aa0a6);
+      if (t.kind === 'gen') {
+        const g = t.g;
+        g.progress = Math.max(0, g.progress - 1);
+        g.sparkT = 0.6; g.flashT = 0.6;
+        if (g.holding >= 0) releaseHandle(g);
+        updatePips(g); drawGenSign(g);
+        showToast('SOMETHING IS WRECKING A GENERATOR', `${g.site.name}: repairs knocked back to ${g.progress}/${GEN_CHECKS_NEEDED}`);
+      } else if (t.kind === 'brazier') {
+        const b = t.b;
+        b.lit = false; quest.graveyard.braziers[b.k] = false;
+        const i = lightSources.indexOf(b.src); if (i >= 0) lightSources.splice(i, 1);
+        b.src = null;
+        showToast('A BRAZIER WENT OUT', 'Something snuffed it');
+      } else if (t.kind === 'skull') {
+        const s = t.slot.skull;
+        t.slot.skull = null; t.slot.reserved = false;
+        s.placed = false; s.falling = true; s.vel.set((Math.random() - 0.5) * 3, 2, (Math.random() - 0.5) * 3); s.glow.material.color.setHex(0x7cff6a);
+        quest.graveyard.skulls = altarSlots.filter((a) => a.skull).length;
+        showToast('A SKULL WAS KNOCKED OFF THE ALTAR', `Skull relics: ${quest.graveyard.skulls}/3`);
+      } else if (t.kind === 'lever') {
+        const l = t.l;
+        l.pulled = false; quest.mine.levers[l.k] = false; l.lamp.material.emissive.setHex(0xff2010);
+        gameAudio.clunk();
+        showToast('A BREAKER WAS THROWN BACK', `Breakers on: ${quest.mine.levers.filter(Boolean).length}/3`);
+      }
+      questChanged(currentMapOf(t));
+    }
+    const currentMapOf = () => ai.map;
+
+    // ---------- the AI's state ----------
+    const ai = {
+      active: false, map: null, preview: false, state: 'patrol', pos: new THREE.Vector3(), heading: 0, speed: 0, path: [], pathT: 0, goal: null,
+      lookT: 0, look0: 0, headYaw: 0, headPitch: 0, stride: 0, slash: null, lastSeen: new THREE.Vector3(), seenT: 0, lostT: 0, chaseT: 0,
+      senseT: 0, stuckT: 0, lastPos: new THREE.Vector3(), doorT: 0, growlT: 0, stepT: 0,
+    };
+    const _aiHead = new THREE.Vector3(), _aiEye = new THREE.Vector3(), _aiTo = new THREE.Vector3(), _aiTmp = new THREE.Vector3();
+    function playerHeadPos(out) { if (renderer.xr.isPresenting && locomotionReady) return headWorld(out); return null; }
+    function spawnAI(map, preview) {
+      const nav = NAV[map]; if (!nav) return;
+      // the far side of the map, measured along the paths from where you are (or from the map's spawn)
+      const s = map === currentMap && renderer.xr.isPresenting && locomotionReady ? headWorld(_aiTmp) : (() => { const sp = map === 'camp' ? { x: 0, z: 0 } : mapById(map).spawn; return _aiTmp.set(sp.x, 0, sp.z); })();
+      const from = nearestFree(nav, s.x, s.z);
+      const dist = walkDistances(nav, from);
+      let max = 0; for (let n = 0; n < dist.length; n++) if (dist[n] > max) max = dist[n];
+      const far = []; for (let n = 0; n < dist.length; n++) if (dist[n] >= max * 0.8) far.push(n);
+      const n = far.length ? far[(Math.random() * far.length) | 0] : from;
+      ai.active = true; ai.map = map; ai.preview = preview;
+      ai.pos.set(nodeX(nav, n), nav.ys[n], nodeZ(nav, n));
+      ai.heading = Math.atan2(s.x - ai.pos.x, s.z - ai.pos.z);
+      ai.state = 'look'; ai.lookT = 1.5; ai.look0 = ai.heading; ai.path = []; ai.goal = null; ai.slash = null; ai.speed = 0;
+      ai.seenT = 0; ai.lostT = 0; ai.chaseT = 0; ai.stuckT = 0; ai.lastPos.copy(ai.pos);
+      aiRoot.visible = true;
+      chaseAudio.setTarget(0);
+    }
+    function despawnAI() {
+      ai.active = false; ai.map = null;
+      aiRoot.visible = false;
+      aiCol.box.min.set(0, -1000, 0); aiCol.box.max.set(0, -1000, 0);
+      chaseAudio.setTarget(0);
+    }
+    function goToward(p, state) {
+      const nav = NAV[ai.map];
+      const path = findPath(nav, nearestFree(nav, ai.pos.x, ai.pos.z), nearestFree(nav, p.x, p.z));
+      ai.path = path && path.length ? path.slice(1) : [];
+      if (ai.path.length) ai.path[ai.path.length - 1].copy(p).setY(groundY(ai.map, p.x, p.z));   // finish right at the spot (if it's walkable)
+      if (ai.path.length && !circleFree(nav, p.x, p.z, AI_R, 0, true)) ai.path.pop();
+      ai.state = state; ai.pathT = 0;
+      if (!ai.path.length && state !== 'chase') { ai.state = 'look'; ai.lookT = 0.8 + Math.random(); ai.look0 = ai.heading; }   // nowhere to go: look round, then try again
+    }
+    function pickPatrol() {
+      const nav = NAV[ai.map], spots = patrolSpots(ai.map);
+      // part-repaired generators and finished objectives draw it; otherwise wander between spots and random paths
+      const juicy = ai.preview ? [] : spots.filter((s) => (s.kind === 'gen' && !s.g.running && s.g.progress > 0) || (s.kind === 'brazier' && s.b.lit) ||
+        (s.kind === 'altar' && altarSlots.some((a) => a.skull)) || (s.kind === 'breaker' && levers.some((l) => l.pulled)));
+      let target;
+      if (juicy.length && Math.random() < 0.6) target = juicy[(Math.random() * juicy.length) | 0].p;
+      else if (Math.random() < 0.55) target = spots[(Math.random() * spots.length) | 0].p;
+      else {
+        for (let k = 0; k < 20; k++) { const n = (Math.random() * nav.free.length) | 0; if (nav.free[n]) { target = new THREE.Vector3(nodeX(nav, n), 0, nodeZ(nav, n)); break; } }
+        target = target || spots[0].p;
+      }
+      ai.goal = target.clone();
+      goToward(ai.goal, 'patrol');
+    }
+    // loud things the AI hears
+    function aiNoise(pos, radius, map = currentMap) {
+      if (!ai.active || ai.preview || map !== ai.map || ai.state === 'chase' || ai.state === 'catch' || ai.slash) return;
+      if (Math.hypot(pos.x - ai.pos.x, pos.z - ai.pos.z) > radius) return;
+      ai.goal = pos.clone();
+      goToward(ai.goal, 'investigate');
+      if (ai.growlT <= 0) { ai.growlT = 4; camera.getWorldPosition(_hCam); if (_hCam.distanceTo(ai.pos) < 30) gameAudio.growl(); }
+    }
+    {
+      const baseMiss = missCheck;
+      missCheck = function (g) { baseMiss(g); aiNoise(g.pos, 24, g.map || 'camp'); };
+      const baseGlass = cabinAudio.glass;
+      cabinAudio.glass = (d) => { baseGlass(d); if (playerHeadPos(_aiTo)) aiNoise(_aiTo.clone(), 22); };
+    }
+
+    // ---------- moving, colliding, hacking through doors ----------
+    function resolveCollisions(nav) {
+      let doorHit = null;
+      for (let it = 0; it < 2; it++) {
+        for (const c of nav.bucketAt(ai.pos.x, ai.pos.z)) {
+          if (c === aiCol) continue;
+          const b = c.box;
+          if (b.max.y < ai.pos.y + 0.12 || b.min.y > ai.pos.y + 1.0 || b.max.y < -500) continue;
+          const cx = THREE.MathUtils.clamp(ai.pos.x, b.min.x, b.max.x), cz = THREE.MathUtils.clamp(ai.pos.z, b.min.z, b.max.z);
+          let dx = ai.pos.x - cx, dz = ai.pos.z - cz, d = Math.hypot(dx, dz);
+          if (d >= AI_R) continue;
+          if (doorCols.has(c)) doorHit = doors.find((x) => x.col === c);
+          if (d < 1e-5) { dx = ai.pos.x - (b.min.x + b.max.x) / 2; dz = ai.pos.z - (b.min.z + b.max.z) / 2; d = Math.hypot(dx, dz) || 1; ai.pos.x += dx / d * 0.05; ai.pos.z += dz / d * 0.05; continue; }
+          ai.pos.x += (dx / d) * (AI_R - d); ai.pos.z += (dz / d) * (AI_R - d);
+        }
+      }
+      // never into the lakes
+      if (inAnyLake(ai.map, ai.pos.x, ai.pos.z, 0.25)) ai.pos.copy(ai.lastPos);
+      return doorHit;
+    }
+    function startSlash(kind, onHit, dur = 0.75) { ai.slash = { t: 0, dur, kind, onHit, hit: false }; }
+    function moveAlongPath(dt, speed) {
+      const nav = NAV[ai.map];
+      // shortcut: skip waypoints we can walk straight to
+      while (ai.path.length > 1 && segmentWalkable(nav, ai.pos, ai.path[1])) ai.path.shift();
+      const wp = ai.path[0];
+      if (!wp) return true;
+      _aiTo.set(wp.x - ai.pos.x, 0, wp.z - ai.pos.z);
+      const d = _aiTo.length();
+      if (d < 0.25) { ai.path.shift(); return ai.path.length === 0; }
+      const want = Math.atan2(_aiTo.x, _aiTo.z);
+      let dh = want - ai.heading; dh = Math.atan2(Math.sin(dh), Math.cos(dh));
+      ai.heading += THREE.MathUtils.clamp(dh, -dt * 4.5, dt * 4.5);
+      const turnSlow = THREE.MathUtils.clamp(1 - Math.abs(dh) / 1.6, 0.25, 1);
+      ai.speed += (speed * turnSlow - ai.speed) * Math.min(1, dt * 3);
+      const step = Math.min(d, ai.speed * dt);
+      ai.pos.x += Math.sin(ai.heading) * step; ai.pos.z += Math.cos(ai.heading) * step;
+      return false;
+    }
+
+    // ---------- the chase beat (its own Web Audio graph): heartbeat bass, a rising drone and strings, fast percussion ----------
+    const chaseAudio = (() => {
+      let ctx = null, out = null, noise = null, drone = null, lp = null, strings = null, sgain = null, timer = null, next = 0, beat = 0;
+      let level = 0, target = 0, intensity = 0;
+      function build() {
+        ctx = new (window.AudioContext || window.webkitAudioContext)();
+        out = ctx.createGain(); out.gain.value = 0;
+        const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -14; comp.ratio.value = 3;
+        out.connect(comp); comp.connect(ctx.destination);
+        const len = ctx.sampleRate; noise = ctx.createBuffer(1, len, ctx.sampleRate);
+        const d = noise.getChannelData(0); for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+        // the drone: low detuned saws through a filter that opens as it gets closer
+        lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 220; lp.Q.value = 5;
+        drone = ctx.createGain(); drone.gain.value = 0.14; lp.connect(drone); drone.connect(out);
+        for (const [f, det] of [[41.2, -6], [41.2, 7], [61.7, 3], [87.3, -4]]) { const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = f; o.detune.value = det; o.connect(lp); o.start(); }
+        // tense strings: two close, trembling notes that climb in pitch
+        const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 900; bp.Q.value = 0.8;
+        sgain = ctx.createGain(); sgain.gain.value = 0; bp.connect(sgain); sgain.connect(out);
+        strings = [];
+        for (const f of [220, 233.1]) {
+          const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = f;
+          const vib = ctx.createOscillator(); vib.frequency.value = 6.5; const vg = ctx.createGain(); vg.gain.value = 4; vib.connect(vg); vg.connect(o.frequency); vib.start();
+          o.connect(bp); o.start(); strings.push(o);
+        }
+      }
+      function thump(t, f, peak) {
+        const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.setValueAtTime(f, t); o.frequency.exponentialRampToValueAtTime(f * 0.55, t + 0.18);
+        const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(peak, t + 0.008); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.24);
+        o.connect(g); g.connect(out); o.start(t); o.stop(t + 0.3);
+      }
+      function tick(t, peak, f0, dec, type = 'highpass') {
+        const s = ctx.createBufferSource(); s.buffer = noise;
+        const f = ctx.createBiquadFilter(); f.type = type; f.frequency.value = f0;
+        const g = ctx.createGain(); g.gain.setValueAtTime(peak, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dec);
+        s.connect(f); f.connect(g); g.connect(out); s.start(t, Math.random() * 0.5); s.stop(t + dec + 0.02);
+      }
+      function schedule() {
+        if (!ctx) return;
+        const now = ctx.currentTime;
+        level += (target - level) * 0.06;                     // fades in and out smoothly
+        out.gain.setTargetAtTime(level * 0.8, now, 0.1);
+        const I = intensity;
+        lp.frequency.setTargetAtTime(220 + 2200 * I * I, now, 0.2);
+        sgain.gain.setTargetAtTime(0.05 * Math.min(1, I * 1.5), now, 0.3);
+        strings.forEach((o, k) => o.frequency.setTargetAtTime((k ? 233.1 : 220) * Math.pow(2, I * 7 / 12), now, 0.5));   // climbs up to a fifth
+        if (level < 0.01) { next = now + 0.05; return; }
+        const bpm = 72 + 98 * I, sp = 60 / bpm;
+        while (next < now + 0.12) {
+          const b = beat % 4;
+          // heartbeat: lub-dub on every beat
+          thump(next, 58, 0.9); thump(next + sp * 0.28, 50, 0.6);
+          // fast percussion: ticks on every eighth (sixteenths when it's close), a low tom on the off-beats
+          if (I > 0.25) { tick(next + sp * 0.5, 0.12 + 0.2 * I, 6000, 0.04); if (I > 0.6) { tick(next + sp * 0.25, 0.1 * I, 7000, 0.03); tick(next + sp * 0.75, 0.1 * I, 7000, 0.03); } }
+          if (I > 0.45 && (b === 1 || b === 3)) tick(next + sp * 0.5, 0.5 * I, 160, 0.18, 'lowpass');
+          next += sp; beat++;
+        }
+      }
+      return {
+        unlock() { try { if (!ctx) { build(); timer = setInterval(schedule, 30); next = ctx.currentTime; } ctx.resume(); } catch (e) { console.warn('Chase audio could not start:', e); } },
+        setTarget(v) { target = v; },
+        setIntensity(v) { intensity += (v - intensity) * 0.08; },
+        sting() {                                              // the catch: a shriek of strings and a slam
+          if (!ctx) return; const t = ctx.currentTime + 0.01;
+          for (const f of [880, 932, 1245]) { const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.setValueAtTime(f, t); o.frequency.linearRampToValueAtTime(f * 1.06, t + 1.2);
+            const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.06, t + 0.05); g.gain.exponentialRampToValueAtTime(0.0001, t + 1.4); o.connect(g); g.connect(ctx.destination); o.start(t); o.stop(t + 1.5); }
+          thump(t, 45, 1.2);
+        },
+      };
+    })();
+    vrButton.addEventListener('click', () => chaseAudio.unlock());
+    window.addEventListener('pointerdown', () => chaseAudio.unlock());
+    renderer.xr.addEventListener('sessionstart', () => chaseAudio.unlock());
+
+    // ---------- the takedown ----------
+    let caught = null;
+    {
+      const baseLoco = updateLocomotion;
+      updateLocomotion = function (...a) { if (caught) return; return baseLoco.apply(this, a); };   // your movement is locked
+    }
+    const gorePieces = (() => {                                  // stylised dark-red chunks
+      const N = 90, mesh = new THREE.InstancedMesh(new THREE.TetrahedronGeometry(1, 0), new THREE.MeshStandardMaterial({ color: 0x7a0606, emissive: 0x2a0000, roughness: 0.5 }), N);
+      mesh.frustumCulled = false; mesh.visible = false; scene.add(mesh);
+      return { mesh, N, p: Array.from({ length: N }, () => ({ pos: new THREE.Vector3(), v: new THREE.Vector3(), r: new THREE.Euler(), w: new THREE.Vector3(), s: 0.01, rest: false })) };
+    })();
+    const goreMist = [0, 1, 2, 3].map(() => { const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xa00808, transparent: true, opacity: 0, depthWrite: false })); s.visible = false; scene.add(s); return s; });
+    const redFlash = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 0.8), new THREE.MeshBasicMaterial({ map: vignetteTex, color: 0xff0000, transparent: true, opacity: 0, depthTest: false, depthWrite: false, fog: false }));
+    redFlash.position.set(0, 0, -0.3); redFlash.renderOrder = 9002; redFlash.visible = false; camera.add(redFlash);
+    const flashEl = document.createElement('div'); flashEl.id = 'caught-flash'; document.body.appendChild(flashEl);
+    const caughtEl = document.createElement('div'); caughtEl.id = 'caught';
+    caughtEl.innerHTML = `<div class="c-inner"><div class="c-title">YOU WERE CAUGHT</div><div class="c-sub">The monster got you.</div>
+      <div class="c-btns"><button id="c-room">RESPAWN IN WAITING ROOM</button><button id="c-retry">RETRY MAP</button></div></div>`;
+    document.body.appendChild(caughtEl);
+    {
+      const st = document.createElement('style');
+      st.textContent = `#caught-flash{position:fixed;inset:0;pointer-events:none;background:radial-gradient(ellipse at center,rgba(255,0,0,0) 30%,rgba(200,0,0,.85));opacity:0;z-index:28}
+        #caught{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;opacity:0;transition:opacity 1.2s ease;
+          background:radial-gradient(ellipse at 50% 50%,rgba(60,0,0,.55),rgba(8,0,0,.94) 75%);z-index:31;font-family:Georgia,serif;text-align:center}
+        #caught.show{opacity:1;pointer-events:auto}
+        #caught .c-title{font-size:min(11vw,128px);font-weight:bold;color:#e0140c;letter-spacing:.06em;text-shadow:0 0 30px rgba(255,0,0,.8),0 6px 0 #200}
+        #caught .c-sub{font:bold 24px "Courier New",monospace;color:#ffb0a0;margin:18px 0 30px}
+        #caught .c-btns{display:flex;gap:18px;justify-content:center;flex-wrap:wrap}
+        #caught button{font:bold 22px "Courier New",monospace;color:#f4e8d0;background:#3a0806;border:3px solid #ff6a5a;border-radius:12px;padding:14px 26px;cursor:pointer}
+        #caught button:hover{background:#7a120c}`;
+      document.head.appendChild(st);
+    }
+    document.getElementById('c-room').addEventListener('click', () => leaveCaught('waiting'));
+    document.getElementById('c-retry').addEventListener('click', () => leaveCaught('retry'));
+    const caughtGroup = new THREE.Group(); caughtGroup.visible = false; scene.add(caughtGroup);
+    const caughtPanel = makePanel(0.6, 0.34, 1024, 580, (g, p) => {
+      const W = p.cw, H = p.ch;
+      roundRect(g, 4, 4, W - 8, H - 8, 30); g.fillStyle = 'rgba(16,2,2,0.94)'; g.fill();
+      g.lineWidth = 6; g.strokeStyle = '#c0140c'; g.stroke();
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.shadowColor = 'rgba(255,0,0,0.9)'; g.shadowBlur = 26;
+      g.fillStyle = '#e8180e'; g.font = 'bold 86px Georgia, serif'; g.fillText('YOU WERE CAUGHT', W / 2, 150);
+      g.shadowBlur = 0;
+      g.fillStyle = '#ffb0a0'; g.font = 'bold 32px "Courier New", monospace'; g.fillText('The monster got you.', W / 2, 250);
+      drawButton(g, 70, 340, 430, 130, 'RESPAWN IN WAITING ROOM', { hover: uiButton(p, 'room', 70, 340, 430, 130), size: 26 });
+      drawButton(g, W - 500, 340, 430, 130, 'RETRY MAP', { hover: uiButton(p, 'retry', W - 500, 340, 430, 130), size: 36 });
+      g.textAlign = 'left';
+    }, (id) => { if (id === 'room') leaveCaught('waiting'); else if (id === 'retry') leaveCaught('retry'); }, { onTop: true });
+    caughtGroup.add(caughtPanel.mesh);
+    const _cP = new THREE.Vector3(), _cD = new THREE.Vector3();
+    function placeCaughtPanel(snap) {
+      camera.getWorldPosition(_cP); camera.getWorldDirection(_cD);
+      _cD.y = 0; if (_cD.lengthSq() < 1e-6) _cD.set(0, 0, -1); _cD.normalize();
+      const t = _cP.clone().addScaledVector(_cD, 0.5);
+      if (snap) caughtGroup.position.copy(t); else caughtGroup.position.lerp(t, 0.05);
+      caughtGroup.lookAt(_cP.x, caughtGroup.position.y, _cP.z);
+    }
+    function leaveCaught(where) {
+      if (!caught || travel) return;
+      caughtGroup.visible = false; caughtEl.classList.remove('show');
+      goTo(where === 'waiting' ? 'waiting' : caught.map);
+    }
+    function clearCaught() {
+      if (!caught) return;
+      if (caught.victim) scene.remove(caught.victim);
+      if (caught.head) scene.remove(caught.head);
+      caught = null;
+      caughtGroup.visible = false; caughtEl.classList.remove('show');
+      redFlash.visible = false; flashEl.style.opacity = 0;
+      gorePieces.mesh.visible = false; goreMist.forEach((s) => { s.visible = false; });
+    }
+    function beginCatch() {
+      if (caught) return;
+      ai.state = 'catch'; ai.path = []; ai.speed = 0;
+      const head = headWorld(new THREE.Vector3());
+      // a stand-in body for you, frozen where you were caught (you watch from outside it)
+      const victim = avatar.clone(true);
+      victim.visible = true; victim.children[1].visible = true;
+      victim.position.copy(avatar.position); victim.quaternion.copy(avatar.quaternion);
+      scene.add(victim);
+      // where the camera goes: back, up and to the side of the two of them, looking at both
+      const toV = new THREE.Vector3(head.x - ai.pos.x, 0, head.z - ai.pos.z); if (toV.lengthSq() < 1e-4) toV.set(0, 0, 1); toV.normalize();
+      const side = new THREE.Vector3(-toV.z, 0, toV.x);
+      const mid = new THREE.Vector3((head.x + ai.pos.x) / 2, Math.max(head.y, ai.pos.y + AI_HEAD_H) - 0.1, (head.z + ai.pos.z) / 2);
+      const camTo = mid.clone().addScaledVector(toV, 1.3).addScaledVector(side, 1.1); camTo.y = mid.y + 0.55;
+      caught = { t: 0, map: ai.map, victim, head: null, from: head.clone(), camTo, mid, toV, hit: false, overlay: false, turned: 0 };
+      ai.heading = Math.atan2(head.x - ai.pos.x, head.z - ai.pos.z);
+      chaseAudio.sting();
+      chaseAudio.setTarget(0);
+      gameAudio.growl();
+      controllers.forEach((c) => pulse(c, 1, 300));
+      for (const g of [...generators, ...extraGens]) if (g.holding >= 0) releaseHandle(g);
+      boat.holding = -1;
+    }
+    function takedownImpact() {
+      const C = caught;
+      C.hit = true;
+      camera.getWorldPosition(_hCam);
+      gameAudio.slice(0); gameAudio.smash(0.5); chaseAudio.sting();
+      // red flash
+      redFlash.visible = true; redFlash.material.opacity = 1;
+      flashEl.style.transition = 'none'; flashEl.style.opacity = 1; requestAnimationFrame(() => { flashEl.style.transition = 'opacity 1.2s ease'; flashEl.style.opacity = 0; });
+      controllers.forEach((c) => pulse(c, 1, 500));
+      // the split: the head and shoulders come away, the body crumples
+      const v = C.victim, headPart = v.children[1];
+      scene.attach(headPart);
+      C.head = headPart; C.headVel = new THREE.Vector3().copy(C.toV).multiplyScalar(1.2).add(new THREE.Vector3(0, 1.6, 0)); C.headSpin = new THREE.Vector3(6, 3, 4);
+      // dark red chunks and mist
+      const at = new THREE.Vector3().copy(C.from).add(new THREE.Vector3(0, -0.12, 0));
+      gorePieces.mesh.visible = true;
+      for (const q of gorePieces.p) {
+        q.pos.copy(at); q.v.set((Math.random() - 0.5) * 3, 1 + Math.random() * 2.8, (Math.random() - 0.5) * 3).addScaledVector(C.toV, 1.2);
+        q.r.set(Math.random() * 6, Math.random() * 6, Math.random() * 6); q.w.set((Math.random() - 0.5) * 20, (Math.random() - 0.5) * 20, (Math.random() - 0.5) * 20);
+        q.s = 0.008 + Math.random() * 0.02; q.rest = false;
+      }
+      goreMist.forEach((s, k) => { s.visible = true; s.position.copy(at).add(new THREE.Vector3((Math.random() - 0.5) * 0.2, k * 0.05, (Math.random() - 0.5) * 0.2)); s.scale.setScalar(0.2); s.material.opacity = 0.75; });
+    }
+    const _gM = new THREE.Matrix4(), _gQ = new THREE.Quaternion(), _gS = new THREE.Vector3();
+    function updateCatch(dt) {
+      const C = caught; if (!C) return;
+      C.t += dt;
+      // keep your real body and hands out of the shot
+      avatar.visible = false;
+      for (const h of hands) h.model.group.visible = false;
+      // pull the view back to a third-person angle (VR: carry the rig; desktop: the orbit camera)
+      const pull = THREE.MathUtils.smoothstep(C.t, 0, 1.2);
+      if (renderer.xr.isPresenting) {
+        headWorld(_aiHead);
+        _aiTo.lerpVectors(C.from, C.camTo, pull).sub(_aiHead);
+        playerRig.position.addScaledVector(_aiTo, Math.min(1, dt * 8));
+        // turn to face them
+        camera.getWorldDirection(_aiTmp);
+        const have = Math.atan2(-_aiTmp.x, -_aiTmp.z), want = Math.atan2(-(C.mid.x - C.camTo.x), -(C.mid.z - C.camTo.z));
+        let d = want - have; d = Math.atan2(Math.sin(d), Math.cos(d));
+        if (C.t < 1.6 && Math.abs(d) > 0.02) snapTurn(THREE.MathUtils.radToDeg(d * Math.min(1, dt * 3)));
+      } else {
+        camera.position.lerp(C.camTo, Math.min(1, dt * 3)); orbit.target.lerp(C.mid, Math.min(1, dt * 3)); orbit.update();
+      }
+      // the heavy overhead slash
+      if (C.t > 0.45 && !ai.slash && !C.hit) startSlash('takedown', () => takedownImpact(), 1.3);
+      // the body crumples after the hit
+      if (C.hit) {
+        const f = THREE.MathUtils.smoothstep(C.t - 1.6, 0, 0.7);
+        C.victim.rotation.x = -1.35 * f * Math.sign(C.toV.z || 1);
+        C.victim.position.y = C.from.y - 0.28 * f;
+        if (C.head) {
+          C.headVel.y -= GRAVITY * dt;
+          C.head.position.addScaledVector(C.headVel, dt);
+          C.head.rotation.x += C.headSpin.x * dt; C.head.rotation.y += C.headSpin.y * dt; C.head.rotation.z += C.headSpin.z * dt;
+          const fl = groundY(C.map, C.head.position.x, C.head.position.z) + 0.06;
+          if (C.head.position.y < fl) { C.head.position.y = fl; C.headVel.multiplyScalar(0.3); C.headVel.y = Math.abs(C.headVel.y) > 0.4 ? -C.headVel.y * 0.3 : 0; C.headSpin.multiplyScalar(0.5); }
+        }
+        for (let i = 0; i < gorePieces.N; i++) {
+          const q = gorePieces.p[i];
+          if (!q.rest) {
+            q.v.y -= GRAVITY * dt; q.pos.addScaledVector(q.v, dt);
+            q.r.x += q.w.x * dt; q.r.y += q.w.y * dt; q.r.z += q.w.z * dt;
+            const fl = groundY(C.map, q.pos.x, q.pos.z) + q.s * 0.4;
+            if (q.pos.y < fl) { q.pos.y = fl; q.rest = true; }
+          }
+          _gM.compose(q.pos, _gQ.setFromEuler(q.r), _gS.setScalar(q.s));
+          gorePieces.mesh.setMatrixAt(i, _gM);
+        }
+        gorePieces.mesh.instanceMatrix.needsUpdate = true;
+        goreMist.forEach((s) => { s.scale.multiplyScalar(1 + dt * 1.6); s.material.opacity = Math.max(0, s.material.opacity - dt * 0.5); });
+        redFlash.material.opacity = Math.max(0, redFlash.material.opacity - dt * 0.8);
+        redFlash.visible = redFlash.material.opacity > 0.01;
+      }
+      if (C.t > 3.4 && !C.overlay) {
+        C.overlay = true;
+        if (renderer.xr.isPresenting) { redrawPanel(caughtPanel); caughtGroup.visible = true; placeCaughtPanel(true); }
+        else caughtEl.classList.add('show');
+      }
+      if (caughtGroup.visible) placeCaughtPanel(false);
+    }
+    renderer.xr.addEventListener('sessionend', () => { if (caught && caught.overlay) { caughtGroup.visible = false; caughtEl.classList.add('show'); } });
+
+    // ---------- animation: gorilla knuckle-walk, looking about, the slash ----------
+    const Q_REST = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
+    function qBlade(blade, knuckles) {                       // a hand pose from where the blade (grip -Z) and the knuckles (grip -Y) point
+      const z = blade.clone().normalize().negate(), y = knuckles.clone().normalize().negate(), x = new THREE.Vector3().crossVectors(y, z);
+      return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
+    }
+    const Q_WIND = qBlade(new THREE.Vector3(0, 0.6, -0.8), new THREE.Vector3(0, 0.8, 0.6));
+    const Q_STRIKE = qBlade(new THREE.Vector3(0, -0.5, 0.86), new THREE.Vector3(0, -0.86, -0.5));
+    const P_WIND = new THREE.Vector3(-0.16, 0.34, -0.02), P_STRIKE = new THREE.Vector3(-0.1, -0.42, 0.5);
+    const _aS = new THREE.Vector3(), _aW = new THREE.Vector3(), _aQ = new THREE.Quaternion(), _aP = new THREE.Vector3();
+    function animateAI(dt, moving) {
+      const chasing = ai.state === 'chase';
+      aiRoot.position.set(ai.pos.x, ai.pos.y + AI_HEAD_H + Math.abs(Math.sin(ai.stride * Math.PI)) * (chasing ? 0.05 : 0.025), ai.pos.z);
+      aiRoot.rotation.set(chasing ? 0.18 : 0.06, ai.heading, 0, 'YXZ');
+      aiRoot.updateMatrixWorld(true);
+      // head: where it's looking
+      aiParts.head.rotation.set(ai.headPitch, THREE.MathUtils.clamp(ai.headYaw, -1.2, 1.2), 0, 'YXZ');
+      const groundLocal = -(AI_HEAD_H) / AI_SCALE;
+      for (const arm of aiParts.arms) {
+        const s = arm.side, phase = ai.stride * Math.PI + (s > 0 ? Math.PI : 0);
+        if (moving) {
+          const reach = chasing ? 0.3 : 0.2;
+          _aP.set(s * 0.3, groundLocal + 0.04 + Math.max(0, Math.sin(phase)) * (chasing ? 0.2 : 0.12), 0.2 + reach * Math.cos(phase));
+        } else {
+          _aP.set(s * 0.3, groundLocal + 0.06 + Math.sin(performance.now() * 0.002 + s) * 0.01, 0.22);
+        }
+        _aQ.copy(Q_REST);
+        if (s < 0 && ai.slash) {                              // the machete arm: wind up overhead, then a heavy downward slash
+          const f = ai.slash.t / ai.slash.dur;
+          if (f < 0.55) { const e = THREE.MathUtils.smoothstep(f, 0, 0.55); _aP.lerp(P_WIND, e); _aQ.slerp(Q_WIND, e); }
+          else { const e = THREE.MathUtils.smoothstep(f, 0.55, 0.72); _aP.copy(P_WIND).lerp(P_STRIKE, e); _aQ.copy(Q_WIND).slerp(Q_STRIKE, e); }
+        }
+        arm.hand.position.copy(_aP);
+        arm.hand.quaternion.copy(_aQ);
+        arm.hand.scale.set(s > 0 ? -HAND_SCALE : HAND_SCALE, HAND_SCALE, HAND_SCALE);
+        _aW.copy(WRIST_LOCAL).multiply(arm.hand.scale).applyQuaternion(arm.hand.quaternion).add(arm.hand.position);
+        _aS.set(s * 0.23, -0.14, -0.1);
+        solveArm(arm, _aS, _aW);
+      }
+      aiCol.box.min.set(ai.pos.x - 0.25, ai.pos.y, ai.pos.z - 0.25);
+      aiCol.box.max.set(ai.pos.x + 0.25, ai.pos.y + AI_HEAD_H + 0.08, ai.pos.z + 0.25);
+    }
+
+    // ---------- the brain ----------
+    function canSee(playerHead) {
+      if (!playerHead || caught) return false;
+      const nav = NAV[ai.map];
+      _aiEye.set(ai.pos.x, ai.pos.y + AI_HEAD_H, ai.pos.z);
+      _aiTo.subVectors(playerHead, _aiEye);
+      const d = _aiTo.length();
+      const range = flashlight.userData.on ? AI_SIGHT_LIT : AI_SIGHT;
+      if (d > range) return false;
+      if (d > AI_SENSE) {
+        const fx = Math.sin(ai.heading + ai.headYaw), fz = Math.cos(ai.heading + ai.headYaw);
+        if ((_aiTo.x * fx + _aiTo.z * fz) / Math.max(1e-4, Math.hypot(_aiTo.x, _aiTo.z)) < AI_FOV_COS) return false;
+      }
+      return lineOfSight(nav, _aiEye, playerHead);
+    }
+    let runNoiseT = 0;
+    const _ph = new THREE.Vector3();
+    function updateAI(dt) {
+      // who should be hunting? only when you're a survivor and no one is the monster
+      const mapNow = currentMap === 'waiting' ? mapSelected : currentMap;
+      const want = playerRole === 'survivor' && !titleActive && !ending && !!NAV[mapNow];
+      if (!want) { if (ai.active && !caught) despawnAI(); if (!caught) chaseAudio.setTarget(0); }
+      else if ((!ai.active || ai.map !== mapNow) && !caught && !travel) spawnAI(mapNow, currentMap === 'waiting');
+      if (caught) updateCatch(dt);
+      if (!ai.active) return;
+      ai.growlT -= dt;
+      ai.lastPos.copy(ai.pos);
+      const nav = NAV[ai.map];
+      const live = !ai.preview && ai.map === currentMap;
+      const ph = live && renderer.xr.isPresenting && locomotionReady && !caught ? headWorld(_ph) : null;
+      // running makes noise
+      if (ph && (runNoiseT -= dt) <= 0 && Math.hypot(rigVelocity.x, rigVelocity.z) > 2.0) { runNoiseT = 0.7; aiNoise(ph.clone(), 9); }
+      // eyes
+      if ((ai.senseT -= dt) <= 0 && ai.state !== 'catch') {
+        ai.senseT = 0.12;
+        if (canSee(ph)) {
+          if (ai.state !== 'chase') { ai.state = 'chase'; ai.chaseT = 0; ai.slash = null; gameAudio.growl(); ai.path = []; ai.pathT = 0; }
+          ai.lastSeen.copy(ph); ai.lostT = 0;
+        } else if (ai.state === 'chase') ai.lostT += 0.12;
+      }
+      let moving = false;
+      if (ai.slash) {                                          // mid-swing: stand and strike
+        ai.slash.t += dt;
+        ai.speed = 0;
+        if (!ai.slash.hit && ai.slash.t > ai.slash.dur * 0.68) { ai.slash.hit = true; ai.slash.onHit?.(); }
+        if (ai.slash.t >= ai.slash.dur) ai.slash = null;
+      } else if (ai.state === 'catch') {
+        ai.speed = 0;
+      } else if (ai.state === 'chase') {
+        ai.chaseT += dt;
+        if (ai.lostT > 3.5) {                                  // they broke line of sight: go and search where they were last seen
+          goToward(ai.lastSeen, 'search');
+        } else {
+          const target = ph && canSeeCached() ? ph : ai.lastSeen;
+          if ((ai.pathT -= dt) <= 0) {
+            ai.pathT = 0.35;
+            if (segmentWalkable(nav, ai.pos, target)) ai.path = [new THREE.Vector3(target.x, groundY(ai.map, target.x, target.z), target.z)];
+            else { const p = findPath(nav, nearestFree(nav, ai.pos.x, ai.pos.z), nearestFree(nav, target.x, target.z)); ai.path = p && p.length > 1 ? p.slice(1) : [new THREE.Vector3(target.x, 0, target.z)]; }
+          }
+          moveAlongPath(dt, Math.min(AI_SPEED.chaseMax, AI_SPEED.chase + ai.chaseT * 0.08));
+          moving = true;
+          if (ph) {
+            const dh = Math.hypot(ph.x - ai.pos.x, ph.z - ai.pos.z), dy = ph.y - (ai.pos.y + AI_HEAD_H);
+            if (dh < AI_CATCH && Math.abs(dy) < 0.9) beginCatch();
+          }
+        }
+      } else {
+        // patrol / investigate / search: walk the path, then stop and look round (and wreck what's there)
+        const speed = ai.state === 'investigate' ? AI_SPEED.investigate : ai.state === 'search' ? AI_SPEED.search : AI_SPEED.patrol;
+        if (ai.state === 'look') {
+          ai.lookT -= dt;
+          ai.speed = 0;
+          if (ai.lookT <= 0) pickPatrol();
+        } else {
+          const arrived = moveAlongPath(dt, speed);
+          moving = !arrived;
+          if (arrived) {
+            const t = !ai.preview ? sabotageTarget(ai.map, ai.pos) : null;
+            if (t) {
+              ai.heading = Math.atan2(t.at.x - ai.pos.x, t.at.z - ai.pos.z);
+              startSlash('sabotage', () => applySabotage(t));
+            }
+            ai.state = 'look'; ai.lookT = 2 + Math.random() * 2.5; ai.look0 = ai.heading;
+          }
+        }
+        if (ai.state === 'patrol' && !ai.path.length && !ai.slash && ai.state !== 'look') pickPatrol();
+      }
+      // collisions, and a closed door in the way gets hacked open
+      const door = resolveCollisions(nav);
+      if (door && !door.broken && !ai.slash && moving && (ai.doorT -= dt) <= 0) {
+        ai.doorT = 0.2;
+        ai.heading = Math.atan2(door.hinge.x - ai.pos.x, door.hinge.z - ai.pos.z);
+        startSlash('door', () => {
+          door.hackHits = (door.hackHits || 0) + 1;
+          camera.getWorldPosition(_hCam);
+          gameAudio.hack(_hCam.distanceTo(door.hinge), 1.2);
+          spawnChips(new THREE.Vector3(ai.pos.x, 0.5, ai.pos.z).lerp(door.hinge, 0.5), new THREE.Vector3(0, 1, 0), new THREE.Vector3(Math.sin(ai.heading), 0, Math.cos(ai.heading)), 14, 0xd8b488);
+          if (door.hackHits >= 3) breakDoor(door, new THREE.Vector3(Math.sin(ai.heading), 0, Math.cos(ai.heading)));
+        }, 0.7);
+      }
+      // stuck? pick somewhere else
+      if (moving && ai.pos.distanceTo(ai.lastPos) < dt * 0.15) { if ((ai.stuckT += dt) > 2.5) { ai.stuckT = 0; if (ai.state !== 'chase') pickPatrol(); else ai.pathT = 0; } } else ai.stuckT = 0;
+      ai.pos.y = groundY(ai.map, ai.pos.x, ai.pos.z);
+      // knuckle-walk stride follows the ground covered
+      const moved = Math.hypot(ai.pos.x - ai.lastPos.x, ai.pos.z - ai.lastPos.z);
+      const prevStride = ai.stride;
+      ai.stride += moved / (ai.state === 'chase' ? 0.75 : 0.55);
+      if (Math.floor(ai.stride) !== Math.floor(prevStride) && live) {                       // a heavy knuckle-plant
+        camera.getWorldPosition(_hCam);
+        const d = _hCam.distanceTo(ai.pos);
+        if (d < 14) gameAudio.thud(d);
+      }
+      // looking: at you when chasing, sweeping when stopped, ahead when walking
+      let wantYaw = 0, wantPitch = 0.05;
+      if (ai.state === 'chase' && ph) {
+        let d = Math.atan2(ph.x - ai.pos.x, ph.z - ai.pos.z) - ai.heading; wantYaw = Math.atan2(Math.sin(d), Math.cos(d));
+        wantPitch = -Math.atan2(ph.y - (ai.pos.y + AI_HEAD_H), Math.hypot(ph.x - ai.pos.x, ph.z - ai.pos.z));
+      } else if (ai.state === 'look') wantYaw = Math.sin(performance.now() * 0.0011) * 1.1;
+      else if (ai.state === 'catch' && caught) { wantPitch = 0.2; }
+      ai.headYaw += (wantYaw - ai.headYaw) * Math.min(1, dt * 4);
+      ai.headPitch += (wantPitch - ai.headPitch) * Math.min(1, dt * 4);
+      animateAI(dt, moving);
+      // the chase beat: louder and faster the closer it gets; fades when you get away
+      if (live && ai.state === 'chase' && ph) {
+        chaseAudio.setTarget(1);
+        chaseAudio.setIntensity(THREE.MathUtils.clamp(1 - Math.hypot(ph.x - ai.pos.x, ph.z - ai.pos.z) / 12, 0.15, 1));
+      } else if (!caught) { chaseAudio.setTarget(0); chaseAudio.setIntensity(0); }
+    }
+    function canSeeCached() { return ai.lostT === 0; }
+    {
+      // arriving anywhere: clear a takedown, and the AI starts over (on the far side of the map from you)
+      const baseArrive = arrive;
+      arrive = function (id) {
+        clearCaught();
+        despawnAI();
+        baseArrive(id);
+      };
+    }
+
 
     // ---------- XR session hooks ----------
     renderer.xr.addEventListener('sessionstart', () => {
@@ -10591,6 +11410,7 @@
         controllers.forEach(updatePointer);
         updateUI(); // map screen + settings menu: controller rays / trigger, menu button (B / Y)
         updateGameExtras(dt); // floating, new-map quests, escape boats, sunrise ending, MONSTER POV, shop, machete
+        updateAI(dt); // the AI monster: patrols, sabotage, chases (with the chase beat) and the takedown
       } catch (err) {
         if (!loopErrorReported) {
           loopErrorReported = true;
