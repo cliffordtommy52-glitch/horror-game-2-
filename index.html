@@ -8965,6 +8965,13 @@
           tone(t, 85, 40, 0.5 * a, 0.14);
           burst(t, { type: 'lowpass', f0: 260, f1: 90, peak: 0.45 * a, decay: 0.1 });
         },
+        squelch(dist = 0, strength = 1) {             // something wet and heavy: a slap, a gurgle, a slither
+          if (!ok()) return; const t = ctx.currentTime + 0.005, a = att(dist) * Math.min(1.5, strength);
+          burst(t, { type: 'lowpass', f0: 700, f1: 160, q: 4, peak: 0.7 * a, attack: 0.004, decay: 0.16 });
+          burst(t + 0.03, { f0: 420, f1: 900, q: 8, peak: 0.35 * a, attack: 0.02, decay: 0.22 });
+          for (let k = 0; k < 4; k++) { const tt = t + 0.06 + Math.random() * 0.3; tone(tt, 180 + Math.random() * 160, 90, 0.12 * a, 0.08 + Math.random() * 0.08); }
+          burst(t + 0.1, { type: 'lowpass', f0: 300, f1: 120, q: 2, peak: 0.25 * a, attack: 0.05, decay: 0.45 });
+        },
         growl() {                                      // the "you can't do that" warning: a low, wet growl and a dull double buzz
           if (!ok()) return; const t = ctx.currentTime + 0.01;
           const o = ctx.createOscillator(); o.type = 'sawtooth';
@@ -10563,8 +10570,9 @@
     //  waiting room it prowls the map chosen on the big screen, so the MONSTER POV monitor shows what it sees.
     //  (Chases and takedowns happen in VR; on the desktop it patrols and sabotages.)
     // =====================================================================
-    const AI_SCALE = 0.85;                                  // a bit bigger than a player monster
-    const AI_HEAD_H = 0.47 * AI_SCALE + 0.05;               // eye height above the ground
+    const AI_SCALE = 1.0;                                   // bigger than a player monster: it towers over a survivor
+    const AI_TORSO = new THREE.Vector3(1.24, 1.14, 1.2);    // a broader, taller chest and shoulders
+    const AI_HEAD_H = (0.47 * AI_TORSO.y + 0.02) * AI_SCALE + 0.03;   // eye height above the ground
     const AI_R = 0.27;                                      // body radius for collisions and the nav grid
     const AI_SPEED = { patrol: 1.0, investigate: 1.6, search: 1.8, chase: 2.6, chaseMax: 3.1 };
     const AI_SIGHT = 13, AI_SIGHT_LIT = 17, AI_FOV_COS = Math.cos(THREE.MathUtils.degToRad(62)), AI_SENSE = 2.2;
@@ -10587,6 +10595,36 @@
     })();
     aiRoot.scale.setScalar(AI_SCALE);
     aiParts.head.visible = true;
+    // the bigger torso: scaled round your eye line, the head kept at its own size and right at the eyes
+    aiParts.torso.scale.copy(AI_TORSO);
+    aiParts.torso.position.set(0, -0.47 * AI_TORSO.y, -0.07 * AI_TORSO.z);
+    aiParts.head.scale.set(1 / AI_TORSO.x, 1 / AI_TORSO.y, 1 / AI_TORSO.z);
+    // a cold moonlight rim on every surface (a fresnel edge glow) so its silhouette reads against dark trees and fog
+    const aiRim = { color: new THREE.Color(0x9ab8ff), strength: { value: 0.55 } };
+    aiRoot.traverse((o) => {
+      if (!o.isMesh || !o.material || !o.material.isMeshStandardMaterial) return;
+      const m = o.material.clone();
+      m.onBeforeCompile = (sh) => {
+        sh.uniforms.uRimColor = { value: aiRim.color }; sh.uniforms.uRimStrength = aiRim.strength;
+        sh.fragmentShader = 'uniform vec3 uRimColor;\nuniform float uRimStrength;\n' + sh.fragmentShader.replace('#include <emissivemap_fragment>',
+          '#include <emissivemap_fragment>\n  { float rimF = 1.0 - clamp(abs(dot(normalize(normal), normalize(vViewPosition))), 0.0, 1.0); totalEmissiveRadiance += uRimColor * pow(rimF, 2.6) * uRimStrength; }');
+      };
+      m.customProgramCacheKey = () => 'grimape-ai-rim';
+      o.material = m;
+    });
+    // a faint red glow deep in the black eye sockets of the mask (seen through the fog)
+    {
+      const sockets = aiParts.head.children.filter((o) => o.isMesh && o.material.isMeshBasicMaterial && o.material.color.getHex() === 0x050404);
+      for (const sk of sockets) {
+        const eye = new THREE.Mesh(new THREE.SphereGeometry(0.0075, 10, 8), new THREE.MeshBasicMaterial({ color: 0xff2a12, fog: false }));
+        const out = sk.position.clone().normalize();
+        eye.position.copy(sk.position).addScaledVector(out, 0.006);
+        aiParts.head.add(eye);
+        const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xff2010, transparent: true, opacity: 0.42, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+        glow.scale.set(0.07, 0.07, 1); glow.position.copy(eye.position).addScaledVector(out, 0.006);
+        aiParts.head.add(glow);
+      }
+    }
     const aiCol = { box: new THREE.Box3(new THREE.Vector3(0, -1000, 0), new THREE.Vector3(0, -1000, 0)) };   // so survivors bump into it
     colliders.push(aiCol);
 
@@ -10865,7 +10903,7 @@
     }
     // loud things the AI hears
     function aiNoise(pos, radius, map = currentMap) {
-      if (!ai.active || ai.preview || map !== ai.map || ai.state === 'chase' || ai.state === 'catch' || ai.slash) return;
+      if (!ai.active || ai.preview || map !== ai.map || ai.state === 'chase' || ai.state === 'stare' || ai.state === 'catch' || ai.slash) return;
       if (Math.hypot(pos.x - ai.pos.x, pos.z - ai.pos.z) > radius) return;
       ai.goal = pos.clone();
       goToward(ai.goal, 'investigate');
@@ -10979,6 +11017,15 @@
         unlock() { try { if (!ctx) { build(); timer = setInterval(schedule, 30); next = ctx.currentTime; } ctx.resume(); } catch (e) { console.warn('Chase audio could not start:', e); } },
         setTarget(v) { target = v; },
         setIntensity(v) { intensity += (v - intensity) * 0.08; },
+        heartbeat(vol = 1) {                                   // one deep, slow lub-dub, felt more than heard
+          if (!ctx) return; const t = ctx.currentTime + 0.02;
+          const g0 = ctx.createGain(); g0.gain.value = Math.max(0.05, vol) * 1.4; g0.connect(ctx.destination);
+          for (const [d, f, pk] of [[0, 46, 1], [0.32, 40, 0.7]]) {
+            const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.setValueAtTime(f, t + d); o.frequency.exponentialRampToValueAtTime(f * 0.5, t + d + 0.3);
+            const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t + d); g.gain.linearRampToValueAtTime(pk, t + d + 0.012); g.gain.exponentialRampToValueAtTime(0.0001, t + d + 0.38);
+            o.connect(g); g.connect(g0); o.start(t + d); o.stop(t + d + 0.42);
+          }
+        },
         sting() {                                              // the catch: a shriek of strings and a slam
           if (!ctx) return; const t = ctx.currentTime + 0.01;
           for (const f of [880, 932, 1245]) { const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.setValueAtTime(f, t); o.frequency.linearRampToValueAtTime(f * 1.06, t + 1.2);
@@ -10997,12 +11044,117 @@
       const baseLoco = updateLocomotion;
       updateLocomotion = function (...a) { if (caught) return; return baseLoco.apply(this, a); };   // your movement is locked
     }
-    const gorePieces = (() => {                                  // stylised dark-red chunks
-      const N = 90, mesh = new THREE.InstancedMesh(new THREE.TetrahedronGeometry(1, 0), new THREE.MeshStandardMaterial({ color: 0x7a0606, emissive: 0x2a0000, roughness: 0.5 }), N);
-      mesh.frustumCulled = false; mesh.visible = false; scene.add(mesh);
-      return { mesh, N, p: Array.from({ length: N }, () => ({ pos: new THREE.Vector3(), v: new THREE.Vector3(), r: new THREE.Euler(), w: new THREE.Vector3(), s: 0.01, rest: false })) };
+    // the organs that spill out (built once, procedurally: wet, glossy, lumpy and veined; reused every takedown)
+    const gore = (() => {
+      const wet = (color, rough = 0.2) => new THREE.MeshStandardMaterial({ color, roughness: rough, metalness: 0.08 });
+      const radial = (geo, fn) => {                      // reshape a sphere-ish geometry vertex by vertex
+        const p = geo.attributes.position, v = new THREE.Vector3();
+        for (let i = 0; i < p.count; i++) { v.fromBufferAttribute(p, i); fn(v); p.setXYZ(i, v.x, v.y, v.z); }
+        geo.computeVertexNormals(); return geo;
+      };
+      // a tube whose radius changes along it (for the stomach and bowel)
+      function shapedTube(curve, segs, radial, rFn, closedEnds = true) {
+        const geo = new THREE.TubeGeometry(curve, segs, 1, radial, false);
+        const p = geo.attributes.position, c = new THREE.Vector3(), v = new THREE.Vector3();
+        for (let i = 0; i <= segs; i++) {
+          const t = i / segs; curve.getPointAt(t, c); const r = rFn(t);
+          for (let j = 0; j <= radial; j++) { const k = i * (radial + 1) + j; v.fromBufferAttribute(p, k).sub(c).multiplyScalar(r).add(c); p.setXYZ(k, v.x, v.y, v.z); }
+        }
+        geo.computeVertexNormals();
+        return geo;
+      }
+      const organs = [];
+      const add = (obj, half, kind) => { obj.visible = false; obj.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } }); scene.add(obj); organs.push({ obj, half, kind, pos: new THREE.Vector3(), vel: new THREE.Vector3(), spin: new THREE.Vector3(), rest: false }); };
+      // liver: a dark, glossy wedge with a big right lobe, a small left lobe, a notch and the green gallbladder under it
+      {
+        const g = new THREE.Group();
+        const geo = radial(new THREE.SphereGeometry(1, 36, 24), (v) => {
+          v.x *= 0.05; v.z *= 0.034;
+          v.y *= 0.024 * THREE.MathUtils.clamp(1 - 0.55 * (v.x / 0.05), 0.35, 1.35);     // thick right lobe tapering to a thin left one
+          if (Math.abs(v.x + 0.004) < 0.006 && v.y > 0) v.y *= 0.7;                    // the notch between the lobes
+          v.y += Math.sin(v.x * 140) * 0.0012 + Math.sin(v.z * 170) * 0.0009;           // gentle surface ripples
+        });
+        g.add(new THREE.Mesh(geo, wet(0x4e0f0b, 0.16)));
+        const gb = new THREE.Mesh(radial(new THREE.SphereGeometry(1, 16, 12), (v) => { v.x *= 0.008; v.y *= 0.007; v.z *= 0.016; }), wet(0x3d5a1e, 0.12));
+        gb.position.set(0.012, -0.018, 0.01); g.add(gb);
+        for (let k = 0; k < 4; k++) {                                                     // vessels on the surface
+          const c = new THREE.CatmullRomCurve3([new THREE.Vector3(-0.01 + k * 0.012, 0.022, -0.02), new THREE.Vector3(0.0 + k * 0.01, 0.026, 0), new THREE.Vector3(0.012 + k * 0.008, 0.021, 0.022)]);
+          g.add(new THREE.Mesh(new THREE.TubeGeometry(c, 10, 0.0012, 4, false), wet(0x2a0605, 0.3)));
+        }
+        add(g, 0.024, 'liver');
+      }
+      // stomach: a J-shaped, pinkish sac with folds, and a stump of oesophagus
+      {
+        const g = new THREE.Group();
+        const curve = new THREE.CatmullRomCurve3([new THREE.Vector3(0.0, 0.045, 0), new THREE.Vector3(0.012, 0.012, 0.002), new THREE.Vector3(0.0, -0.022, 0.0),
+          new THREE.Vector3(-0.03, -0.03, -0.002), new THREE.Vector3(-0.05, -0.012, 0)]);
+        const geo = shapedTube(curve, 40, 14, (t) => 0.008 + 0.022 * Math.sin(Math.min(1, t * 1.25) * Math.PI) * (t < 0.15 ? 0.4 : 1));
+        radial(geo, (v) => { v.x += Math.sin(v.y * 600) * 0.0008; });                    // rugae folds
+        g.add(new THREE.Mesh(geo, wet(0xc98276, 0.24)));
+        const oes = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.0075, 0.03, 10), wet(0xb86a62, 0.3)); oes.position.set(0, 0.06, 0); g.add(oes);
+        add(g, 0.02, 'stomach');
+      }
+      // lungs: two spongy, mottled pink lobes with the windpipe and its rings, and the bronchi
+      {
+        const g = new THREE.Group();
+        for (const s of [-1, 1]) {
+          const geo = radial(new THREE.SphereGeometry(1, 30, 22), (v) => {
+            const top = (v.y + 1) / 2;                                                    // 0 at the base, 1 at the apex
+            v.x *= 0.022 * (1.05 - 0.5 * top); v.z *= 0.024 * (1.05 - 0.45 * top); v.y *= 0.044;
+            if (v.x * s < 0) v.x *= 0.55;                                                 // flat inner face
+            const sp = Math.sin(v.x * 900) * Math.sin(v.y * 820) * Math.sin(v.z * 870);   // spongy texture
+            v.multiplyScalar(1 + sp * 0.035);
+          });
+          const lobe = new THREE.Mesh(geo, wet(s < 0 ? 0xd47680 : 0xcc6c78, 0.48));
+          lobe.position.set(s * 0.024, 0, 0); g.add(lobe);
+          for (let k = 0; k < 6; k++) {                                                   // darker mottling
+            const m = new THREE.Mesh(new THREE.SphereGeometry(0.004 + Math.random() * 0.004, 8, 6), wet(0x8a3a44, 0.5));
+            m.position.set(s * (0.03 + Math.random() * 0.008), -0.03 + Math.random() * 0.06, (Math.random() - 0.5) * 0.03); m.scale.set(1, 1, 0.35); g.add(m);
+          }
+          const br = new THREE.CatmullRomCurve3([new THREE.Vector3(0, 0.03, 0), new THREE.Vector3(s * 0.01, 0.018, 0), new THREE.Vector3(s * 0.018, 0.006, 0)]);
+          g.add(new THREE.Mesh(new THREE.TubeGeometry(br, 8, 0.0035, 6, false), wet(0xe6cdc2, 0.35)));
+        }
+        const tr = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.005, 0.04, 10), wet(0xe9d2c8, 0.35)); tr.position.set(0, 0.05, 0); g.add(tr);
+        for (let k = 0; k < 5; k++) { const r = new THREE.Mesh(new THREE.TorusGeometry(0.0055, 0.0012, 4, 12), wet(0xf2e2da, 0.3)); r.rotation.x = Math.PI / 2; r.position.set(0, 0.036 + k * 0.007, 0); g.add(r); }
+        add(g, 0.045, 'lungs');
+      }
+      // heart: dark red, with the stumps of its great vessels and coronary arteries
+      {
+        const g = new THREE.Group();
+        g.add(new THREE.Mesh(radial(new THREE.SphereGeometry(1, 24, 18), (v) => { v.x *= 0.016 * (1 - 0.35 * Math.max(0, -v.y)); v.z *= 0.014; v.y *= 0.022; v.x += 0.002 * v.y * 40; }), wet(0x7a120e, 0.18)));
+        for (const [x, r, c] of [[-0.004, 0.0045, 0xa02a22], [0.005, 0.0038, 0x6a4a8a], [0.0, 0.003, 0x9a2a22]]) { const v = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 0.016, 10), wet(c, 0.25)); v.position.set(x, 0.026, 0); v.rotation.z = x * 30; g.add(v); }
+        const cor = new THREE.CatmullRomCurve3([new THREE.Vector3(-0.012, 0.01, 0.012), new THREE.Vector3(0, 0.0, 0.015), new THREE.Vector3(0.008, -0.014, 0.011)]);
+        g.add(new THREE.Mesh(new THREE.TubeGeometry(cor, 10, 0.0012, 4, false), wet(0xd8c070, 0.4)));
+        add(g, 0.02, 'heart');
+      }
+      // kidneys: two dark beans
+      for (const s of [-1, 1]) {
+        const k = new THREE.Mesh(radial(new THREE.SphereGeometry(1, 20, 14), (v) => { v.x *= 0.012; v.y *= 0.02; v.z *= 0.009; if (v.x * s < -0.006) v.x *= 0.6; }), wet(0x5a1812, 0.2));
+        add(k, 0.01, 'kidney');
+      }
+      // large bowel: a short, bulging (haustra) loop
+      {
+        const pts = []; for (let k = 0; k < 7; k++) pts.push(new THREE.Vector3(Math.cos(k * 0.9) * 0.04, Math.sin(k * 1.3) * 0.008, Math.sin(k * 0.9) * 0.04 + k * 0.004));
+        const curve = new THREE.CatmullRomCurve3(pts);
+        add(new THREE.Mesh(shapedTube(curve, 70, 10, (t) => 0.01 + 0.004 * Math.abs(Math.sin(t * Math.PI * 9))), wet(0xb57866, 0.26)), 0.016, 'bowel');
+      }
+      // the small intestine is a rope (simulated below), so it spills out still attached to the wound
+      const ropeN = 22, rope = { n: ropeN, seg: 0.03, p: Array.from({ length: ropeN }, () => new THREE.Vector3()), q: Array.from({ length: ropeN }, () => new THREE.Vector3()) };
+      const ropeMat = wet(0xdca08e, 0.22);
+      rope.mesh = new THREE.Mesh(new THREE.BufferGeometry(), ropeMat); rope.mesh.visible = false; rope.mesh.frustumCulled = false; rope.mesh.castShadow = true; scene.add(rope.mesh);
+      // blood: drips falling from the wound and the organs (they splat on the ground), and a spreading pool
+      const DN = 160;
+      const drips = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 6, 5), wet(0x6e0000, 0.08), DN);
+      drips.frustumCulled = false; drips.visible = false; scene.add(drips);
+      const dp = Array.from({ length: DN }, () => ({ pos: new THREE.Vector3(), vel: new THREE.Vector3(), on: false, splat: false, s: 0.004 }));
+      const poolGeo = radial(new THREE.CircleGeometry(1, 28), (v) => { const a = Math.atan2(v.y, v.x); v.multiplyScalar(1 + 0.18 * Math.sin(a * 5) + 0.1 * Math.sin(a * 9 + 1)); });
+      const pool = new THREE.Mesh(poolGeo, new THREE.MeshStandardMaterial({ color: 0x3a0000, roughness: 0.05, metalness: 0.25, transparent: true, opacity: 0.92, polygonOffset: true, polygonOffsetFactor: -2 }));
+      pool.rotation.x = -Math.PI / 2; pool.visible = false; scene.add(pool);
+      // the gash across the torso
+      const gash = new THREE.Mesh(radial(new THREE.SphereGeometry(1, 16, 8), (v) => { v.x *= 0.11; v.y *= 0.012; v.z *= 0.012; }), new THREE.MeshStandardMaterial({ color: 0x4a0000, emissive: 0x1a0000, roughness: 0.1 }));
+      gash.visible = false;
+      return { organs, rope, drips, dp, pool, gash, nextDrip: 0 };
     })();
-    const goreMist = [0, 1, 2, 3].map(() => { const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xa00808, transparent: true, opacity: 0, depthWrite: false })); s.visible = false; scene.add(s); return s; });
     const redFlash = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 0.8), new THREE.MeshBasicMaterial({ map: vignetteTex, color: 0xff0000, transparent: true, opacity: 0, depthTest: false, depthWrite: false, fog: false }));
     redFlash.position.set(0, 0, -0.3); redFlash.renderOrder = 9002; redFlash.visible = false; camera.add(redFlash);
     const flashEl = document.createElement('div'); flashEl.id = 'caught-flash'; document.body.appendChild(flashEl);
@@ -11055,28 +11207,46 @@
     }
     function clearCaught() {
       if (!caught) return;
-      if (caught.victim) scene.remove(caught.victim);
-      if (caught.head) scene.remove(caught.head);
+      const C = caught;
+      if (C.pivot) scene.remove(C.pivot);
+      if (C.light) { const i = lightSources.indexOf(C.light); if (i >= 0) lightSources.splice(i, 1); }
+      if (C.env) {
+        scene.fog.color.setHex(C.env.fog); scene.fog.density = C.env.dens;
+        if (hemiLight) { hemiLight.color.setHex(C.env.hemi[0]); hemiLight.groundColor.setHex(C.env.hemi[1]); hemiLight.intensity = C.env.hemi[2]; }
+      }
       caught = null;
       caughtGroup.visible = false; caughtEl.classList.remove('show');
       redFlash.visible = false; flashEl.style.opacity = 0;
-      gorePieces.mesh.visible = false; goreMist.forEach((s) => { s.visible = false; });
+      travelFade.visible = false; travelFadeMat.opacity = 0;
+      for (const o of gore.organs) o.obj.visible = false;
+      gore.rope.mesh.visible = false; gore.drips.visible = false; gore.pool.visible = false;
+      if (gore.gash.parent) gore.gash.parent.remove(gore.gash);
     }
     function beginCatch() {
       if (caught) return;
-      ai.state = 'catch'; ai.path = []; ai.speed = 0;
+      ai.state = 'catch'; ai.path = []; ai.speed = 0; ai.slash = null;
       const head = headWorld(new THREE.Vector3());
-      // a stand-in body for you, frozen where you were caught (you watch from outside it)
+      const gy = groundY(ai.map, head.x, head.z);
+      const toV = new THREE.Vector3(head.x - ai.pos.x, 0, head.z - ai.pos.z); if (toV.lengthSq() < 1e-4) toV.set(0, 0, 1); toV.normalize();
+      // a stand-in body for you, frozen where you were caught and turned to face the monster (you watch from outside it)
       const victim = avatar.clone(true);
       victim.visible = true; victim.children[1].visible = true;
-      victim.position.copy(avatar.position); victim.quaternion.copy(avatar.quaternion);
-      scene.add(victim);
-      // where the camera goes: back, up and to the side of the two of them, looking at both
-      const toV = new THREE.Vector3(head.x - ai.pos.x, 0, head.z - ai.pos.z); if (toV.lengthSq() < 1e-4) toV.set(0, 0, 1); toV.normalize();
+      victim.position.copy(avatar.position);
+      const faceYaw = Math.atan2(toV.x, toV.z);                  // its -z (the front) towards the monster
+      victim.children[0].rotation.set(0, faceYaw, 0);
+      victim.children[1].quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), faceYaw);
+      victim.children[1].position.set(0, 0, 0);
+      const pivot = new THREE.Group();                           // it falls over about its feet
+      pivot.position.set(head.x, gy, head.z); pivot.rotation.set(0, faceYaw, 0, 'YXZ');
+      scene.add(pivot); pivot.attach(victim);
+      // the close third-person horror angle: low, to one side, both of them in frame
       const side = new THREE.Vector3(-toV.z, 0, toV.x);
-      const mid = new THREE.Vector3((head.x + ai.pos.x) / 2, Math.max(head.y, ai.pos.y + AI_HEAD_H) - 0.1, (head.z + ai.pos.z) / 2);
-      const camTo = mid.clone().addScaledVector(toV, 1.3).addScaledVector(side, 1.1); camTo.y = mid.y + 0.55;
-      caught = { t: 0, map: ai.map, victim, head: null, from: head.clone(), camTo, mid, toV, hit: false, overlay: false, turned: 0 };
+      const mid = new THREE.Vector3((head.x + ai.pos.x) / 2, (head.y + ai.pos.y + AI_HEAD_H) / 2 - 0.04, (head.z + ai.pos.z) / 2);
+      const camTo = mid.clone().addScaledVector(side, 0.95).addScaledVector(toV, 0.3); camTo.y = mid.y + 0.12;
+      const env = { fog: scene.fog.color.getHex(), dens: scene.fog.density, hemi: hemiLight ? [hemiLight.color.getHex(), hemiLight.groundColor.getHex(), hemiLight.intensity] : [0, 0, 0] };
+      const light = { x: mid.x, y: mid.y + 0.6, z: mid.z, color: 0xff1a10, intensity: 6, distance: 7, weight: 9 };
+      lightSources.push(light);
+      caught = { t: 0, map: ai.map, victim, pivot, from: head.clone(), gy, camTo, mid, toV, side, hit: false, overlay: false, env, light, shake: new THREE.Vector3(), shakeT: 0, beats: 0, fall: 0 };
       ai.heading = Math.atan2(head.x - ai.pos.x, head.z - ai.pos.z);
       chaseAudio.sting();
       chaseAudio.setTarget(0);
@@ -11085,103 +11255,191 @@
       for (const g of [...generators, ...extraGens]) if (g.holding >= 0) releaseHandle(g);
       boat.holding = -1;
     }
+    const _wound = new THREE.Vector3();
     function takedownImpact() {
       const C = caught;
-      C.hit = true;
-      camera.getWorldPosition(_hCam);
-      gameAudio.slice(0); gameAudio.smash(0.5); chaseAudio.sting();
-      // red flash
+      C.hit = true; C.hitT = C.t;
+      gameAudio.slice(0); gameAudio.clink(2); gameAudio.squelch(0, 1.4); gameAudio.smash(1.5);
+      chaseAudio.heartbeat(1.2);
+      // a stark flash: red vignette, a burst of cold moonlight, then the red emergency light strobing
       redFlash.visible = true; redFlash.material.opacity = 1;
-      flashEl.style.transition = 'none'; flashEl.style.opacity = 1; requestAnimationFrame(() => { flashEl.style.transition = 'opacity 1.2s ease'; flashEl.style.opacity = 0; });
-      controllers.forEach((c) => pulse(c, 1, 500));
-      // the split: the head and shoulders come away, the body crumples
-      const v = C.victim, headPart = v.children[1];
-      scene.attach(headPart);
-      C.head = headPart; C.headVel = new THREE.Vector3().copy(C.toV).multiplyScalar(1.2).add(new THREE.Vector3(0, 1.6, 0)); C.headSpin = new THREE.Vector3(6, 3, 4);
-      // dark red chunks and mist
-      const at = new THREE.Vector3().copy(C.from).add(new THREE.Vector3(0, -0.12, 0));
-      gorePieces.mesh.visible = true;
-      for (const q of gorePieces.p) {
-        q.pos.copy(at); q.v.set((Math.random() - 0.5) * 3, 1 + Math.random() * 2.8, (Math.random() - 0.5) * 3).addScaledVector(C.toV, 1.2);
-        q.r.set(Math.random() * 6, Math.random() * 6, Math.random() * 6); q.w.set((Math.random() - 0.5) * 20, (Math.random() - 0.5) * 20, (Math.random() - 0.5) * 20);
-        q.s = 0.008 + Math.random() * 0.02; q.rest = false;
+      flashEl.style.transition = 'none'; flashEl.style.opacity = 1; requestAnimationFrame(() => { flashEl.style.transition = 'opacity 1.4s ease'; flashEl.style.opacity = 0.35; });
+      if (hemiLight) { hemiLight.color.setHex(0xcfe0ff); hemiLight.intensity = 2.2; }
+      C.shakeT = 0.6;
+      controllers.forEach((c) => pulse(c, 1, 600));
+      // the gash across the torso, then everything inside comes out
+      const body = C.victim.children[0];
+      body.add(gore.gash);
+      gore.gash.position.set(0, -0.15, -0.115); gore.gash.rotation.set(0, 0, 0.75); gore.gash.visible = true;
+      gore.gash.getWorldPosition(_wound);
+      const out = C.toV.clone().negate();                         // towards the monster, the way the front faces
+      for (const [k, o] of gore.organs.entries()) {
+        o.obj.visible = true;
+        o.pos.copy(_wound).add(new THREE.Vector3((Math.random() - 0.5) * 0.05, (Math.random() - 0.5) * 0.05, (Math.random() - 0.5) * 0.05));
+        o.vel.copy(out).multiplyScalar(0.4 + Math.random() * 0.8).addScaledVector(C.side, (Math.random() - 0.5) * 0.8); o.vel.y = 0.2 + Math.random() * 0.9;
+        o.spin.set((Math.random() - 0.5) * 9, (Math.random() - 0.5) * 9, (Math.random() - 0.5) * 9);
+        o.obj.position.copy(o.pos); o.obj.rotation.set(Math.random() * 6, Math.random() * 6, Math.random() * 6);
+        o.rest = false; o.delay = 0.05 + k * 0.09;                 // they don't all fall at once
+        o.obj.visible = false;
       }
-      goreMist.forEach((s, k) => { s.visible = true; s.position.copy(at).add(new THREE.Vector3((Math.random() - 0.5) * 0.2, k * 0.05, (Math.random() - 0.5) * 0.2)); s.scale.setScalar(0.2); s.material.opacity = 0.75; });
+      const R = gore.rope;
+      for (let i = 0; i < R.n; i++) { R.p[i].copy(_wound).addScaledVector(out, i * 0.004); R.q[i].copy(R.p[i]).addScaledVector(out, -0.004).y += 0.002; }
+      R.mesh.visible = true;
+      gore.drips.visible = true; gore.dp.forEach((d) => { d.on = false; d.splat = false; });
+      gore.pool.visible = true; gore.pool.position.set(_wound.x, C.gy + 0.004, _wound.z).addScaledVector(out, 0.08); gore.pool.position.y = C.gy + 0.004; gore.pool.scale.setScalar(0.01);
     }
-    const _gM = new THREE.Matrix4(), _gQ = new THREE.Quaternion(), _gS = new THREE.Vector3();
+    const _gM = new THREE.Matrix4(), _gQ = new THREE.Quaternion(), _gS = new THREE.Vector3(), _gE = new THREE.Euler(), _rp = new THREE.Vector3();
+    function spawnDrip(at, vel) {
+      const d = gore.dp[gore.nextDrip]; gore.nextDrip = (gore.nextDrip + 1) % gore.dp.length;
+      d.pos.copy(at); d.vel.copy(vel); d.on = true; d.splat = false; d.s = 0.0028 + Math.random() * 0.0035;
+    }
+    function updateGore(dt, C) {
+      const since = C.t - C.hitT;
+      gore.gash.getWorldPosition(_wound);
+      // organs: drop out one after another, tumble, hit the ground with a wet slap and settle
+      for (const o of gore.organs) {
+        if (since < o.delay) continue;
+        if (!o.obj.visible) { o.obj.visible = true; o.pos.copy(_wound); }
+        if (o.rest) continue;
+        o.vel.y -= GRAVITY * dt;
+        o.pos.addScaledVector(o.vel, dt);
+        o.obj.rotation.x += o.spin.x * dt; o.obj.rotation.y += o.spin.y * dt; o.obj.rotation.z += o.spin.z * dt;
+        const fl = groundY(C.map, o.pos.x, o.pos.z) + o.half * 0.8;
+        if (o.pos.y < fl) {
+          o.pos.y = fl;
+          if (Math.abs(o.vel.y) > 0.6) gameAudio.squelch(0.5, 0.4);
+          o.vel.y = Math.abs(o.vel.y) > 0.5 ? -o.vel.y * 0.15 : 0; o.vel.x *= 0.4; o.vel.z *= 0.4; o.spin.multiplyScalar(0.3);
+          if (o.vel.lengthSq() < 0.01) o.rest = true;
+        }
+        o.obj.position.copy(o.pos);
+        if (Math.random() < dt * 14) spawnDrip(o.pos, _rp.set((Math.random() - 0.5) * 0.2, -0.1, (Math.random() - 0.5) * 0.2));
+      }
+      // the small intestine spills out of the wound like a rope (verlet), still attached at one end
+      const R = gore.rope;
+      const pay = Math.min(R.n, 2 + Math.floor(since * 14));            // more of it slides out over time
+      for (let i = 1; i < R.n; i++) {
+        if (i >= pay) { R.p[i].copy(_wound); R.q[i].copy(_wound); continue; }
+        const vx = (R.p[i].x - R.q[i].x) * 0.985, vy = (R.p[i].y - R.q[i].y) * 0.985, vz = (R.p[i].z - R.q[i].z) * 0.985;
+        R.q[i].copy(R.p[i]);
+        R.p[i].x += vx; R.p[i].y += vy - GRAVITY * dt * dt; R.p[i].z += vz;
+      }
+      R.p[0].copy(_wound);
+      for (let it = 0; it < 8; it++) {
+        for (let i = 0; i < R.n - 1; i++) {
+          const a = R.p[i], b = R.p[i + 1];
+          _rp.subVectors(b, a); const d = _rp.length() || 1e-6, diff = (d - R.seg) / d;
+          if (i === 0) b.addScaledVector(_rp, -diff); else { a.addScaledVector(_rp, diff * 0.5); b.addScaledVector(_rp, -diff * 0.5); }
+        }
+        for (let i = 1; i < R.n; i++) { const fl = groundY(C.map, R.p[i].x, R.p[i].z) + 0.009; if (R.p[i].y < fl) { R.p[i].y = fl; R.q[i].x = R.p[i].x - (R.p[i].x - R.q[i].x) * 0.5; R.q[i].z = R.p[i].z - (R.p[i].z - R.q[i].z) * 0.5; } }
+      }
+      if ((C.ropeT = (C.ropeT || 0) + 1) % 2 === 0) {
+        const pts = R.p.slice(0, Math.max(2, pay)).map((v) => v.clone());
+        if (pts.length >= 2 && pts[0].distanceTo(pts[pts.length - 1]) > 0.001) {
+          const old = R.mesh.geometry;
+          R.mesh.geometry = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), pts.length * 4, 0.0085, 7, false);
+          old.dispose();
+        }
+      }
+      if (Math.random() < dt * 10) spawnDrip(R.p[Math.min(pay - 1, (Math.random() * pay) | 0)], _rp.set(0, -0.05, 0));
+      // blood from the wound
+      if (since < 5 && Math.random() < dt * 30) spawnDrip(_wound, _rp.copy(C.toV).multiplyScalar(-0.3 - Math.random() * 0.4).add(new THREE.Vector3((Math.random() - 0.5) * 0.3, Math.random() * 0.3, (Math.random() - 0.5) * 0.3)));
+      for (let i = 0; i < gore.dp.length; i++) {
+        const d = gore.dp[i];
+        if (!d.on) { _gM.makeScale(0, 0, 0); gore.drips.setMatrixAt(i, _gM); continue; }
+        if (!d.splat) {
+          d.vel.y -= GRAVITY * dt; d.pos.addScaledVector(d.vel, dt);
+          const fl = groundY(C.map, d.pos.x, d.pos.z) + 0.002;
+          if (d.pos.y < fl) { d.pos.y = fl; d.splat = true; }
+          _gS.set(d.s, d.s * (1 + Math.min(2.5, Math.abs(d.vel.y) * 2)), d.s);           // stretched as they fall
+        } else _gS.set(d.s * 2.2, d.s * 0.18, d.s * 2.2);                                 // flat splats
+        _gM.compose(d.pos, _gQ.identity(), _gS); gore.drips.setMatrixAt(i, _gM);
+      }
+      gore.drips.instanceMatrix.needsUpdate = true;
+      gore.pool.scale.setScalar(Math.min(0.3, 0.01 + since * 0.07));
+    }
     function updateCatch(dt) {
       const C = caught; if (!C) return;
       C.t += dt;
       // keep your real body and hands out of the shot
       avatar.visible = false;
       for (const h of hands) h.model.group.visible = false;
-      // pull the view back to a third-person angle (VR: carry the rig; desktop: the orbit camera)
-      const pull = THREE.MathUtils.smoothstep(C.t, 0, 1.2);
+      // the close third-person angle (VR: carry the rig; desktop: the orbit camera), with a heavy shake on the hit
+      const pull = THREE.MathUtils.smoothstep(C.t, 0, 1.0);
       if (renderer.xr.isPresenting) {
+        playerRig.position.sub(C.shake);
         headWorld(_aiHead);
         _aiTo.lerpVectors(C.from, C.camTo, pull).sub(_aiHead);
         playerRig.position.addScaledVector(_aiTo, Math.min(1, dt * 8));
-        // turn to face them
         camera.getWorldDirection(_aiTmp);
         const have = Math.atan2(-_aiTmp.x, -_aiTmp.z), want = Math.atan2(-(C.mid.x - C.camTo.x), -(C.mid.z - C.camTo.z));
         let d = want - have; d = Math.atan2(Math.sin(d), Math.cos(d));
-        if (C.t < 1.6 && Math.abs(d) > 0.02) snapTurn(THREE.MathUtils.radToDeg(d * Math.min(1, dt * 3)));
+        if (C.t < 1.4 && Math.abs(d) > 0.02) snapTurn(THREE.MathUtils.radToDeg(d * Math.min(1, dt * 3)));
       } else {
+        camera.position.sub(C.shake);
         camera.position.lerp(C.camTo, Math.min(1, dt * 3)); orbit.target.lerp(C.mid, Math.min(1, dt * 3)); orbit.update();
       }
-      // the heavy overhead slash
-      if (C.t > 0.45 && !ai.slash && !C.hit) startSlash('takedown', () => takedownImpact(), 1.3);
-      // the body crumples after the hit
-      if (C.hit) {
-        const f = THREE.MathUtils.smoothstep(C.t - 1.6, 0, 0.7);
-        C.victim.rotation.x = -1.35 * f * Math.sign(C.toV.z || 1);
-        C.victim.position.y = C.from.y - 0.28 * f;
-        if (C.head) {
-          C.headVel.y -= GRAVITY * dt;
-          C.head.position.addScaledVector(C.headVel, dt);
-          C.head.rotation.x += C.headSpin.x * dt; C.head.rotation.y += C.headSpin.y * dt; C.head.rotation.z += C.headSpin.z * dt;
-          const fl = groundY(C.map, C.head.position.x, C.head.position.z) + 0.06;
-          if (C.head.position.y < fl) { C.head.position.y = fl; C.headVel.multiplyScalar(0.3); C.headVel.y = Math.abs(C.headVel.y) > 0.4 ? -C.headVel.y * 0.3 : 0; C.headSpin.multiplyScalar(0.5); }
-        }
-        for (let i = 0; i < gorePieces.N; i++) {
-          const q = gorePieces.p[i];
-          if (!q.rest) {
-            q.v.y -= GRAVITY * dt; q.pos.addScaledVector(q.v, dt);
-            q.r.x += q.w.x * dt; q.r.y += q.w.y * dt; q.r.z += q.w.z * dt;
-            const fl = groundY(C.map, q.pos.x, q.pos.z) + q.s * 0.4;
-            if (q.pos.y < fl) { q.pos.y = fl; q.rest = true; }
-          }
-          _gM.compose(q.pos, _gQ.setFromEuler(q.r), _gS.setScalar(q.s));
-          gorePieces.mesh.setMatrixAt(i, _gM);
-        }
-        gorePieces.mesh.instanceMatrix.needsUpdate = true;
-        goreMist.forEach((s) => { s.scale.multiplyScalar(1 + dt * 1.6); s.material.opacity = Math.max(0, s.material.opacity - dt * 0.5); });
-        redFlash.material.opacity = Math.max(0, redFlash.material.opacity - dt * 0.8);
-        redFlash.visible = redFlash.material.opacity > 0.01;
+      if (C.shakeT > 0) {
+        C.shakeT -= dt;
+        const a = Math.max(0, C.shakeT / 0.6) * (renderer.xr.isPresenting ? 0.035 : 0.07);
+        C.shake.set((Math.random() - 0.5) * a, (Math.random() - 0.5) * a, (Math.random() - 0.5) * a);
+      } else C.shake.set(0, 0, 0);
+      (renderer.xr.isPresenting ? playerRig.position : camera.position).add(C.shake);
+      // the light: a red emergency strobe over the scene (and a cold moonlight burst on the hit)
+      const strobe = 0.5 + 0.5 * Math.sin(C.t * 10);
+      C.light.intensity = 3 + 7 * strobe;
+      if (hemiLight && !(C.hit && C.t - C.hitT < 0.12)) {
+        hemiLight.color.setHex(0x9a1010).lerp(_c1.setHex(0xff2a20), strobe);
+        hemiLight.groundColor.setHex(0x200202);
+        hemiLight.intensity = 0.55 + 0.6 * strobe;
       }
-      if (C.t > 3.4 && !C.overlay) {
-        C.overlay = true;
-        if (renderer.xr.isPresenting) { redrawPanel(caughtPanel); caughtGroup.visible = true; placeCaughtPanel(true); }
-        else caughtEl.classList.add('show');
+      scene.fog.color.setHex(0x1a0202); scene.fog.density = Math.min(C.env.dens, 0.06);
+      // the wind-up and the heavy diagonal slash across the torso
+      if (C.t > 0.35 && !ai.slash && !C.hit) startSlash('takedown', () => takedownImpact(), 1.25);
+      if (C.hit) {
+        updateGore(dt, C);
+        // the survivor buckles, then drops backwards to the ground
+        const since = C.t - C.hitT;
+        const fall = since < 0.25 ? 0 : Math.min(1, ((since - 0.25) / 0.75) ** 2);
+        C.pivot.rotation.x = 1.5 * fall;
+        C.pivot.position.y = C.gy - 0.05 * Math.min(1, since / 0.25) - 0.03 * fall;
+        if (fall >= 1 && !C.landed) { C.landed = true; gameAudio.thud(0); gameAudio.squelch(0, 0.6); C.shakeT = Math.max(C.shakeT, 0.25); }
+        // deep heartbeats as the screen fades
+        if (since > 1.4 + C.beats * 0.9 && C.beats < 3) { C.beats++; chaseAudio.heartbeat(1 - C.beats * 0.2); }
+        redFlash.material.opacity = Math.max(since > 2.6 ? 0.75 : 0, redFlash.material.opacity - dt * 0.8);
+        if (since > 2.6) redFlash.material.opacity = Math.min(0.85, redFlash.material.opacity + dt * 0.5);
+        redFlash.visible = redFlash.material.opacity > 0.01;
+        if (since > 2.9) { travelFade.visible = true; travelFadeMat.opacity = Math.min(0.6, (since - 2.9) * 0.4); }
+        if (since > 3.6 && !C.overlay) {
+          C.overlay = true;
+          if (renderer.xr.isPresenting) { redrawPanel(caughtPanel); caughtGroup.visible = true; placeCaughtPanel(true); }
+          else caughtEl.classList.add('show');
+        }
       }
       if (caughtGroup.visible) placeCaughtPanel(false);
     }
     renderer.xr.addEventListener('sessionend', () => { if (caught && caught.overlay) { caughtGroup.visible = false; caughtEl.classList.add('show'); } });
 
+    caughtPanel.mesh.renderOrder = 9999;                      // over the darkening fade
+
     // ---------- animation: gorilla knuckle-walk, looking about, the slash ----------
     const Q_REST = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
     function qBlade(blade, knuckles) {                       // a hand pose from where the blade (grip -Z) and the knuckles (grip -Y) point
-      const z = blade.clone().normalize().negate(), y = knuckles.clone().normalize().negate(), x = new THREE.Vector3().crossVectors(y, z);
+      const z = blade.clone().normalize().negate();
+      const y = knuckles.clone().addScaledVector(z, -knuckles.dot(z) / z.lengthSq()).normalize().negate(), x = new THREE.Vector3().crossVectors(y, z);
       return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
     }
     const Q_WIND = qBlade(new THREE.Vector3(0, 0.6, -0.8), new THREE.Vector3(0, 0.8, 0.6));
     const Q_STRIKE = qBlade(new THREE.Vector3(0, -0.5, 0.86), new THREE.Vector3(0, -0.86, -0.5));
     const P_WIND = new THREE.Vector3(-0.16, 0.34, -0.02), P_STRIKE = new THREE.Vector3(-0.1, -0.42, 0.5);
+    // the takedown: a heavy diagonal slash, from high over its right shoulder down across the body to the low left
+    const Q_WIND_D = qBlade(new THREE.Vector3(-0.5, 0.75, -0.43), new THREE.Vector3(0.5, 0.6, 0.6));
+    const Q_STRIKE_D = qBlade(new THREE.Vector3(0.55, -0.6, 0.58), new THREE.Vector3(0.3, -0.6, -0.7));
+    const P_WIND_D = new THREE.Vector3(-0.32, 0.4, -0.08), P_STRIKE_D = new THREE.Vector3(0.24, -0.32, 0.44);
     const _aS = new THREE.Vector3(), _aW = new THREE.Vector3(), _aQ = new THREE.Quaternion(), _aP = new THREE.Vector3();
     function animateAI(dt, moving) {
       const chasing = ai.state === 'chase';
       aiRoot.position.set(ai.pos.x, ai.pos.y + AI_HEAD_H + Math.abs(Math.sin(ai.stride * Math.PI)) * (chasing ? 0.05 : 0.025), ai.pos.z);
-      aiRoot.rotation.set(chasing ? 0.18 : 0.06, ai.heading, 0, 'YXZ');
+      aiRoot.rotation.set(chasing ? 0.18 : ai.state === 'stare' ? -0.06 + Math.sin(performance.now() * 0.006) * 0.03 : 0.06, ai.heading, 0, 'YXZ');
       aiRoot.updateMatrixWorld(true);
       // head: where it's looking
       aiParts.head.rotation.set(ai.headPitch, THREE.MathUtils.clamp(ai.headYaw, -1.2, 1.2), 0, 'YXZ');
@@ -11196,15 +11454,16 @@
         }
         _aQ.copy(Q_REST);
         if (s < 0 && ai.slash) {                              // the machete arm: wind up overhead, then a heavy downward slash
-          const f = ai.slash.t / ai.slash.dur;
-          if (f < 0.55) { const e = THREE.MathUtils.smoothstep(f, 0, 0.55); _aP.lerp(P_WIND, e); _aQ.slerp(Q_WIND, e); }
-          else { const e = THREE.MathUtils.smoothstep(f, 0.55, 0.72); _aP.copy(P_WIND).lerp(P_STRIKE, e); _aQ.copy(Q_WIND).slerp(Q_STRIKE, e); }
+          const f = ai.slash.t / ai.slash.dur, diag = ai.slash.kind === 'takedown';
+          const PW = diag ? P_WIND_D : P_WIND, QW = diag ? Q_WIND_D : Q_WIND, PS = diag ? P_STRIKE_D : P_STRIKE, QS = diag ? Q_STRIKE_D : Q_STRIKE;
+          if (f < 0.55) { const e = THREE.MathUtils.smoothstep(f, 0, 0.55); _aP.lerp(PW, e); _aQ.slerp(QW, e); }
+          else { const e = THREE.MathUtils.smoothstep(f, 0.55, 0.7); _aP.copy(PW).lerp(PS, e); _aQ.copy(QW).slerp(QS, e); }
         }
         arm.hand.position.copy(_aP);
         arm.hand.quaternion.copy(_aQ);
         arm.hand.scale.set(s > 0 ? -HAND_SCALE : HAND_SCALE, HAND_SCALE, HAND_SCALE);
         _aW.copy(WRIST_LOCAL).multiply(arm.hand.scale).applyQuaternion(arm.hand.quaternion).add(arm.hand.position);
-        _aS.set(s * 0.23, -0.14, -0.1);
+        _aS.set(s * 0.23 * AI_TORSO.x, -0.14 * AI_TORSO.y, -0.1 * AI_TORSO.z);
         solveArm(arm, _aS, _aW);
       }
       aiCol.box.min.set(ai.pos.x - 0.25, ai.pos.y, ai.pos.z - 0.25);
@@ -11246,8 +11505,10 @@
       // eyes
       if ((ai.senseT -= dt) <= 0 && ai.state !== 'catch') {
         ai.senseT = 0.12;
-        if (canSee(ph)) {
-          if (ai.state !== 'chase') { ai.state = 'chase'; ai.chaseT = 0; ai.slash = null; gameAudio.growl(); ai.path = []; ai.pathT = 0; }
+        const seen = canSee(ph), lit = !seen && ph && litByFlashlight(ph);
+        if (seen || lit) {
+          // first sight (or caught in your torch beam): it stops dead at the edge of the light, stares, then charges
+          if (ai.state !== 'chase' && ai.state !== 'stare') { ai.state = 'stare'; ai.stareT = 1.1 + Math.random() * 0.8; ai.slash = null; ai.path = []; aiAudio.snarl(); }
           ai.lastSeen.copy(ph); ai.lostT = 0;
         } else if (ai.state === 'chase') ai.lostT += 0.12;
       }
@@ -11259,6 +11520,10 @@
         if (ai.slash.t >= ai.slash.dur) ai.slash = null;
       } else if (ai.state === 'catch') {
         ai.speed = 0;
+      } else if (ai.state === 'stare') {
+        ai.speed = 0;
+        if (ph) { const want = Math.atan2(ph.x - ai.pos.x, ph.z - ai.pos.z); let d = want - ai.heading; d = Math.atan2(Math.sin(d), Math.cos(d)); ai.heading += THREE.MathUtils.clamp(d, -dt * 3, dt * 3); }
+        if ((ai.stareT -= dt) <= 0) { ai.state = 'chase'; ai.chaseT = 0; ai.pathT = 0; gameAudio.growl(); }
       } else if (ai.state === 'chase') {
         ai.chaseT += dt;
         if (ai.lostT > 3.5) {                                  // they broke line of sight: go and search where they were last seen
@@ -11318,14 +11583,10 @@
       const moved = Math.hypot(ai.pos.x - ai.lastPos.x, ai.pos.z - ai.lastPos.z);
       const prevStride = ai.stride;
       ai.stride += moved / (ai.state === 'chase' ? 0.75 : 0.55);
-      if (Math.floor(ai.stride) !== Math.floor(prevStride) && live) {                       // a heavy knuckle-plant
-        camera.getWorldPosition(_hCam);
-        const d = _hCam.distanceTo(ai.pos);
-        if (d < 14) gameAudio.thud(d);
-      }
+      if (Math.floor(ai.stride) !== Math.floor(prevStride) && live) aiAudio.step(aiSurface(), ai.state === 'chase');   // a heavy knuckle-plant (3D)
       // looking: at you when chasing, sweeping when stopped, ahead when walking
       let wantYaw = 0, wantPitch = 0.05;
-      if (ai.state === 'chase' && ph) {
+      if ((ai.state === 'chase' || ai.state === 'stare') && ph) {
         let d = Math.atan2(ph.x - ai.pos.x, ph.z - ai.pos.z) - ai.heading; wantYaw = Math.atan2(Math.sin(d), Math.cos(d));
         wantPitch = -Math.atan2(ph.y - (ai.pos.y + AI_HEAD_H), Math.hypot(ph.x - ai.pos.x, ph.z - ai.pos.z));
       } else if (ai.state === 'look') wantYaw = Math.sin(performance.now() * 0.0011) * 1.1;
@@ -11334,9 +11595,9 @@
       ai.headPitch += (wantPitch - ai.headPitch) * Math.min(1, dt * 4);
       animateAI(dt, moving);
       // the chase beat: louder and faster the closer it gets; fades when you get away
-      if (live && ai.state === 'chase' && ph) {
-        chaseAudio.setTarget(1);
-        chaseAudio.setIntensity(THREE.MathUtils.clamp(1 - Math.hypot(ph.x - ai.pos.x, ph.z - ai.pos.z) / 12, 0.15, 1));
+      if (live && (ai.state === 'chase' || ai.state === 'stare') && ph) {
+        chaseAudio.setTarget(ai.state === 'stare' ? 0.6 : 1);
+        chaseAudio.setIntensity(ai.state === 'stare' ? 0.12 : THREE.MathUtils.clamp(1 - Math.hypot(ph.x - ai.pos.x, ph.z - ai.pos.z) / 12, 0.15, 1));
       } else if (!caught) { chaseAudio.setTarget(0); chaseAudio.setIntensity(0); }
     }
     function canSeeCached() { return ai.lostT === 0; }
@@ -11348,6 +11609,133 @@
         despawnAI();
         baseArrive(id);
       };
+    }
+
+    // =====================================================================
+    //  AI MONSTER PRESENCE: 3D positional sound on the monster itself (heavy knuckle-steps on dirt, wood or stone,
+    //  raspy breathing that quickens in a chase, its wrist chains clinking and the machete scraping now and then),
+    //  and the torch-beam check that makes it stop and stare before it charges.
+    // =====================================================================
+    function aiSurface() {
+      const x = ai.pos.x, z = ai.pos.z, inRect = (D, pad = 0.3) => x > D.x0 - pad && x < D.x1 + pad && z > D.z0 - pad && z < D.z1 + pad;
+      if (ai.map === 'camp') return inRect(DOCK) || CABINS.some((c) => Math.hypot(x - c.x, z - c.z) < 2.6) ? 'wood' : 'dirt';
+      if (ai.map === 'graveyard') return inRect(GY.dock) ? 'wood' : Math.hypot(x - GY.altar.x, z - (GRAVE.z - 12.6)) < 3 ? 'stone' : 'dirt';
+      return inRect(MN.dock) ? 'wood' : x < MN.ex ? 'stone' : 'dirt';
+    }
+    const _flCam = new THREE.Vector3(), _flDir = new THREE.Vector3(), _flTo = new THREE.Vector3(), _flEye = new THREE.Vector3();
+    const TORCH_COS = Math.cos(Math.PI / 9 * 1.15);
+    function litByFlashlight(ph) {                       // is it standing in your torch beam (and you can see it)?
+      if (!flashlight.userData.on) return false;
+      camera.getWorldPosition(_flCam); camera.getWorldDirection(_flDir);
+      _flEye.set(ai.pos.x, ai.pos.y + AI_HEAD_H * 0.7, ai.pos.z);
+      _flTo.subVectors(_flEye, _flCam);
+      const d = _flTo.length();
+      if (d > 15 || d < 0.5 || _flTo.dot(_flDir) / d < TORCH_COS) return false;
+      return lineOfSight(NAV[ai.map], _flCam, _flEye);
+    }
+    const aiAudio = (() => {
+      let ctx = null, out = null, panner = null, noise = null, timer = null, nextBreath = 0, inhale = true, nextExtra = 0, live = false, chasing = false;
+      function build() {
+        ctx = new (window.AudioContext || window.webkitAudioContext)();
+        panner = ctx.createPanner();
+        panner.panningModel = 'HRTF'; panner.distanceModel = 'inverse'; panner.refDistance = 1.2; panner.rolloffFactor = 1.25; panner.maxDistance = 60;
+        out = ctx.createGain(); out.gain.value = 0;
+        out.connect(panner); panner.connect(ctx.destination);
+        const len = ctx.sampleRate * 2; noise = ctx.createBuffer(1, len, ctx.sampleRate);
+        const d = noise.getChannelData(0); for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+        timer = setInterval(schedule, 50);
+      }
+      const ok = () => ctx && ctx.state === 'running';
+      function burst(t, { type = 'bandpass', f0, f1 = f0, q = 1, peak, attack = 0.003, decay }) {
+        const s = ctx.createBufferSource(); s.buffer = noise;
+        const f = ctx.createBiquadFilter(); f.type = type; f.Q.value = q;
+        f.frequency.setValueAtTime(f0, t); f.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t + attack + decay);
+        const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(Math.max(0.0002, peak), t + attack); g.gain.exponentialRampToValueAtTime(0.0001, t + attack + decay);
+        s.connect(f); f.connect(g); g.connect(out); s.start(t, Math.random()); s.stop(t + attack + decay + 0.05);
+        return g;
+      }
+      function tone(t, f0, f1, peak, dur, type = 'sine') {
+        const o = ctx.createOscillator(); o.type = type; o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t + dur);
+        const g = ctx.createGain(); g.gain.setValueAtTime(Math.max(0.0002, peak), t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+        o.connect(g); g.connect(out); o.start(t); o.stop(t + dur + 0.05);
+      }
+      function breath(t, isIn, strong) {               // a raspy breath: filtered noise, roughened by a fast tremble
+        const dur = isIn ? (chasing ? 0.35 : 0.9) : (chasing ? 0.45 : 1.2);
+        const s = ctx.createBufferSource(); s.buffer = noise;
+        const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = 1.6;
+        f.frequency.setValueAtTime(isIn ? 1300 : 650, t); f.frequency.linearRampToValueAtTime(isIn ? 1900 : 450, t + dur);
+        const rasp = ctx.createGain(); rasp.gain.value = 0.55;
+        const tr = ctx.createOscillator(); tr.type = 'square'; tr.frequency.value = isIn ? 34 : 27;
+        const tg = ctx.createGain(); tg.gain.value = 0.45; tr.connect(tg); tg.connect(rasp.gain);
+        const g = ctx.createGain(); const pk = (isIn ? 0.22 : 0.3) * strong;
+        g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(pk, t + dur * 0.35); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+        s.connect(f); f.connect(rasp); rasp.connect(g); g.connect(out);
+        s.start(t, Math.random()); s.stop(t + dur + 0.05); tr.start(t); tr.stop(t + dur + 0.05);
+        if (!isIn) tone(t, 95, 70, 0.06 * strong, dur * 0.8, 'sawtooth');            // a low rumble in the exhale
+      }
+      function chains(t, n = 4) { for (let k = 0; k < n; k++) { const tt = t + k * (0.05 + Math.random() * 0.07), f = 2200 + Math.random() * 2400; tone(tt, f, f * 0.98, 0.05 + Math.random() * 0.05, 0.12 + Math.random() * 0.12); burst(tt, { type: 'highpass', f0: 5000, peak: 0.06, decay: 0.02 }); } }
+      function scrape(t) {                              // the machete dragged along the ground, a long thin grind
+        const g = burst(t, { f0: 3600 + Math.random() * 900, f1: 2300, q: 14, peak: 0.22, attack: 0.15, decay: 1.0 });
+        burst(t, { type: 'highpass', f0: 6500, peak: 0.08, attack: 0.1, decay: 0.9 });
+        return g;
+      }
+      function schedule() {
+        if (!ctx) return;
+        const now = ctx.currentTime;
+        out.gain.setTargetAtTime(live ? 1 : 0, now, 0.25);
+        if (!live) { nextBreath = now + 0.3; return; }
+        while (nextBreath < now + 0.15) {
+          breath(nextBreath, inhale, chasing ? 1.25 : 0.9);
+          nextBreath += inhale ? (chasing ? 0.4 : 1.0) : (chasing ? 0.55 : 1.7 + Math.random() * 0.6);
+          inhale = !inhale;
+        }
+        if (nextExtra < now) {
+          if (Math.random() < 0.5) scrape(now + 0.05); else chains(now + 0.05, 3 + ((Math.random() * 4) | 0));
+          nextExtra = now + (chasing ? 2 + Math.random() * 2 : 4 + Math.random() * 5);
+        }
+      }
+      const setP = (p, x, y, z) => { if (p.positionX) { p.positionX.value = x; p.positionY.value = y; p.positionZ.value = z; } else p.setPosition(x, y, z); };
+      return {
+        unlock() { try { if (!ctx) build(); ctx.resume(); } catch (e) { console.warn('Monster audio could not start:', e); } },
+        update(isLive, isChasing, src, lis, fwd, up) {
+          live = isLive; chasing = isChasing;
+          if (!ctx) return;
+          for (const v of [src, lis, fwd, up]) if (!Number.isFinite(v.x) || !Number.isFinite(v.y) || !Number.isFinite(v.z)) return;   // (never feed NaN to the audio graph)
+          setP(panner, src.x, src.y, src.z);
+          const L = ctx.listener;
+          setP(L, lis.x, lis.y, lis.z);
+          if (L.forwardX) { L.forwardX.value = fwd.x; L.forwardY.value = fwd.y; L.forwardZ.value = fwd.z; L.upX.value = up.x; L.upY.value = up.y; L.upZ.value = up.z; }
+          else L.setOrientation(fwd.x, fwd.y, fwd.z, up.x, up.y, up.z);
+        },
+        step(surface, heavy) {                          // a heavy knuckle-plant: dirt, wood or stone, with the chains jingling
+          if (!ok() || !live) return; const t = ctx.currentTime + 0.005, a = heavy ? 1.2 : 0.85;
+          tone(t, 90, 42, 0.55 * a, 0.16);
+          if (surface === 'wood') { burst(t, { f0: 380, q: 7, peak: 0.6 * a, decay: 0.12 }); tone(t, 150, 110, 0.18 * a, 0.1, 'triangle'); burst(t + 0.05, { f0: 900, f1: 600, q: 18, peak: 0.08, attack: 0.04, decay: 0.25 }); }
+          else if (surface === 'stone') { burst(t, { type: 'highpass', f0: 1600, peak: 0.35 * a, decay: 0.03 }); burst(t, { type: 'lowpass', f0: 400, peak: 0.4 * a, decay: 0.08 }); }
+          else { burst(t, { type: 'lowpass', f0: 320, f1: 120, peak: 0.55 * a, decay: 0.12 }); burst(t + 0.01, { type: 'highpass', f0: 2200, peak: 0.12 * a, decay: 0.06 }); }
+          if (Math.random() < 0.45) chains(t + 0.03, 2);
+        },
+        snarl() {                                       // spotted you: a low, rising snarl from where it stands
+          if (!ok() || !live) return; const t = ctx.currentTime + 0.01;
+          const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.setValueAtTime(55, t); o.frequency.linearRampToValueAtTime(85, t + 0.9); o.frequency.linearRampToValueAtTime(60, t + 1.4);
+          const wob = ctx.createOscillator(); wob.frequency.value = 19; const wg = ctx.createGain(); wg.gain.value = 10; wob.connect(wg); wg.connect(o.frequency);
+          const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 520; lp.Q.value = 5;
+          const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.7, t + 0.2); g.gain.exponentialRampToValueAtTime(0.0001, t + 1.5);
+          o.connect(lp); lp.connect(g); g.connect(out); o.start(t); wob.start(t); o.stop(t + 1.55); wob.stop(t + 1.55);
+          burst(t, { type: 'lowpass', f0: 500, f1: 150, peak: 0.4, attack: 0.1, decay: 1.2 });
+        },
+      };
+    })();
+    vrButton.addEventListener('click', () => aiAudio.unlock());
+    window.addEventListener('pointerdown', () => aiAudio.unlock());
+    renderer.xr.addEventListener('sessionstart', () => aiAudio.unlock());
+    const _aaSrc = new THREE.Vector3(), _aaLis = new THREE.Vector3(), _aaFwd = new THREE.Vector3(), _aaUp = new THREE.Vector3();
+    function updateAIAudio() {
+      const isLive = ai.active && !ai.preview && ai.map === currentMap && !titleActive && !caught;
+      if (ai.active) _aaSrc.set(ai.pos.x, ai.pos.y + AI_HEAD_H * 0.8, ai.pos.z); else _aaSrc.set(0, -100, 0);
+      camera.getWorldPosition(_aaLis); camera.getWorldDirection(_aaFwd);
+      _aaUp.set(0, 1, 0).applyQuaternion(camera.getWorldQuaternion(_avQ));
+      aiAudio.update(isLive, ai.state === 'chase', _aaSrc, _aaLis, _aaFwd, _aaUp);
     }
 
 
@@ -11411,6 +11799,7 @@
         updateUI(); // map screen + settings menu: controller rays / trigger, menu button (B / Y)
         updateGameExtras(dt); // floating, new-map quests, escape boats, sunrise ending, MONSTER POV, shop, machete
         updateAI(dt); // the AI monster: patrols, sabotage, chases (with the chase beat) and the takedown
+        updateAIAudio(); // its 3D footsteps, breathing, chains and machete scrapes
       } catch (err) {
         if (!loopErrorReported) {
           loopErrorReported = true;
