@@ -459,41 +459,74 @@
     const UNIT_BOX = new THREE.BoxGeometry(1, 1, 1);
     const IDENTITY = new THREE.Matrix4();
     const _bM = new THREE.Matrix4(), _bQ = new THREE.Quaternion(), _bE = new THREE.Euler(), _bP = new THREE.Vector3(), _bS = new THREE.Vector3();
+    const BATCH_INSTANCE_MIN = 16;                   // a piece used at least this often in one batch is instanced
     function makeBatch() {
-      const lists = new Map();
+      const lists = new Map(), pieces = new Map();
       return {
         // add a geometry at a position, with an XYZ Euler rotation and a scale
         add(geo, mat, x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0, sx = 1, sy = 1, sz = 1) {
           _bM.compose(_bP.set(x, y, z), _bQ.setFromEuler(_bE.set(rx, ry, rz)), _bS.set(sx, sy, sz));
           return this.addMatrix(geo, mat, _bM);
         },
+        // Pieces are collected per (geometry, material). At build time a geometry used many times becomes one
+        // InstancedMesh (one draw call, one copy of the vertices); the rest is merged per material, optionally split
+        // into square chunks so the parts you can't see are frustum-culled.
         addMatrix(geo, mat, matrix) {
-          const g = geo.index ? geo.toNonIndexed() : geo.clone();
-          g.applyMatrix4(matrix);
-          for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal' && k !== 'uv') g.deleteAttribute(k);
-          if (!g.attributes.normal) g.computeVertexNormals();
-          if (!g.attributes.uv) g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2));
-          g.clearGroups();
-          if (!lists.has(mat)) lists.set(mat, []);
-          lists.get(mat).push(g);
-          return g;
+          let byMat = pieces.get(geo);
+          if (!byMat) { byMat = new Map(); pieces.set(geo, byMat); }
+          let arr = byMat.get(mat);
+          if (!arr) { arr = []; byMat.set(mat, arr); }
+          arr.push(matrix.clone());
+          return null;
         },
-        build(parent, { castShadow = true, receiveShadow = true, rayTarget = false } = {}) {
+        build(parent, { castShadow = true, receiveShadow = true, rayTarget = false, chunk = 0 } = {}) {
           const meshes = [];
-          for (const [mat, geos] of lists) {
+          const finish = (mesh) => {
+            mesh.castShadow = castShadow; mesh.receiveShadow = receiveShadow;
+            parent.add(mesh);
+            if (rayTarget) rayTargets.push(mesh);
+            meshes.push(mesh);
+          };
+          for (const [geo, byMat] of pieces) for (const [mat, mats] of byMat) {
+            if (mats.length >= BATCH_INSTANCE_MIN) {
+              const im = new THREE.InstancedMesh(geo, mat, mats.length);
+              mats.forEach((m, i) => im.setMatrixAt(i, m));
+              im.instanceMatrix.needsUpdate = true;
+              im.computeBoundingSphere(); im.computeBoundingBox();
+              finish(im);
+              continue;
+            }
+            for (const m of mats) {
+              const g = geo.index ? geo.toNonIndexed() : geo.clone();
+              g.applyMatrix4(m);
+              for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal' && k !== 'uv') g.deleteAttribute(k);
+              if (!g.attributes.normal) g.computeVertexNormals();
+              if (!g.attributes.uv) g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2));
+              g.clearGroups();
+              let key = mat;
+              if (chunk > 0) {
+                g.computeBoundingBox();
+                const bb = g.boundingBox, cx = Math.floor((bb.min.x + bb.max.x) / 2 / chunk), cz = Math.floor((bb.min.z + bb.max.z) / 2 / chunk);
+                if (!lists.has(mat)) lists.set(mat, new Map());
+                key = cx + ',' + cz;
+                const byCell = lists.get(mat);
+                if (!byCell.has(key)) byCell.set(key, []);
+                byCell.get(key).push(g);
+              } else {
+                if (!lists.has(mat)) lists.set(mat, new Map([['all', []]]));
+                lists.get(mat).get('all').push(g);
+              }
+            }
+          }
+          for (const [mat, byCell] of lists) for (const geos of byCell.values()) {
             const merged = mergeGeometries(geos, false);
             for (const g of geos) g.dispose();
             if (!merged) continue;
             merged.computeBoundingSphere();
             merged.computeBoundingBox();
-            const mesh = new THREE.Mesh(merged, mat);
-            mesh.castShadow = castShadow;
-            mesh.receiveShadow = receiveShadow;
-            parent.add(mesh);
-            if (rayTarget) rayTargets.push(mesh);
-            meshes.push(mesh);
+            finish(new THREE.Mesh(merged, mat));
           }
-          lists.clear();
+          lists.clear(); pieces.clear();
           return meshes;
         },
       };
@@ -4300,6 +4333,37 @@
       }
     }, 5);
     const waterGeo = (() => {
+      // a grid over the lake and the channel; a triangle is kept wherever the basin is under water (reaching a little
+      // under the sand so the edge is wherever water meets beach). The same lakeHeight() shapes the colliders and the
+      // swimming, so the surface covers exactly the water you can swim in. UVs are world-space, so ripples, glints and
+      // the bump map run on seamlessly from the lake down the channel.
+      const STEP = 0.5, X0 = LAKE_C.x - lakeBeachMax - 0.5, X1 = CH.x1 + 0.4, Z0 = LAKE_C.z - lakeBeachMax - 0.5, Z1 = LAKE_C.z + lakeBeachMax + 0.5;
+      const NX = Math.ceil((X1 - X0) / STEP), NZ = Math.ceil((Z1 - Z0) / STEP);
+      const gpos = [], gcol = [], guv = [], gidx = [], depthAt = [];
+      for (let i = 0; i <= NX; i++) for (let j = 0; j <= NZ; j++) {
+        const x = X0 + i * STEP, z = Z0 + j * STEP;
+        const dep = WATER_LEVEL - lakeHeight(x, z);                      // water depth (negative: dry sand above the water line)
+        depthAt.push(dep);
+        gpos.push(x - LAKE_C.x, -(z - LAKE_C.z), 0);                     // local XY of the plane (rotated flat below)
+        const deep = Math.min(1, Math.max(0, (dep - 0.2) / 2.2));
+        const alpha = dep <= -0.05 ? 0 : dep <= 0.03 ? 0.3 * (dep + 0.05) / 0.08 : Math.min(0.95, 0.35 + dep * 1.1);
+        gcol.push(0.13 - 0.11 * deep, 0.15 - 0.09 * deep, 0.12 - 0.05 * deep, alpha);
+        guv.push(x * 0.12, -z * 0.12);                                   // world-space UVs
+      }
+      for (let i = 0; i < NX; i++) for (let j = 0; j < NZ; j++) {
+        const a = i * (NZ + 1) + j, b = (i + 1) * (NZ + 1) + j;
+        if (Math.max(depthAt[a], depthAt[a + 1], depthAt[b], depthAt[b + 1]) <= -0.05) continue;
+        gidx.push(a, b, a + 1, b, b + 1, a + 1);
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(gpos, 3));
+      geo.setAttribute('color', new THREE.Float32BufferAttribute(gcol, 4));
+      geo.setAttribute('uv', new THREE.Float32BufferAttribute(guv, 2));
+      geo.setIndex(gidx);
+      geo.computeVertexNormals();
+      return geo;
+    })();
+    const _oldPolarWaterGeo = (() => {
       const SEG = 128;
       const rings = [99, 7, 5, 3.6, 2.6, 1.8, 1.2, 0.75, 0.4, 0.18, 0, -0.2, -0.4];  // metres inside the shoreline (negative: under the sand)
       const pos = [], col = [], idx = [];
@@ -4329,6 +4393,8 @@
       geo.computeVertexNormals();
       return geo;
     })();
+    _oldPolarWaterGeo.dispose();
+    const campChannelWater = null;                    // (the channel is part of the one lake surface above)
     const water = new THREE.Mesh(waterGeo, new THREE.MeshStandardMaterial({
       vertexColors: true, transparent: true, depthWrite: false, roughness: 0.08, metalness: 0.4, bumpMap: rippleTex, bumpScale: 0.7 }));
     water.rotation.x = -Math.PI / 2;
@@ -4336,17 +4402,6 @@
     water.receiveShadow = true;
     water.renderOrder = 1;
     scene.add(water);
-
-    // the channel's water, from the lake's shore out to the edge of the map
-    const campChannelWater = (() => {
-      const za = Math.abs(CH.z - LAKE_C.z), rs = lakeTab(lakeShoreTab, Math.atan2(CH.z - LAKE_C.z, Math.sqrt(Math.max(1, 81 - za * za))));
-      const xw0 = LAKE_C.x + Math.sqrt(Math.max(0, rs * rs - za * za)) - 0.25, w = CH.x1 + 0.4 - xw0, d = 2 * (CH.hw + 0.45);
-      const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d, Math.max(2, Math.round(w)), 4),
-        new THREE.MeshStandardMaterial({ color: 0x0e1a20, roughness: 0.1, metalness: 0.3, transparent: true, opacity: 0.86, depthWrite: false }));
-      m.rotation.x = -Math.PI / 2; m.position.set(xw0 + w / 2, WATER_LEVEL, CH.z); m.renderOrder = 1;
-      scene.add(m);
-      return m;
-    })();
 
     // A faint band of foam where the water laps the sand
     const foamMat = new THREE.MeshBasicMaterial({ color: 0xd8dcd4, vertexColors: true, transparent: true, depthWrite: false, opacity: 0.5,
@@ -4360,7 +4415,8 @@
         offs.forEach((o, k) => {
           const r = rs - o;
           pos.push(LAKE_C.x + r * Math.cos(a), WATER_LEVEL + 0.006, LAKE_C.z + r * Math.sin(a));
-          const v = k === 1 ? patch : 0;
+          const inMouth = Math.cos(a) > 0 && Math.abs(LAKE_C.z + r * Math.sin(a) - CH.z) < CH.hw + 0.6;
+          const v = k === 1 && !inMouth ? patch : 0;
           col.push(v, v, v);
         });
       }
@@ -6162,6 +6218,10 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'UPDATE', date: '22/11/26', title: 'OBJECTIVES & LIVE MAP IN THE MENU, FASTER GRAVEYARD & MINE',
+        text: 'Lock-down breakers, detailed mine carts, an easier mine (2 breakers, 2 fuel, wide tunnels).' },
+      { tag: 'UPDATE', date: '22/11/26', title: 'A FRESH MATCH EVERY TIME',
+        text: 'Entering a map resets every task, boat, window and the monster; coins and items are kept.' },
       { tag: 'UPDATE', date: '22/11/26', title: 'WALLED MAPS, DRIVE-OUT ESCAPES, RAGDOLL STUN, SMARTER AI, NEW CHARMS',
         text: 'Lakes to the map edge, one boat everywhere, a hidden shotgun, and chain-link charms at THE TRADER.' },
       { tag: 'UPDATE', date: '22/11/26', title: 'REALISTIC WATER SPLASHES',
@@ -7319,6 +7379,12 @@
     //  The two new maps are built far outside the camp (fog hides them from each other). Each map has its own fog,
     //  sky and moonlight. Dying (fire, drowning) respawns you at the spawn of the map you're in.
     // =====================================================================
+    // geometries shared by the graveyard and the mine, so their batches turn repeats into instanced meshes
+    const ROCK_G = new THREE.DodecahedronGeometry(1, 0);
+    const FENCE_BAR = new THREE.CylinderGeometry(0.011, 0.011, 1.95, 5), FENCE_TIP = new THREE.ConeGeometry(0.022, 0.09, 4), FENCE_SCROLL = new THREE.TorusGeometry(0.05, 0.007, 4, 12);
+    const BOLT_G = new THREE.CylinderGeometry(0.012, 0.012, 0.012, 6), THRU_BOLT_G = new THREE.CylinderGeometry(0.014, 0.014, 0.2, 6), RIVET_G = new THREE.SphereGeometry(0.008, 5, 4);
+    const HS_TOP = new THREE.CylinderGeometry(0.21, 0.21, 0.1, 12, 1, false, 0, Math.PI), HS_TOP2 = new THREE.CylinderGeometry(0.2, 0.2, 0.09, 12, 1, false, 0, Math.PI);
+    const MOUND_G = new THREE.SphereGeometry(1, 8, 5, 0, Math.PI * 2, 0, Math.PI / 2), LAMP_POST_G = new THREE.CylinderGeometry(0.03, 0.04, 1.6, 6);
     const WAIT_ROOM = { x: 0, z: -95, w: 8, d: 7, h: 2.6 };
     const GRAVE = { x: 110, z: 0, size: 56 };
     const MINE = { x: -110, z: 0 };
@@ -7329,10 +7395,10 @@
       { id: 'camp', name: 'LAKESIDE WOODS', tag: 'THE CAMP', desc: 'Power 4 generators, fix the boat, then race to the escape flare across the lake.',
         spawn: { x: 0, z: 0, yaw: 0 }, fog: [0x0a1020, 0.062], sky: 0x070b16, hemi: [0x2e4170, 0x0b0907, 0.42], desk: { cam: [0, 1.6, 3], target: [0, 0.4, -2.5] } },
       { id: 'graveyard', name: 'FOGGY GRAVEYARD', tag: 'VARIATION', desc: 'Power 2 generators, light 4 braziers and lay 3 skull relics on the crypt altar to free the lake boat.',
-        spawn: { x: GRAVE.x, z: GRAVE.z + 26, yaw: 0 }, fog: [0x26302c, 0.13], sky: 0x1a201e, hemi: [0x5a7a74, 0x0a0a08, 0.42],
+        spawn: { x: GRAVE.x, z: GRAVE.z + 26, yaw: 0 }, fog: [0x26302c, 0.15], sky: 0x1a201e, hemi: [0x5a7a74, 0x0a0a08, 0.42],
         desk: { cam: [GRAVE.x + 4, 2.6, GRAVE.z + 31], target: [GRAVE.x, 0.4, GRAVE.z + 19] } },
       { id: 'mine', name: 'ABANDONED MINE', tag: 'VARIATION', desc: 'Power 2 generators, pull 3 breakers, ram the minecart through the rock fall and reach the underground lake.',
-        spawn: { x: MINE.x + 12, z: MINE.z, yaw: Math.PI / 2 }, fog: [0x0d0a07, 0.12], sky: 0x060504, hemi: [0x3a2a1a, 0x050403, 0.18],
+        spawn: { x: MINE.x + 12, z: MINE.z, yaw: Math.PI / 2 }, fog: [0x0d0a07, 0.14], sky: 0x060504, hemi: [0x3a2a1a, 0x050403, 0.18],
         desk: { cam: [MINE.x + 15, 1.6, MINE.z + 3], target: [MINE.x + 6, 0.6, MINE.z] } },
     ];
     const ROOM_ENV = { fog: [0x1a140e, 0.018], sky: 0x0c0906, hemi: [0x9a8468, 0x3a2e22, 0.95] };   // warm and well lit (was a dim 0.2)
@@ -7540,10 +7606,12 @@
         if (s < w) { x = L.x0 + s; z = L.z0; } else if (s < w + d) { x = L.x1; z = L.z0 + s - w; }
         else if (s < 2 * w + d) { x = L.x1 - (s - w - d); z = L.z1; } else { x = L.x0; z = L.z1 - (s - 2 * w - d); }
         const sz = 0.08 + wpr(0, 0.12);
-        wb.add(new THREE.DodecahedronGeometry(1, 0), rockMat, x + wpr(-0.1, 0.1), 0.01, z + wpr(-0.1, 0.1), wpr(0, 3), wpr(0, 3), 0, sz, sz * 0.6, sz);
+        wb.add(ROCK_G, rockMat, x + wpr(-0.1, 0.1), 0.01, z + wpr(-0.1, 0.1), wpr(0, 3), wpr(0, 3), 0, sz, sz * 0.6, sz);
       }
       wb.build(scene);
       const wgeo = new THREE.PlaneGeometry(w, d, Math.max(2, Math.round(w)), Math.max(2, Math.round(d)));
+      { const pa = wgeo.attributes.position, ua = wgeo.attributes.uv;                // world-space UVs (seamless along the whole channel)
+        for (let i = 0; i < pa.count; i++) ua.setXY(i, (cx + pa.getX(i)) * 0.12, (cz - pa.getY(i)) * -0.12); ua.needsUpdate = true; }
       const water = new THREE.Mesh(wgeo, new THREE.MeshStandardMaterial({ color: waterColor, roughness: 0.12, metalness: 0.25, transparent: true, opacity: 0.86 }));
       water.rotation.x = -Math.PI / 2; water.position.set(cx, L.level, cz);
       scene.add(water);
@@ -7684,6 +7752,7 @@
           }
         }
       }
+      GY.pathPts = pathPts;                                         // (for the menu's map)
       const nearPath = (x, z, r) => pathPts.some((p) => Math.abs(p.x - x) < r && Math.abs(p.z - z) < r && Math.hypot(p.x - x, p.z - z) < r);
       // places kept clear of headstones and trees
       const keepClear = [];
@@ -7721,9 +7790,9 @@
         const n = Math.round(len / 0.13);
         for (let k = 0; k <= n; k++) {                                                        // bars with spear tips
           const t = k / n, x = x0 + (x1 - x0) * t, z = z0 + (z1 - z0) * t;
-          gb.add(new THREE.CylinderGeometry(0.011, 0.011, FH - 0.35, 5), ironMat, G.x + x, 0.35 + (FH - 0.35) / 2, G.z + z);
-          gb.add(new THREE.ConeGeometry(0.022, 0.09, 4), ironMat, G.x + x, FH + 0.04, G.z + z);
-          if (k % 3 === 1) gb.add(new THREE.TorusGeometry(0.05, 0.007, 4, 12), ironMat, G.x + x, FH - 0.3, G.z + z, 0, ry + Math.PI / 2, 0);   // scrolls
+          gb.add(FENCE_BAR, ironMat, G.x + x, 0.35 + (FH - 0.35) / 2, G.z + z);
+          gb.add(FENCE_TIP, ironMat, G.x + x, FH + 0.04, G.z + z);
+          if (k % 3 === 1) gb.add(FENCE_SCROLL, ironMat, G.x + x, FH - 0.3, G.z + z, 0, ry + Math.PI / 2, 0);   // scrolls
         }
         for (const y of [0.55, FH - 0.18]) gb.add(UNIT_BOX, ironMat, G.x + (x0 + x1) / 2, y, G.z + (z0 + z1) / 2, 0, ry, 0, 0.03, 0.035, len);
         gb.add(UNIT_BOX, stoneMat, G.x + (x0 + x1) / 2, 0.17, G.z + (z0 + z1) / 2, 0, ry, 0, 0.3, 0.34, len);   // plinth
@@ -7758,7 +7827,7 @@
       {
         const cliffMat = new THREE.MeshStandardMaterial({ color: 0x34383a, roughness: 1, flatShading: true });
         const cliffMat2 = new THREE.MeshStandardMaterial({ color: 0x2a2e2c, roughness: 1, flatShading: true });
-        const rock = new THREE.DodecahedronGeometry(1, 0);
+        const rock = ROCK_G;
         const cliffLine = (x0, z0, x1, z1, out) => {          // out: unit vector pointing away from the playable area
           const len = Math.hypot(x1 - x0, z1 - z0), n = Math.ceil(len / 2.4);
           for (let k = 0; k <= n; k++) {
@@ -7793,8 +7862,8 @@
           if (rng2() < 0.15) continue;
           const h = 0.5 + rng2() * 0.3, lean = (rng2() - 0.5) * 0.2, mat = graveMats[(rng2() * 4) | 0];
           gb.add(UNIT_BOX, mat, x, h / 2, z, lean, 0, 0, 0.4, h, 0.09);
-          gb.add(new THREE.CylinderGeometry(0.2, 0.2, 0.09, 12, 1, false, 0, Math.PI), mat, x, h, z, Math.PI / 2 + lean, Math.PI / 2, 0);
-          gb.add(new THREE.SphereGeometry(1, 8, 5, 0, Math.PI * 2, 0, Math.PI / 2), dirtMat, x, 0, z + 0.62, 0, 0, 0, 0.3, 0.08, 0.55);
+          gb.add(HS_TOP2, mat, x, h, z, Math.PI / 2 + lean, Math.PI / 2, 0);
+          gb.add(MOUND_G, dirtMat, x, 0, z + 0.62, 0, 0, 0, 0.3, 0.08, 0.55);
           addBoxCollider(x, 0, z, 0.42, h, 0.16);
         }
       }
@@ -7808,7 +7877,7 @@
         if (kind < 0.5) {
           const h = 0.45 + rng2() * 0.35;
           gb.add(UNIT_BOX, mat, x, h / 2, z, lean, twist, 0, 0.42, h, 0.1);
-          gb.add(new THREE.CylinderGeometry(0.21, 0.21, 0.1, 12, 1, false, 0, Math.PI), mat, x, h, z, Math.PI / 2 + lean, twist + Math.PI / 2, 0);
+          gb.add(HS_TOP, mat, x, h, z, Math.PI / 2 + lean, twist + Math.PI / 2, 0);
         } else if (kind < 0.75) {
           gb.add(UNIT_BOX, mat, x, 0.42, z, lean, twist, 0, 0.08, 0.84, 0.08);
           gb.add(UNIT_BOX, mat, x, 0.6, z, lean, twist, 0, 0.42, 0.08, 0.08);
@@ -7818,7 +7887,7 @@
         } else {
           gb.add(UNIT_BOX, mat, x, 0.08, z + 0.5, 0, twist, 0, 0.6, 0.16, 1.1);
         }
-        gb.add(new THREE.SphereGeometry(1, 8, 5, 0, Math.PI * 2, 0, Math.PI / 2), dirtMat, x, 0, z + 0.65, 0, twist, 0, 0.32, 0.1, 0.6);
+        gb.add(MOUND_G, dirtMat, x, 0, z + 0.65, 0, twist, 0, 0.32, 0.1, 0.6);
         addBoxCollider(x, 0, z, 0.45, kind < 0.88 ? 0.75 : 0.16, kind < 0.88 ? 0.2 : 1.1);
       }
       // open graves (the relics lie in two of them)
@@ -7891,7 +7960,7 @@
       }
       // twisted dead trees: bent trunks in three kinked segments, hackable, with low branches to slice off
       // (each tree keeps a clear circle as wide as its lean and branches reach, so no two trees ever touch)
-      const gyTrees = [];
+      const gyTrees = []; GY.trees = gyTrees;
       for (let k = 0, tries = 0; k < 30 && tries < 400; tries++) {
         const x = G.x + (rng2() - 0.5) * (GH * 2 - 3), z = G.z + (rng2() - 0.5) * (GH * 2 - 3);
         if (blocked(x, z) || inPlot(x, z, 0.8)) continue;
@@ -7940,7 +8009,7 @@
       // lamp posts along the paths with a cold, sickly light
       const lampMat = new THREE.MeshStandardMaterial({ color: 0x1a2a22, emissive: 0xa8f0c8, emissiveIntensity: 1.4 });
       for (const [x, z] of [[-1.6, 24], [1.6, 20], [-4.6, 13], [4.6, 13.6], [-15, 9.5], [15, 11], [-22.4, -4], [21.4, 0.8], [-14, -17], [-0.5, -22.6], [10, -7.4], [1.8, 6]]) {
-        gb.add(new THREE.CylinderGeometry(0.03, 0.04, 1.6, 6), ironMat, G.x + x, 0.8, G.z + z);
+        gb.add(LAMP_POST_G, ironMat, G.x + x, 0.8, G.z + z);
         gb.add(UNIT_BOX, lampMat, G.x + x, 1.7, G.z + z, 0, 0, 0, 0.14, 0.18, 0.14);
         gb.add(new THREE.ConeGeometry(0.13, 0.1, 4), ironMat, G.x + x, 1.84, G.z + z, 0, Math.PI / 4, 0);
         addBoxCollider(G.x + x, 0, G.z + z, 0.1, 1.6, 0.1);
@@ -7957,7 +8026,7 @@
         if (hx + sx > G.x + GH && hz + sx > GY.lake.z0 - 3 && hz - sx < GY.lake.z1 + 3) continue;       // keep the channel open
         gb.add(new THREE.SphereGeometry(1, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2), hillMat, G.x + Math.cos(a) * r, -0.05, G.z + Math.sin(a) * r, 0, rng2() * 3, 0, sx, sy, sx * 0.7);
       }
-      gb.build(scene, { rayTarget: true });
+      gb.build(scene, { rayTarget: true, chunk: 16, castShadow: false });
       // breakable props: crates by the gate, a boarded plot gate and a barricade on the wall
       makeCrate('graveyard', G.x + 3.6, 0, G.z + 26.6, 0.45);
       makeCrate('graveyard', G.x + 4.2, 0, G.z + 26.8, 0.38, 0.4);
@@ -7991,12 +8060,11 @@
         { name: 'SOUTH CAVERN', pos: mp(5.5, -16.5), rot: Math.PI, floods: [[MINE.x + 6.6, MINE.z - 13.4], [MINE.x + 6.6, MINE.z - 19.4]], aim: [MINE.x + 2, MINE.z - 16], realLights: 0 },
       ],
       // breaker panels, far apart: { pos (panel face centre), yaw (the way the panel faces) }
-      breakers: [
+      breakers: [                                        // two main breakers, both on the ground
         { pos: new THREE.Vector3(MINE.x - 3, 0.85, MINE.z + 16.95), yaw: Math.PI },          // north storage chamber, back wall
         { pos: new THREE.Vector3(MINE.x - 1.95, 0.85, MINE.z - 15), yaw: Math.PI / 2 },       // south storage cavern, west wall
-        { pos: new THREE.Vector3(MINE.x - 20.2, 2.35, MINE.z + 18.95), yaw: Math.PI },         // up on the scaffold's top platform
       ],
-      fuel: [mp(-6, 15.4), mp(-13, -19.8), mp(-20.5, 10)],
+      fuel: [mp(-6, 15.4), mp(-13, -19.8)],
       cartStart: MINE.x + 1, cartStop: MINE.x - 21.4, rubbleX: MINE.x - 23,
       boatStart: mp(-33.0, 1.27), boatEnd: mp(-73, 0), boatYaw: Math.PI,
       dock: { x0: MINE.x - 32.6, x1: MINE.x - 30.4, z0: MINE.z - 0.6, z1: MINE.z + 0.6 },
@@ -8015,19 +8083,20 @@
       const open = [], tall = [];
       for (let i = 0; i < NX; i++) { open.push(new Array(NZ).fill(false)); tall.push(new Array(NZ).fill(false)); }
       const carve = (x0, x1, z0, z1, isTall = false) => { for (let i = 0; i < NX; i++) for (let j = 0; j < NZ; j++) { const x = X0 + i + 0.5, z = Z0 + j + 0.5; if (x > x0 && x < x1 && z > z0 && z < z1) { open[i][j] = true; if (isTall) tall[i][j] = true; } } };
-      carve(M.x - 14, M.x + 7, M.z - 1, M.z + 1);          // main adit, from the entrance (east) going west
+      carve(M.x - 14, M.x + 7, M.z - 2.01, M.z + 2.01);    // main adit, from the entrance (east) going west (4 m wide)
       carve(M.x - 14, M.x - 8, M.z - 3, M.z + 3);          // the hub chamber
-      carve(M.x - 4, M.x - 2, M.z + 1, M.z + 13);          // north drift
+      carve(M.x - 4.01, M.x - 0.99, M.z + 1, M.z + 13);    // north drift (3 m)
       carve(M.x - 8, M.x + 2, M.z + 13, M.z + 17);         // north storage chamber
-      carve(M.x + 2, M.x + 4, M.z - 13, M.z - 1);          // south drift
+      carve(M.x + 0.99, M.x + 4.01, M.z - 13, M.z - 1);    // south drift (3 m)
       carve(M.x - 2, M.x + 8, M.z - 20, M.z - 13, true);   // south storage cavern (tall: a generator stands here)
-      carve(M.x - 16, M.x - 14, M.z + 3, M.z + 9);         // north-west drift from the hub
+      carve(M.x - 16.01, M.x - 12.99, M.z + 3, M.z + 9);   // north-west drift from the hub (3 m)
       carve(M.x - 22, M.x - 13, M.z + 9, M.z + 19, true);  // the scaffold cavern
-      carve(M.x - 12, M.x - 10, M.z - 14, M.z - 3);        // south-west drift from the hub
+      carve(M.x - 12.01, M.x - 8.99, M.z - 14, M.z - 3);   // south-west drift from the hub (3 m)
       carve(M.x - 22, M.x - 8, M.z - 21, M.z - 14, true);  // the ore cavern
-      carve(M.x - 23.01, M.x - 14, M.z - 1, M.z + 1);      // the old tunnel west (blocked by a rock fall at its end)
+      carve(M.x - 23.01, M.x - 14, M.z - 2.01, M.z + 2.01); // the old tunnel west (blocked by a rock fall at its end)
       carve(M.x - 49, M.x - 23, M.z - 13, M.z + 13, true); // the deep cavern with the underground lake
       carve(M.x - 73.6, M.x - 48.9, M.z - 1.6, M.z + 1.6, true);   // the water channel out of the mountain
+      MN.grid = { X0, Z0, NX, NZ, open, tall };                     // (for the menu's map)
       const isOpen = (i, j) => i >= 0 && j >= 0 && i < NX && j < NZ && open[i][j];
       const WALL_H = 3.6, LOW = 2.0, HIGH = 3.4, WT = 0.4, WALL_LOW = -1.8;
       const runs = [];
@@ -8043,7 +8112,7 @@
         let start = -1;
         for (let j = 0; j <= NZ; j++) {
           const isEntrance = dx > 0 && Math.abs(X0 + i + 1 - (M.x + 7)) < 0.01;
-          const face = j < NZ && isOpen(i, j) && !isOpen(i + dx, j) && !(isEntrance && Math.abs(Z0 + j + 0.5 - M.z) < 1);
+          const face = j < NZ && isOpen(i, j) && !isOpen(i + dx, j) && !(isEntrance && Math.abs(Z0 + j + 0.5 - M.z) < 2);
           if (face && start < 0) start = j;
           if (!face && start >= 0) { runs.push({ axis: 'z', a0: Z0 + start, a1: Z0 + j, at: X0 + i + (dx > 0 ? 1 : 0), out: dx }); start = -1; }
         }
@@ -8062,7 +8131,7 @@
         for (let k = 0; k < len * 2.2; k++) {
           const t = r.a0 + rr3() * len, y = rr3() * LOW, s = 0.12 + rr3() * 0.22;
           const x = r.axis === 'x' ? t : r.at + r.out * 0.02, z = r.axis === 'x' ? r.at + r.out * 0.02 : t;
-          mb.add(new THREE.DodecahedronGeometry(1, 0), k % 3 ? darkRock : rockMat, x, y, z, rr3() * 3, rr3() * 3, 0, s, s * 0.8, s);
+          mb.add(ROCK_G, k % 3 ? darkRock : rockMat, x, y, z, rr3() * 3, rr3() * 3, 0, s, s * 0.8, s);
         }
       }
       // ceilings (rows merged by height): low over tunnels, high over the caverns
@@ -8100,14 +8169,14 @@
       // the rock face round the entrance (outside), a timber portal and a warning sign
       const ex = MN.ex;
       for (const s of [-1, 1]) {
-        addBoxCollider(ex + 0.6, 0, M.z + s * 7.5, 1.2, 6, 13);
-        mb.add(UNIT_BOX, darkRock, ex + 0.6, 3, M.z + s * 7.5, 0, 0, 0, 1.2, 6, 13);
-        for (let k = 0; k < 30; k++) mb.add(new THREE.DodecahedronGeometry(1, 0), rockMat, ex + 1.2, rr3() * 4.4, M.z + s * (1.2 + rr3() * 12.6), rr3() * 3, rr3() * 3, 0, 0.3 + rr3() * 0.5, 0.3 + rr3() * 0.4, 0.3 + rr3() * 0.4);
+        addBoxCollider(ex + 0.6, 0, M.z + s * 8.5, 1.2, 6, 13);
+        mb.add(UNIT_BOX, darkRock, ex + 0.6, 3, M.z + s * 8.5, 0, 0, 0, 1.2, 6, 13);
+        for (let k = 0; k < 30; k++) mb.add(ROCK_G, rockMat, ex + 1.2, rr3() * 4.4, M.z + s * (2.2 + rr3() * 12.6), rr3() * 3, rr3() * 3, 0, 0.3 + rr3() * 0.5, 0.3 + rr3() * 0.4, 0.3 + rr3() * 0.4);
       }
-      addBoxCollider(ex + 0.6, 2.0, M.z, 1.2, 4, 2.2);
-      mb.add(UNIT_BOX, darkRock, ex + 0.6, 4, M.z, 0, 0, 0, 1.2, 4, 2.2);
-      for (const s of [-1, 1]) mb.add(UNIT_BOX, timberMat, ex + 1.25, 1.0, M.z + s * 0.98, 0, 0, 0, 0.16, 2.0, 0.16);
-      mb.add(UNIT_BOX, timberMat, ex + 1.25, 2.05, M.z, 0, 0, 0, 0.2, 0.18, 2.4);
+      addBoxCollider(ex + 0.6, 2.0, M.z, 1.2, 4, 4.2);
+      mb.add(UNIT_BOX, darkRock, ex + 0.6, 4, M.z, 0, 0, 0, 1.2, 4, 4.2);
+      for (const s of [-1, 1]) mb.add(UNIT_BOX, timberMat, ex + 1.25, 1.0, M.z + s * 1.98, 0, 0, 0, 0.16, 2.0, 0.16);
+      mb.add(UNIT_BOX, timberMat, ex + 1.25, 2.05, M.z, 0, 0, 0, 0.2, 0.18, 4.4);
       const signTex = canvasTexture(256, (g, s) => {
         g.fillStyle = '#4a3a28'; g.fillRect(0, s * 0.25, s, s * 0.5);
         for (let k = 0; k < 6; k++) { g.fillStyle = 'rgba(20,12,6,0.4)'; g.fillRect(0, s * 0.25 + k * s * 0.083, s, 2); }
@@ -8123,41 +8192,41 @@
         for (let k = 0; k <= n; k++) {
           const t = k / n, x = x0 + (x1 - x0) * t, z = z0 + (z1 - z0) * t;
           const h = 3.5 + rr3() * 3, w = 1.4 + rr3();
-          mb.add(new THREE.DodecahedronGeometry(1, 0), darkRock, x + ox * (0.6 + rr3() * 0.5), h * 0.45, z + oz * (0.6 + rr3() * 0.5), rr3() * 0.5, rr3() * 6, rr3() * 0.5, w, h, w);
+          mb.add(ROCK_G, darkRock, x + ox * (0.6 + rr3() * 0.5), h * 0.45, z + oz * (0.6 + rr3() * 0.5), rr3() * 0.5, rr3() * 6, rr3() * 0.5, w, h, w);
           const b = 0.35 + rr3() * 0.45;
-          mb.add(new THREE.DodecahedronGeometry(1, 0), rockMat, x - ox * 0.3 + (rr3() - 0.5) * 0.6, b * 0.6, z - oz * 0.3 + (rr3() - 0.5) * 0.6, rr3() * 3, rr3() * 3, 0, b, b * 0.8, b);
+          mb.add(ROCK_G, rockMat, x - ox * 0.3 + (rr3() - 0.5) * 0.6, b * 0.6, z - oz * 0.3 + (rr3() - 0.5) * 0.6, rr3() * 3, rr3() * 3, 0, b, b * 0.8, b);
         }
       }
       for (let k = 0; k < 22; k++) {
         const a = -Math.PI / 2 + (k / 21) * Math.PI, x = ex + 4.5 + Math.cos(a) * 4.6, z = M.z + Math.sin(a) * 7.2;
         const s = 0.5 + rr3() * 0.6;
-        mb.add(new THREE.DodecahedronGeometry(1, 0), rockMat, x + 0.5, s * 0.5, z, rr3() * 3, rr3() * 3, 0, s, s * 0.9, s);
+        mb.add(ROCK_G, rockMat, x + 0.5, s * 0.5, z, rr3() * 3, rr3() * 3, 0, s, s * 0.9, s);
       }
       // timber supports along the tunnels
       const boltMat = new THREE.MeshStandardMaterial({ color: 0x3a3c3e, roughness: 0.45, metalness: 0.85 });
-      const support = (x, z, alongX) => {
+      const support = (x, z, alongX, hs = 0.9) => {
         for (const s of [-1, 1]) {
-          const px = alongX ? x : x + s * 0.9, pz = alongX ? z + s * 0.9 : z;
+          const px = alongX ? x : x + s * hs, pz = alongX ? z + s * hs : z;
           mb.add(UNIT_BOX, timberMat, px, 0.95, pz, 0, 0, 0, 0.14, 1.9, 0.14);
           addBoxCollider(px, 0, pz, 0.14, 1.9, 0.14);
           // the iron strap plate at the joint, with bolt heads, and an angled brace up to the cap beam
           const ox = alongX ? 0.072 : 0, oz = alongX ? 0 : 0.072;
           for (const f of [-1, 1]) {
             mb.add(UNIT_BOX, boltMat, px + ox * f, 1.78, pz + oz * f, 0, 0, 0, alongX ? 0.006 : 0.13, 0.26, alongX ? 0.13 : 0.006);
-            for (const by of [1.7, 1.86]) mb.add(new THREE.CylinderGeometry(0.012, 0.012, 0.012, 6), boltMat, px + ox * f * 1.1, by, pz + oz * f * 1.1, alongX ? 0 : Math.PI / 2, 0, alongX ? Math.PI / 2 : 0);
+            for (const by of [1.7, 1.86]) mb.add(BOLT_G, boltMat, px + ox * f * 1.1, by, pz + oz * f * 1.1, alongX ? 0 : Math.PI / 2, 0, alongX ? Math.PI / 2 : 0);
           }
-          const bx = alongX ? x : x + s * 0.62, bz = alongX ? z + s * 0.62 : z;
+          const bx = alongX ? x : x + s * (hs - 0.28), bz = alongX ? z + s * (hs - 0.28) : z;
           mb.add(UNIT_BOX, timberMat, bx, 1.68, bz, alongX ? -s * 0.8 : 0, 0, alongX ? 0 : s * 0.8, 0.07, 0.42, 0.07);
         }
-        mb.add(UNIT_BOX, timberMat, x, 1.93, z, 0, 0, 0, alongX ? 0.18 : 2.0, 0.16, alongX ? 2.0 : 0.18);
-        for (const s of [-1, 1]) mb.add(new THREE.CylinderGeometry(0.014, 0.014, 0.2, 6), boltMat, alongX ? x : x + s * 0.9, 1.93, alongX ? z + s * 0.9 : z, alongX ? 0 : 0, 0, alongX ? Math.PI / 2 : 0);   // through-bolts in the cap beam
+        mb.add(UNIT_BOX, timberMat, x, 1.93, z, 0, 0, 0, alongX ? 0.18 : 2 * hs + 0.2, 0.16, alongX ? 2 * hs + 0.2 : 0.18);
+        for (const s of [-1, 1]) mb.add(THRU_BOLT_G, boltMat, alongX ? x : x + s * hs, 1.93, alongX ? z + s * hs : z, alongX ? 0 : 0, 0, alongX ? Math.PI / 2 : 0);   // through-bolts in the cap beam
       };
-      for (let x = M.x + 5; x > M.x - 8; x -= 3) support(x, M.z, true);
-      for (let x = M.x - 15.5; x > M.x - 22; x -= 3) support(x, M.z, true);
-      for (let z = M.z + 3; z < M.z + 13; z += 3) support(M.x - 3, z, false);
-      for (let z = M.z - 3; z > M.z - 13; z -= 3) support(M.x + 3, z, false);
-      for (let z = M.z + 4.5; z < M.z + 9; z += 3) support(M.x - 15, z, false);
-      for (let z = M.z - 4.5; z > M.z - 14; z -= 3) support(M.x - 11, z, false);
+      for (let x = M.x + 5; x > M.x - 8; x -= 3) support(x, M.z, true, 1.9);
+      for (let x = M.x - 15.5; x > M.x - 22; x -= 3) support(x, M.z, true, 1.9);
+      for (let z = M.z + 3; z < M.z + 13; z += 3) support(M.x - 2.5, z, false, 1.4);
+      for (let z = M.z - 3; z > M.z - 13; z -= 3) support(M.x + 2.5, z, false, 1.4);
+      for (let z = M.z + 4.5; z < M.z + 9; z += 3) support(M.x - 14.5, z, false, 1.4);
+      for (let z = M.z - 4.5; z > M.z - 14; z -= 3) support(M.x - 10.5, z, false, 1.4);
       // big timber posts holding up the caverns' roofs
       for (const [x, z] of [[-18, 12], [-18, -17.5], [-14, -17.5], [3, -16.5], [-36, 11], [-28, 11], [-28, -11], [-36, -11], [-26, 5], [-26, -5]]) {
         mb.add(UNIT_BOX, timberMat, M.x + x, HIGH / 2, M.z + z, 0, 0, 0, 0.24, HIGH, 0.24);
@@ -8191,26 +8260,64 @@
       rails(M.x - 11, M.z - 18, M.x - 20, M.z - 18);
       // ore carts (static), heaped with ore; one tipped over in the hub
       const hullMat = new THREE.MeshStandardMaterial({ color: 0x3a2e26, map: grimeTex, roughness: 0.6, metalness: 0.7 });
-      const oreCart = (x, z, ry) => {
-        mb.add(new THREE.CylinderGeometry(0.42, 0.3, 0.4, 4, 1, true), hullMat, x, 0.4, z, 0, Math.PI / 4 + ry, 0, 1.3, 1, 0.9);
-        mb.add(UNIT_BOX, hullMat, x, 0.2, z, 0, ry, 0, 0.75, 0.04, 0.5);
-        mb.add(new THREE.TorusGeometry(0.4, 0.012, 4, 4), boltMat, x, 0.6, z, Math.PI / 2, 0, Math.PI / 4 + ry, 1.3, 0.9, 1);   // rolled rim
-        const cs = Math.cos(ry), sn = Math.sin(ry);
-        for (const ax of [-0.25, 0.25]) {                                  // two axles, four flanged wheels
-          const axx = x + ax * cs, axz = z - ax * sn;
-          mb.add(new THREE.CylinderGeometry(0.014, 0.014, 0.66, 6), boltMat, axx, 0.1, axz, Math.PI / 2, ry, 0);
-          for (const sd of [-0.3, 0.3]) {
-            const wx = axx + sd * sn, wz = axz + sd * cs;
-            mb.add(new THREE.CylinderGeometry(0.1, 0.1, 0.035, 14), railMat, wx, 0.1, wz, Math.PI / 2, ry, 0);
-            mb.add(new THREE.CylinderGeometry(0.115, 0.115, 0.01, 14), boltMat, wx - sd * sn * 0.08, 0.1, wz - sd * cs * 0.08, Math.PI / 2, ry, 0);   // flange
-          }
+      // detailed mine carts: a riveted dark-steel trapezoid tub with reinforced lip rails and side bands, an iron
+      // undercarriage (beams, cross-members), axles, four flanged cast-iron wheels (sitting on the rails when it's on a
+      // track), coupling hooks front and back, and a heap of coal with glinting ore in it
+      const coalMat = new THREE.MeshStandardMaterial({ color: 0x161616, roughness: 0.55, metalness: 0.35 });
+      const oreMat = new THREE.MeshStandardMaterial({ color: 0x8a7a3a, roughness: 0.3, metalness: 0.9, emissive: 0x3a2400, emissiveIntensity: 0.5 });
+      const castIron = new THREE.MeshStandardMaterial({ color: 0x2a2826, map: grimeTex, roughness: 0.55, metalness: 0.75 });
+      const TUB_G = new THREE.CylinderGeometry(0.42, 0.31, 0.38, 4, 1, true);
+      const WHEEL_G = new THREE.CylinderGeometry(0.1, 0.1, 0.04, 16), FLANGE_G = new THREE.CylinderGeometry(0.116, 0.116, 0.012, 16), HUB_G = new THREE.CylinderGeometry(0.03, 0.03, 0.06, 10);
+      const WR = 0.1, TXH = 0.42 * Math.SQRT1_2 * 1.3, TZH = 0.42 * Math.SQRT1_2 * 0.9, BXH = 0.31 * Math.SQRT1_2 * 1.3, BZH = 0.31 * Math.SQRT1_2 * 0.9;
+      // build one into batch b, in that batch's coordinates; onRail lifts it onto the rail heads; wheels: false = leave
+      // them out (the pushable cart has its own spinning wheels)
+      const buildCart = (b, x, z, ry, onRail, wheels = true) => {
+        const ay = (onRail ? 0.092 : 0) + WR, cs = Math.cos(ry), sn = Math.sin(ry);
+        const P = (lx, ly, lz) => [x + lx * cs + lz * sn, ly, z - lx * sn + lz * cs];
+        const tb = ay + 0.09, th = 0.38, tc = tb + th / 2;
+        b.add(TUB_G, hullMat, ...P(0, tc, 0), 0, Math.PI / 4 + ry, 0, 1.3, 1, 0.9);                                  // the tub
+        b.add(UNIT_BOX, hullMat, ...P(0, tb + 0.01, 0), 0, ry, 0, BXH * 2, 0.02, BZH * 2);                           // its floor
+        for (const sd of [-1, 1]) {                                                                                     // lip rails round the top
+          b.add(UNIT_BOX, castIron, ...P(sd * TXH, tb + th, 0), 0, ry, 0, 0.035, 0.035, TZH * 2 + 0.03);
+          b.add(UNIT_BOX, castIron, ...P(0, tb + th, sd * TZH), 0, ry, 0, TXH * 2 + 0.03, 0.035, 0.035);
+          // reinforcing bands half-way up each face, with rivets
+          const mx = (TXH + BXH) / 2, mz = (TZH + BZH) / 2, tiltX = Math.atan2(TXH - BXH, th), tiltZ = Math.atan2(TZH - BZH, th);
+          b.add(UNIT_BOX, castIron, ...P(sd * (mx + 0.006), tc, 0), sd * 0 + 0, ry, -sd * tiltX, 0.012, 0.04, mz * 2);
+          b.add(UNIT_BOX, castIron, ...P(0, tc, sd * (mz + 0.006)), sd * tiltZ, ry, 0, mx * 2, 0.04, 0.012);
+          for (let k = 0; k < 5; k++) { b.add(RIVET_G, castIron, ...P((k - 2) * mx * 0.4, tc, sd * (mz + 0.014))); b.add(RIVET_G, castIron, ...P((k - 2) * mx * 0.4, tb + th - 0.03, sd * (TZH + 0.02))); }
+          for (let k = 0; k < 3; k++) b.add(RIVET_G, castIron, ...P(sd * (mx + 0.014), tc, (k - 1) * mz * 0.6));
         }
-        for (let k = 0; k < 7; k++) mb.add(new THREE.DodecahedronGeometry(1, 0), rockMat, x + (rr3() - 0.5) * 0.4, 0.5, z + (rr3() - 0.5) * 0.25, rr3() * 3, rr3() * 3, 0, 0.1, 0.08, 0.1);
-        addBoxCollider(x, 0, z, 0.9, 0.6, 0.7);
+        // undercarriage: two beams, cross-members, axles and the wheels
+        for (const sd of [-1, 1]) b.add(UNIT_BOX, castIron, ...P(0, ay + 0.05, sd * 0.2), 0, ry, 0, 0.82, 0.06, 0.05);
+        for (const sx of [-1, 1]) {
+          b.add(UNIT_BOX, castIron, ...P(sx * 0.3, ay + 0.05, 0), 0, ry, 0, 0.06, 0.05, 0.46);
+          b.add(new THREE.CylinderGeometry(0.018, 0.018, 0.68, 8), castIron, ...P(sx * 0.26, ay, 0), Math.PI / 2, ry, 0);
+          if (wheels) for (const sz of [-1, 1]) {
+            b.add(WHEEL_G, castIron, ...P(sx * 0.26, ay, sz * 0.3), Math.PI / 2, ry, 0);
+            b.add(FLANGE_G, castIron, ...P(sx * 0.26, ay, sz * 0.274), Math.PI / 2, ry, 0);          // the flange runs inside the rail
+            b.add(HUB_G, boltMat, ...P(sx * 0.26, ay, sz * 0.32), Math.PI / 2, ry, 0);
+          }
+          // coupling hooks
+          b.add(UNIT_BOX, castIron, ...P(sx * 0.47, ay + 0.06, 0), 0, ry, 0, 0.12, 0.03, 0.04);
+          b.add(new THREE.TorusGeometry(0.025, 0.008, 5, 10, Math.PI * 1.3), castIron, ...P(sx * 0.54, ay + 0.06, 0), 0, ry + Math.PI / 2, sx > 0 ? 0 : Math.PI);
+        }
+        // the load: coal with glinting ore
+        for (let k = 0; k < 11; k++) {
+          const s2 = 0.05 + rr3() * 0.04;
+          b.add(ROCK_G, k % 4 === 0 ? oreMat : coalMat, ...P((rr3() - 0.5) * TXH * 1.5, tb + th - 0.04 + rr3() * 0.05, (rr3() - 0.5) * TZH * 1.4), rr3() * 3, rr3() * 3, 0, s2, s2 * 0.8, s2);
+        }
       };
-      oreCart(M.x - 16, M.z - 18, 0); oreCart(M.x - 19, M.z - 18, 0); oreCart(M.x, M.z - 17.2, Math.PI / 2); oreCart(M.x - 6.5, M.z + 14.2, Math.PI / 2);
-      mb.add(new THREE.CylinderGeometry(0.42, 0.3, 0.4, 4, 1, true), hullMat, M.x - 12.5, 0.4, M.z - 2.2, 1.2, Math.PI / 4 + 0.6, 0, 1.3, 1, 0.9);
-      addBoxCollider(M.x - 12.5, 0, M.z - 2.2, 0.9, 0.6, 0.7);
+      const oreCart = (x, z, ry, onRail = false) => {
+        buildCart(mb, x, z, ry, onRail);
+        addBoxCollider(x, 0, z, Math.abs(Math.cos(ry)) * 0.9 + Math.abs(Math.sin(ry)) * 0.66, onRail ? 0.72 : 0.62, Math.abs(Math.sin(ry)) * 0.9 + Math.abs(Math.cos(ry)) * 0.66);
+      };
+      oreCart(M.x - 16, M.z - 18, 0, true); oreCart(M.x - 19, M.z - 18, 0, true); oreCart(M.x, M.z - 17.2, Math.PI / 2); oreCart(M.x - 6.5, M.z + 14.2, Math.PI / 2);
+      {
+        const tip = makeBatch(); buildCart(tip, 0, 0, 0, false);
+        const tg = new THREE.Group(); tg.position.set(M.x - 12.5, 0.33, M.z - 2.4); tg.rotation.set(1.25, 0.6, 0); scene.add(tg);
+        tip.build(tg, { castShadow: false });
+        addBoxCollider(M.x - 12.5, 0, M.z - 2.4, 0.9, 0.62, 0.8);
+      }
       // the two-level scaffold in the scaffold cavern: a timber deck along the north wall (level 1), a higher platform
       // at its west end (level 2) with the third breaker panel, railings, cross-braced posts, and stairs up to each
       {
@@ -8246,7 +8353,7 @@
         }
       }
       // the channel's mouth in the cavern wall (a rough rock arch), and the grey light of the world outside at its far end
-      for (let k = 0; k < 11; k++) { const a = (k / 10) * Math.PI; mb.add(new THREE.DodecahedronGeometry(1, 0), rockMat, M.x - 48.9, MN.lake.level + Math.sin(a) * 1.75, M.z + Math.cos(a) * 1.75, rr3() * 3, rr3() * 3, 0, 0.32, 0.26, 0.32); }
+      for (let k = 0; k < 11; k++) { const a = (k / 10) * Math.PI; mb.add(ROCK_G, rockMat, M.x - 48.9, MN.lake.level + Math.sin(a) * 1.75, M.z + Math.cos(a) * 1.75, rr3() * 3, rr3() * 3, 0, 0.32, 0.26, 0.32); }
       {
         const dayMat = new THREE.MeshBasicMaterial({ color: 0x9aa8b4, fog: false });
         const day = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 3.4), dayMat);
@@ -8306,7 +8413,7 @@
       for (const [bx, bz, along] of [[1.7, 15, 'z'], [7.7, -16.5, 'z'], [-21.7, -17.5, 'z'], [-8.3, -17.5, 'z']]) {
         for (let k = 0; k < 14; k++) {
           const s2 = 0.25 + rr3() * 0.5, y = Math.min(1.6, rr3() * rr3() * 1.9);
-          mb.add(new THREE.DodecahedronGeometry(1, 0), k % 2 ? darkRock : rockMat, M.x + bx - (rr3() * 0.5), y + s2 * 0.5, M.z + bz + (rr3() - 0.5) * 3, rr3() * 3, rr3() * 3, 0, s2, s2 * 0.8, s2);
+          mb.add(ROCK_G, k % 2 ? darkRock : rockMat, M.x + bx - (rr3() * 0.5), y + s2 * 0.5, M.z + bz + (rr3() - 0.5) * 3, rr3() * 3, rr3() * 3, 0, s2, s2 * 0.8, s2);
         }
         addBoxCollider(M.x + bx - 0.25, 0, M.z + bz, 0.5, 1.5, 3);
       }          // half-boarded opening into the north chamber's side bay
@@ -8324,36 +8431,35 @@
         sp.scale.set(1.1, 1.1, 1); sp.position.set(M.x + x, y, M.z + z); scene.add(sp);
         lightSources.push({ x: M.x + x, y: y - 0.07, z: M.z + z, color: 0xffa050, intensity: 3.5, distance: 6, weight: 1.2, fire: true });
       }
-      mb.build(scene, { rayTarget: true });
+      mb.build(scene, { rayTarget: true, chunk: 14, castShadow: false });
       // the rock fall blocking the old tunnel west (the minecart can smash through it)
       {
         const group = new THREE.Group(); scene.add(group);
         const rocks = [];
-        for (let k = 0; k < 34; k++) {
+        for (let k = 0; k < 52; k++) {
           const s = 0.15 + rr3() * 0.35, y = Math.min(1.8, rr3() * rr3() * 2.2);
-          const m = new THREE.Mesh(new THREE.DodecahedronGeometry(1, 0), k % 3 ? darkRock : rockMat);
-          m.position.set(MN.rubbleX - 0.8 + rr3() * 1.6, y + s * 0.5, M.z - 1.2 + rr3() * 2.4);
+          const m = new THREE.Mesh(ROCK_G, k % 3 ? darkRock : rockMat);
+          m.position.set(MN.rubbleX - 0.8 + rr3() * 1.6, y + s * 0.5, M.z - 2.1 + rr3() * 4.2);
           m.rotation.set(rr3() * 3, rr3() * 3, 0); m.scale.set(s, s * 0.8, s);
           m.castShadow = m.receiveShadow = true;
           group.add(m); rocks.push(m);
         }
-        const col = addCol(MN.rubbleX, 0, M.z, 1.8, 2.2, 2.4);
+        const col = addCol(MN.rubbleX, 0, M.z, 1.8, 2.2, 4.4);
         mineRubble = { group, rocks, col, cleared: false };
       }
       // the pushable minecart on the main line
       {
         const group = new THREE.Group(); group.position.set(MN.cartStart, 0, M.z); scene.add(group);
         const cb = makeBatch();
-        cb.add(new THREE.CylinderGeometry(0.42, 0.3, 0.4, 4, 1, true), hullMat, 0, 0.4, 0, 0, Math.PI / 4, 0, 1.3, 1, 0.9);
-        cb.add(UNIT_BOX, hullMat, 0, 0.2, 0, 0, 0, 0, 0.75, 0.04, 0.5);
-        for (const s of [-1, 1]) cb.add(UNIT_BOX, ironMat, s * 0.42, 0.18, 0, 0, 0, 0, 0.06, 0.08, 0.5);
-        for (let k = 0; k < 6; k++) cb.add(new THREE.DodecahedronGeometry(1, 0), rockMat, -0.2 + (k % 3) * 0.2, 0.45, (k < 3 ? -0.1 : 0.12), k, k * 2, 0, 0.1, 0.08, 0.1);
+        buildCart(cb, 0, 0, 0, true, false);
         cb.build(group);
         const wheels = [];
-        for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
-          const w = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.05, 12), railMat);
-          w.rotation.x = Math.PI / 2; w.position.set(sx * 0.28, 0.1, sz * 0.3); group.add(w); wheels.push(w);
-          const spoke = new THREE.Mesh(UNIT_BOX, ironMat); spoke.scale.set(0.18, 0.02, 0.055); w.add(spoke); spoke.rotation.x = -Math.PI / 2;
+        for (const sx of [-1, 1]) for (const sz of [-1, 1]) {                  // flanged cast-iron wheels on the rail heads, spinning as it rolls
+          const w = new THREE.Mesh(WHEEL_G, castIron);
+          w.rotation.x = Math.PI / 2; w.position.set(sx * 0.26, 0.092 + WR, sz * 0.3); group.add(w); wheels.push(w);
+          const fl = new THREE.Mesh(FLANGE_G, castIron); fl.position.y = sz > 0 ? -0.026 : 0.026; w.add(fl);
+          const hub = new THREE.Mesh(HUB_G, boltMat); w.add(hub);
+          const spoke = new THREE.Mesh(UNIT_BOX, boltMat); spoke.scale.set(0.16, 0.046, 0.02); w.add(spoke);
         }
         const col = addCol(MN.cartStart, 0, M.z, 0.9, 0.6, 0.7);
         mineCart = { group, wheels, col, x: MN.cartStart, vx: 0, done: false };
@@ -8746,8 +8852,9 @@
     const menuGroup = new THREE.Group();
     menuGroup.visible = false;
     scene.add(menuGroup);
-    const MENU_W = 0.42, MENU_H = 0.38;
-    const menuPanel = makePanel(MENU_W, MENU_H, 760, 688, (g, p) => {
+    const MENU_W = 0.42, MENU_H = 0.46;
+    let menuTab = 'obj';                           // 'obj': objectives and the live map; 'set': turning, role, leave
+    const menuPanel = makePanel(MENU_W, MENU_H, 760, 832, (g, p) => {
       const W = p.cw, H = p.ch;
       roundRect(g, 4, 4, W - 8, H - 8, 26);
       g.fillStyle = 'rgba(14,11,9,0.94)'; g.fill();
@@ -8758,19 +8865,35 @@
       g.font = `20px ${UI_FONT}`; g.fillStyle = 'rgba(216,200,160,0.65)';
       g.fillText(currentMap === 'waiting' ? 'WAITING ROOM' : mapById(currentMap).name, W / 2, 112);
       g.textAlign = 'left';
-      g.fillStyle = '#c8b894'; g.font = `bold 26px ${UI_FONT}`; g.fillText('TURNING', 40, 160);
+      const inMap = currentMap !== 'waiting';
+      if (inMap) {                                                     // two tabs: the objectives with the live map, and the settings
+        [['obj', 'OBJECTIVES & MAP'], ['set', 'SETTINGS']].forEach(([id, label], k) => {
+          const x = 40 + k * 348, y = 132, w = 332, h = 58;
+          drawButton(g, x, y, w, h, label, { on: menuTab === id, hover: uiButton(p, 'tab:' + id, x, y, w, h), size: 22 });
+        });
+      }
+      if (inMap && menuTab === 'obj') {
+        drawMenuObjectives(g, p, 206, 690);
+        drawButton(g, 40, 712, 440, 70, 'BACK TO WAITING ROOM', { hover: uiButton(p, 'room', 40, 712, 440, 70), size: 22 });
+        drawButton(g, 496, 712, W - 536, 70, 'CLOSE', { hover: uiButton(p, 'close', 496, 712, W - 536, 70), size: 26 });
+        g.fillStyle = 'rgba(216,200,160,0.45)'; g.font = `17px ${UI_FONT}`; g.textAlign = 'center';
+        g.fillText(renderer.xr.isPresenting ? 'B / Y opens and closes this menu' : 'Tab / Esc opens and closes this menu', W / 2, H - 22);
+        g.textAlign = 'left';
+        return;
+      }
+      g.fillStyle = '#c8b894'; g.font = `bold 26px ${UI_FONT}`; g.fillText('TURNING', 40, 240);
       const tb = [['snap', 'SNAP TURN'], ['smooth', 'SMOOTH TURN'], ['none', 'NO TURN']];
       tb.forEach(([id, label], k) => {
-        const x = 40 + k * 232, y = 182, w = 216, h = 74;
+        const x = 40 + k * 232, y = 262, w = 216, h = 74;
         drawButton(g, x, y, w, h, label, { on: turnMode === id, hover: uiButton(p, 'turn:' + id, x, y, w, h), size: 24 });
       });
-      g.fillStyle = '#c8b894'; g.font = `bold 26px ${UI_FONT}`; g.fillText('ROLE', 40, 300);
+      g.fillStyle = '#c8b894'; g.font = `bold 26px ${UI_FONT}`; g.fillText('ROLE', 40, 380);
       [['survivor', 'SURVIVOR'], ['monster', 'MONSTER']].forEach(([id, label], k) => {
-        const x = 40 + k * 348, y = 322, w = 332, h = 84;
+        const x = 40 + k * 348, y = 402, w = 332, h = 84;
         drawButton(g, x, y, w, h, label, { on: playerRole === id, hover: uiButton(p, 'role:' + id, x, y, w, h), size: 30 });
       });
-      if (currentMap !== 'waiting') drawButton(g, 40, 446, W - 80, 70, 'BACK TO WAITING ROOM', { hover: uiButton(p, 'room', 40, 446, W - 80, 70), size: 24 });
-      const cy = currentMap !== 'waiting' ? 548 : 470;
+      if (currentMap !== 'waiting') drawButton(g, 40, 526, W - 80, 70, 'BACK TO WAITING ROOM', { hover: uiButton(p, 'room', 40, 526, W - 80, 70), size: 24 });
+      const cy = currentMap !== 'waiting' ? 628 : 550;
       drawButton(g, 40, cy, W - 80, 80, 'CLOSE', { hover: uiButton(p, 'close', 40, cy, W - 80, 80), size: 30 });
       g.fillStyle = 'rgba(216,200,160,0.45)'; g.font = `17px ${UI_FONT}`; g.textAlign = 'center';
       g.fillText(renderer.xr.isPresenting ? 'B / Y opens and closes this menu' : 'Tab / Esc opens and closes this menu', W / 2, H - 30);
@@ -8778,7 +8901,8 @@
     }, (id) => {
       if (!id) return;
       waitingClick(false);
-      if (id.startsWith('turn:')) { turnMode = id.slice(5); snapReady = true; }
+      if (id.startsWith('tab:')) menuTab = id.slice(4);
+      else if (id.startsWith('turn:')) { turnMode = id.slice(5); snapReady = true; }
       else if (id.startsWith('role:')) setRole(id.slice(5));
       else if (id === 'room') { goTo('waiting'); setMenu(false); return; }
       else if (id === 'close') { setMenu(false); return; }
@@ -9629,7 +9753,7 @@
     const quest = {
       camp: { escaped: false, unlocked: false, firstEscape: true },
       graveyard: { braziers: [false, false, false, false], skulls: 0, unlocked: false, escaped: false, firstEscape: true },
-      mine: { levers: [false, false, false], fuel: 0, tunnel: false, unlocked: false, escaped: false, firstEscape: true },
+      mine: { levers: MN.breakers.map(() => false), fuel: 0, tunnel: false, unlocked: false, escaped: false, firstEscape: true },
     };
     function objectiveLines(map) {
       if (map === 'camp') {
@@ -9644,7 +9768,7 @@
                 ['Drive the boat out across the lake', q.escaped]];
       }
       const q = quest.mine, on = mapGens('mine').filter((g) => g.running).length, pulled = q.levers.filter(Boolean).length;
-      return [[`Power the generators  ${on}/2`, on >= 2], [`Pull the breakers  ${pulled}/3`, pulled >= 3], [`Collect fuel canisters  ${q.fuel}/3`, q.fuel >= 3],
+      return [[`Power the generators  ${on}/2`, on >= 2], [`Pull the breakers  ${pulled}/${MN.breakers.length}`, pulled >= MN.breakers.length], [`Collect fuel canisters  ${q.fuel}/${MN.fuel.length}`, q.fuel >= MN.fuel.length],
               ['Ram the cart through the rock fall', q.tunnel],
               ['Drive the boat out of the mountain', q.escaped]];
     }
@@ -9656,8 +9780,8 @@
       const canvas = document.createElement('canvas'); canvas.width = 512; canvas.height = 256;
       const tex = new THREE.CanvasTexture(canvas); tex.colorSpace = THREE.SRGBColorSpace;
       const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
-      sp.scale.set(0.9, 0.45, 1); sp.position.copy(pos); scene.add(sp);
-      objSigns[map] = { canvas, tex };
+      sp.scale.set(0.9, 0.45, 1); sp.position.copy(pos); sp.visible = false; scene.add(sp);   // (objectives moved into the menu)
+      objSigns[map] = { canvas, tex, sp };
     }
     function drawObjectives(map) {
       const s = objSigns[map]; if (!s) return;
@@ -9785,29 +9909,56 @@
     }
 
     // ---------- mine: breaker levers ----------
-    // one lever on each of the three breaker panels, spread through the mine
+    // one big lever on each main breaker: a bolted hub, a steel arm and a chunky ribbed red grip, pointing up-and-out
+    // (+45 degrees); pull it down to -45 degrees and it clunks over and LOCKS there; an indicator lamp in a little cage
+    // above it goes from red to bright green with a burst of green sparks. A caged work lantern hangs over each panel.
+    const LEVER_UP = Math.PI / 4, LEVER_DOWN = -Math.PI / 4;
+    const leverRed = new THREE.MeshStandardMaterial({ color: 0xc0201a, roughness: 0.55 });
+    const leverSteel = new THREE.MeshStandardMaterial({ color: 0x8a9096, roughness: 0.3, metalness: 0.9 });
     const levers = MN.breakers.map((B, k) => {
       const fx = Math.sin(B.yaw), fz = Math.cos(B.yaw);
-      const pivot = new THREE.Group(); pivot.position.set(B.pos.x + fx * 0.02, B.pos.y - 0.02, B.pos.z + fz * 0.02); scene.add(pivot);
-      pivot.rotation.set(0, B.yaw - Math.PI, 0, 'YXZ');
+      const pivot = new THREE.Group(); pivot.position.set(B.pos.x + fx * 0.035, B.pos.y + 0.02, B.pos.z + fz * 0.035); scene.add(pivot);
+      pivot.rotation.set(0, B.yaw - Math.PI, 0, 'YXZ');          // local -z points out of the panel, towards you
       const lb = makeBatch();
-      lb.add(UNIT_BOX, ironMat, 0, 0.09, 0, 0, 0, 0, 0.025, 0.18, 0.025);
-      lb.add(new THREE.CylinderGeometry(0.022, 0.022, 0.07, 10), new THREE.MeshStandardMaterial({ color: 0xc0281c, roughness: 0.5 }), 0, 0.19, 0, 0, 0, Math.PI / 2);
-      lb.build(pivot);
-      pivot.rotation.x = -0.55;                                     // up (and leaning out towards you)
-      const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.018, 10, 8), new THREE.MeshStandardMaterial({ color: 0x220000, emissive: 0xff2010, emissiveIntensity: 1.2 }));
-      lamp.position.set(B.pos.x + fx * 0.02, B.pos.y + 0.18, B.pos.z + fz * 0.02); scene.add(lamp);
-      return { k, pivot, lamp, pos: B.pos, pulled: false, angle: -0.55, held: -1, grabY: 0 };
+      lb.add(new THREE.CylinderGeometry(0.032, 0.032, 0.08, 14), leverSteel, 0, 0, 0, 0, 0, Math.PI / 2);                 // hub
+      for (const s2 of [-1, 1]) lb.add(new THREE.CylinderGeometry(0.012, 0.012, 0.012, 6), ironMat, s2 * 0.045, 0, 0, 0, 0, Math.PI / 2);   // axle nuts
+      lb.add(UNIT_BOX, leverSteel, 0, 0, -0.11, 0, 0, 0, 0.026, 0.026, 0.2);                                              // arm
+      lb.add(UNIT_BOX, leverSteel, 0, 0, -0.215, 0, 0, 0, 0.12, 0.022, 0.022);                                           // crossbar
+      lb.add(new THREE.CylinderGeometry(0.024, 0.024, 0.11, 12), leverRed, 0, 0, -0.215, 0, 0, Math.PI / 2);            // the red grip
+      for (let i = 0; i < 5; i++) lb.add(new THREE.CylinderGeometry(0.026, 0.026, 0.006, 12), leverRed, -0.04 + i * 0.02, 0, -0.215, 0, 0, Math.PI / 2);   // ribs
+      for (const s2 of [-1, 1]) lb.add(new THREE.CylinderGeometry(0.027, 0.027, 0.008, 12), ironMat, s2 * 0.059, 0, -0.215, 0, 0, Math.PI / 2);   // end caps
+      lb.build(pivot, { castShadow: false });
+      pivot.rotation.x = LEVER_UP;
+      // the indicator: a lamp in a little cage, with its glow
+      const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.024, 12, 10), new THREE.MeshStandardMaterial({ color: 0x220000, emissive: 0xff2010, emissiveIntensity: 1.6 }));
+      lamp.position.set(B.pos.x + fx * 0.03, B.pos.y + 0.2, B.pos.z + fz * 0.03); scene.add(lamp);
+      const cage = new THREE.Mesh(new THREE.TorusGeometry(0.028, 0.003, 4, 12), ironMat); cage.position.copy(lamp.position); cage.rotation.y = B.yaw; scene.add(cage);
+      const lampGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xff2a1a, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false }));
+      lampGlow.scale.set(0.3, 0.3, 1); lampGlow.position.copy(lamp.position); scene.add(lampGlow);
+      // a caged work lantern on the rock over the panel (lends a pooled light when you're near, so the panel's easy to find)
+      const lan = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.1, 10), new THREE.MeshStandardMaterial({ color: 0x2a1a08, emissive: 0xffb050, emissiveIntensity: 1.8 }));
+      lan.position.set(B.pos.x + fx * 0.12 + Math.cos(B.yaw) * 0.38, B.pos.y + 0.62, B.pos.z + fz * 0.12 - Math.sin(B.yaw) * 0.38); scene.add(lan);
+      const lanGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xffa040, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false }));
+      lanGlow.scale.set(0.9, 0.9, 1); lanGlow.position.copy(lan.position); scene.add(lanGlow);
+      lightSources.push({ x: lan.position.x, y: lan.position.y, z: lan.position.z, color: 0xffa858, intensity: 2.5, distance: 4.5, weight: 1.3, fire: true });
+      return { k, pivot, lamp, lampGlow, pos: B.pos, pulled: false, angle: LEVER_UP, held: -1, grabY: 0, flash: 0 };
     });
     function pullLever(l) {
       if (l.pulled) return;
       if (monsterBlocked()) { l.held = -1; return; }
-      l.pulled = true; l.held = -1;
+      l.pulled = true; l.held = -1; l.angle = LEVER_DOWN; l.flash = 1;
       quest.mine.levers[l.k] = true;
-      l.lamp.material.emissive.setHex(0x30ff50);
-      gameAudio.clunk();
+      l.lamp.material.emissive.setHex(0x30ff50); l.lampGlow.material.color.setHex(0x40ff60);
+      gameAudio.clunk(); camera.getWorldPosition(_hCam); gameAudio.thud?.(_hCam.distanceTo(l.pos) * 0.3);   // a heavy mechanical clunk
+      if (typeof fxSparks !== 'undefined') {                       // a burst of green sparks from the panel
+        const gC = new THREE.Color(0x60ff80), wC = new THREE.Color(0xd8ffd0);
+        for (let k = 0; k < 26; k++) {
+          const a = Math.random() * Math.PI * 2, sp = 0.8 + Math.random() * 1.8;
+          fxSparks.spawn(l.pos.x, l.pos.y + 0.05, l.pos.z, Math.cos(a) * sp, 0.5 + Math.random() * 1.5, Math.sin(a) * sp, 0.3 + Math.random() * 0.4, k % 3 ? gC : wC, { grav: 4, drag: 2 });
+        }
+      }
       const n = quest.mine.levers.filter(Boolean).length;
-      showToast(`Breakers on: ${n}/3`, n >= 3 ? 'Power hums through the tunnels' : 'Sparks spit from the panel');
+      showToast(`Breakers on: ${n}/${levers.length}`, n >= levers.length ? 'Power hums through the tunnels' : 'The breaker locks down with a clunk');
       questChanged('mine');
     }
     // ---------- mine: fuel canisters for the boat ----------
@@ -9828,7 +9979,7 @@
       fb.add(new THREE.PlaneGeometry(0.06, 0.05), new THREE.MeshStandardMaterial({ color: 0xe8d040, roughness: 0.6 }), 0, 0.13, 0.0455);   // hazard label
       fb.build(group, { rayTarget: true });
       const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xff8030, transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending, depthWrite: false }));
-      glow.scale.set(0.5, 0.5, 1); glow.position.y = 0.12; group.add(glow);
+      glow.scale.set(0.7, 0.7, 1); glow.position.y = 0.12; group.add(glow);
       return { group, glow, taken: false, p: p.clone().setY(0.12) };
     });
     function takeFuel(f) {
@@ -9836,7 +9987,7 @@
       f.taken = true; f.group.visible = false;
       quest.mine.fuel = fuelCans.filter((x) => x.taken).length;
       gameAudio.chime();
-      showToast(`Fuel canisters: ${quest.mine.fuel}/3`, quest.mine.fuel >= 3 ? 'Enough fuel for the boat' : 'Sloshing with petrol');
+      showToast(`Fuel canisters: ${quest.mine.fuel}/${fuelCans.length}`, quest.mine.fuel >= fuelCans.length ? 'Enough fuel for the boat' : 'Sloshing with petrol');
       questChanged('mine');
     }
 
@@ -9955,7 +10106,7 @@
     function updateEscapeBoats(dt) {
       for (const b of Object.values(escapeBoats)) {
         const unlocked = quest[b.map].unlocked;
-        const fuelPct = b.map === 'mine' ? Math.min(100, quest.mine.fuel / 3 * 100) : 100;
+        const fuelPct = b.map === 'mine' ? Math.min(100, quest.mine.fuel / MN.fuel.length * 100) : 100;
         drawEscapeGauge(b, fuelPct);
         if (b.t < 0) {
           b.glow.material.color.setHex(unlocked ? 0x40ff60 : 0xff2a1a);
@@ -10287,8 +10438,11 @@
       }
       // levers settle at their target angle
       for (const l of levers) {
-        const want = l.pulled ? 0.95 : (l.held >= 0 ? l.angle : -0.55);
-        l.pivot.rotation.x += (want - l.pivot.rotation.x) * Math.min(1, dt * 14);
+        const want = l.pulled ? LEVER_DOWN : (l.held >= 0 ? l.angle : LEVER_UP);    // pulled: locked down
+        l.pivot.rotation.x += (want - l.pivot.rotation.x) * Math.min(1, dt * (l.pulled ? 20 : 14));
+        l.flash = Math.max(0, l.flash - dt * 1.5);
+        l.lamp.material.emissiveIntensity = l.pulled ? 2.2 + l.flash * 4 : 1.2 + 0.6 * Math.sin(performance.now() * 0.006 + l.k);   // red pulses until it's on
+        l.lampGlow.material.opacity = l.pulled ? 0.8 + l.flash * 0.6 : 0.4 + 0.25 * Math.sin(performance.now() * 0.006 + l.k);
       }
       // the cart rolls along the rails
       if (!mineCart.done) {
@@ -10343,13 +10497,13 @@
           for (const l of levers) {
             if (l.pulled) continue;
             l.pivot.updateMatrixWorld(true);
-            const knob = _qT.set(0, 0.19, 0).applyMatrix4(l.pivot.matrixWorld);
+            const knob = _qT.set(0, 0, -0.215).applyMatrix4(l.pivot.matrixWorld);
             if (l.held < 0 && (gripEdge || trigEdge) && h.last.distanceTo(knob) < 0.13 && !monsterBlocked(c)) { l.held = i; l.grabY = h.last.y; pulse(c, 0.4, 40); }
             if (l.held === i) {
               if (!(grip || trig)) l.held = -1;
               else {
-                l.angle = THREE.MathUtils.clamp(-0.55 + (l.grabY - h.last.y) * 9, -0.55, 0.95);
-                if (l.angle > 0.8) { pullLever(l); pulse(c, 1, 120); }
+                l.angle = THREE.MathUtils.clamp(LEVER_UP - (l.grabY - h.last.y) * 7, LEVER_DOWN, LEVER_UP);   // pull the grip down
+                if (l.angle < LEVER_DOWN + 0.12) { pullLever(l); pulse(c, 1, 160); }
               }
             }
           }
@@ -11607,9 +11761,9 @@
         showToast('A SKULL WAS KNOCKED OFF THE ALTAR', `Skull relics: ${quest.graveyard.skulls}/3`);
       } else if (t.kind === 'lever') {
         const l = t.l;
-        l.pulled = false; quest.mine.levers[l.k] = false; l.lamp.material.emissive.setHex(0xff2010);
+        l.pulled = false; quest.mine.levers[l.k] = false; l.lamp.material.emissive.setHex(0xff2010); l.lampGlow.material.color.setHex(0xff2a1a);
         gameAudio.clunk();
-        showToast('A BREAKER WAS THROWN BACK', `Breakers on: ${quest.mine.levers.filter(Boolean).length}/3`);
+        showToast('A BREAKER WAS THROWN BACK', `Breakers on: ${quest.mine.levers.filter(Boolean).length}/${levers.length}`);
       }
       questChanged(currentMapOf(t));
     }
@@ -13029,7 +13183,7 @@
     }
     enhanceWater(water.material);
     for (const L of extraLakes) enhanceWater(L.water.material);
-    enhanceWater(campChannelWater.material);
+    if (campChannelWater) enhanceWater(campChannelWater.material);
 
     // ---------- underwater: murk, a tint, and every sound muffled ----------
     const muffles = [];
@@ -13836,7 +13990,7 @@
         const lines = baseLines(map);
         if (map === 'graveyard' || map === 'mine') {
           const n = exRepairCount(map);
-          lines.splice(lines.length - 1, 0, [`Repair the boat: propeller, spark plug  ${n}/2`, n >= 2]);
+          lines.splice(lines.length - 1, 0, [`Fit the boat's propeller and spark plug  ${n}/2`, n >= 2]);
         }
         return lines;
       };
@@ -14262,7 +14416,8 @@
         for (const g of geos) if (!inUse.g.has(g)) { try { g.dispose(); } catch (e) { } }
         for (const m of mats) if (!inUse.m.has(m)) { try { m.dispose(); } catch (e) { } }
         for (const t of texs) if (!inUse.t.has(t) && !t.isRenderTargetTexture && !t.isVideoTexture) { try { t.dispose(); } catch (e) { } }
-        for (const L of lights[id]) { L.intensity = L.l.intensity; L.l.intensity = 0; if (L.l.shadow) L.l.shadow.autoUpdate = false; }
+        // its real lights leave the lighting too (fewer lights for every pixel to shade; the switch happens behind the travel fade)
+        for (const L of lights[id]) { L.intensity = L.l.intensity; L.l.visible = false; if (L.l.shadow) L.l.shadow.autoUpdate = false; }
       }
       function load(id) {
         if (loaded.has(id)) return;
@@ -14275,7 +14430,7 @@
           stash[id] = null;
         }
         for (const o of owned[id]) scene.add(o);
-        for (const L of lights[id]) { L.l.intensity = L.intensity; if (L.l.shadow) { L.l.shadow.autoUpdate = true; L.l.shadow.needsUpdate = true; } }
+        for (const L of lights[id]) { L.l.visible = true; L.l.intensity = L.intensity; if (L.l.shadow) { L.l.shadow.autoUpdate = true; L.l.shadow.needsUpdate = true; } }
       }
       function wanted() {
         const w = new Set();
@@ -14293,7 +14448,7 @@
       }
       // lights of unloaded maps stay dark even if their own code turns them back on (e.g. a running generator's floodlights)
       function darkenUnloaded() {
-        for (const id of ['camp', 'graveyard', 'mine', 'waiting']) if (!loaded.has(id)) for (const L of lights[id]) L.l.intensity = 0;
+        for (const id of ['camp', 'graveyard', 'mine', 'waiting']) if (!loaded.has(id)) for (const L of lights[id]) L.l.visible = false;
       }
       // the AI's walkable grid needs a map's colliders even if that map isn't loaded right now
       function withColliders(id, fn) {
@@ -14335,7 +14490,7 @@
       g.group.position.copy(g.pos);
       for (const p of g.smoke || []) { p.age = p.life; p.s.visible = false; }
     }
-    function resetRunProgress() {
+    function resetRunProgress(silent = false) {
       // generators (the camp's four and the other maps')
       for (const g of generators) resetGenerator(g);
       for (const g of extraGens) resetGenerator(g);
@@ -14367,8 +14522,8 @@
       for (const a of altarSlots) { a.skull = null; a.reserved = false; }
       quest.graveyard.skulls = 0;
       // mine: breakers up, fuel back, cart at the top of the line, the rock fall back in place
-      for (const l of levers) { l.pulled = false; l.held = -1; l.angle = -0.55; l.lamp.material.emissive.setHex(0xff2010); }
-      quest.mine.levers = [false, false, false];
+      for (const l of levers) { l.pulled = false; l.held = -1; l.angle = LEVER_UP; l.flash = 0; l.lamp.material.emissive.setHex(0xff2010); l.lampGlow.material.color.setHex(0xff2a1a); }
+      quest.mine.levers = levers.map(() => false);
       for (const f of fuelCans) { f.taken = false; f.group.visible = true; }
       quest.mine.fuel = 0;
       mineCart.x = MN.cartStart; mineCart.vx = 0; mineCart.done = false;
@@ -14383,7 +14538,7 @@
       }
       quest.mine.tunnel = false;
       for (const m of ['camp', 'graveyard', 'mine']) { quest[m].unlocked = false; questChanged(m); }
-      showToast('ALL TASKS RESET', 'Generators, boat parts and objectives start again from 0%');
+      if (!silent) showToast('ALL TASKS RESET', 'Generators, boat parts and objectives start again from 0%');
     }
     {
       const baseRespawn = respawn;
@@ -14601,6 +14756,308 @@
     }
     mapLoad.update();                                    // straight away: only the lobby's camp and the waiting room stay
 
+    // =====================================================================
+    //  A FRESH MATCH EVERY TIME YOU ENTER A MAP (OR RETURN TO THE WAITING ROOM)
+    //  Coins, owned / equipped chains and charms, and the escape counter stay saved in this browser; everything about
+    //  the match itself starts over: generators at 0%, every map's objectives back where they began, the boats moored
+    //  at their docks with their parts missing and their engines off, the night sky back, smashed windows, doors and
+    //  crates whole again, the stun shotgun at 1/1 SHELL in a random cabin, and the AI monster fresh at its far spawn.
+    // =====================================================================
+    const paneHome = panes.map((p) => ({ p, min: p.col.box.min.clone(), max: p.col.box.max.clone() }));
+    const crateHome = breakables.map((b) => ({ b, hp: b.hp }));
+    const campBoatHome = { pos: boat.pos.clone(), yaw: boat.yaw };
+    function resetMatch() {
+      // the run's tasks (generators, boat parts and fuel, braziers, skulls, breakers, fuel cans, cart, rock fall, the
+      // other boats' propeller and spark plug), with no "tasks reset" message: this is a new match
+      resetRunProgress(true);
+      // the camp boat back at its mooring, engine off
+      boat.pos.copy(campBoatHome.pos); boat.yaw = campBoatHome.yaw; boat.speed = 0; boat.wheelAngle = 0; boat.wheelPrev = 0;
+      boat.holding = -1; boat.prevThr = false; boat.engineLevel = 0; boat.tillerTilt = 0; boat.warnT = 0; boat.sparkT = 0;
+      deskBoat.engaged = false; deskBoat.up = deskBoat.down = deskBoat.left = deskBoat.right = false;
+      drawStatus();
+      // the other maps' boats (resetEnding moors them; make sure their engines are cold)
+      for (const b of Object.values(escapeBoats)) {
+        b.t = -1; b.speed = 0; b.yaw = b.yaw0; b.deskOff = null;
+        b.group.position.set(b.start.x, b.level, b.start.z); b.group.rotation.set(0, b.yaw0, 0); updateBoatCol(b);
+      }
+      // smashed windows, hacked-down doors, broken crates and barricades, sliced branches: all whole again
+      for (const h of paneHome) { h.p.broken = false; h.p.holder.visible = true; h.p.col.box.min.copy(h.min); h.p.col.box.max.copy(h.max); }
+      for (const d of doors) {
+        d.broken = false; d.pivot.visible = true; d.angle = 0; d.target = null; d.grabbed = -1; d.wasOpen = false; d.hackHits = 0;
+        d.pivot.rotation.y = d.yaw; d.col.box.copy(d.closedBox);
+      }
+      for (const h of crateHome) {
+        const b = h.b; b.broken = false; b.col.box.copy(b.box);
+        if (b.kind === 'crate') { b.group.visible = true; b.hp = h.hp; }
+        else { for (const m of b.planks) m.visible = true; b.hp = b.planks.length; }
+      }
+      for (let i = 0; i < branchDefs.length; i++) { const b = branchDefs[i]; if (b.cut) { b.cut = false; b.cur = b.len; setBranchMatrix(i, b.len); } }
+      branchMesh.instanceMatrix.needsUpdate = true;
+      for (const d of debris) scene.remove(d.mesh);           // splinters, shards and planks lying about
+      debris.length = 0;
+      // the sunrise is over: the boat-run minigame and the escape flags are cleared (resetEnding already put the night back)
+      boatRun.active = false; boatRun.done = false;
+      for (const it of boatRun.items) { it.live = false; it.g.visible = false; }
+      brHud.mesh.visible = false; brHud.marks.forEach((m) => { m.visible = false; });
+      for (const m of ['camp', 'graveyard', 'mine']) quest[m].escaped = false;
+      // you start the match healthy
+      survival.hp = HP_MAX; survival.under = 0; survival.burning = survival.drowning = false; survival.flash = 0;
+      // the monster forgets everything it heard or saw last match (it respawns on the far side when the map starts)
+      ai.heard = []; ai.predict = null; ai.seenAt = false; ai.seenVel = null; ai.rag = null;
+      for (const m of ['camp', 'graveyard', 'mine']) questChanged(m);
+      drawAllGenSigns(); extraGens.forEach(drawGenSign);
+    }
+    {
+      const baseArrive = arrive;
+      arrive = function (id, ...a) {
+        const r = baseArrive.call(this, id, ...a);
+        resetMatch();
+        if (ai.active && id !== 'waiting') { despawnAI(); }   // a brand-new spawn (on the far side of the map) next frame
+        writeSave();                                          // coins, items and the escape count are kept
+        return r;
+      };
+    }
+
+    // =====================================================================
+    //  OBJECTIVES & LIVE MAP IN THE MENU, AND LIGHTER GRAVEYARD / MINE RENDERING
+    //  - the floating objective boards and the objective line on the HUD / wrist are gone: open the menu (B / Y, or
+    //    Tab / Esc) for a live checklist with progress bars and an overhead map of the map you're on, with the remaining
+    //    generators and quest items, the escape boat, the exit, and an arrow for where you are and which way you face
+    //    (survivors only: as the MONSTER the objectives stay hidden)
+    //  - the graveyard and the mine: no shadow casting from their props, a nearer far plane, tighter fog, and a smaller
+    //    flashlight shadow map; little spark cues on the mine's breakers and fuel canisters
+    // =====================================================================
+    const MAP2D = {
+      camp: { x0: -36, x1: 58, z0: -38, z1: 38 },
+      graveyard: { x0: GRAVE.x - 32, x1: GRAVE.x + 51, z0: GRAVE.z - 32, z1: GRAVE.z + 32 },
+      mine: { x0: MINE.x - 76, x1: MINE.x + 19, z0: MINE.z - 27, z1: MINE.z + 27 },
+    };
+    const MAP_PX = 512;
+    for (const B of Object.values(MAP2D)) {
+      B.s = MAP_PX / Math.max(B.x1 - B.x0, B.z1 - B.z0);
+      B.ox = (MAP_PX - (B.x1 - B.x0) * B.s) / 2; B.oy = (MAP_PX - (B.z1 - B.z0) * B.s) / 2;
+    }
+    const m2 = (B, x, z) => [B.ox + (x - B.x0) * B.s, B.oy + (z - B.z0) * B.s];
+    // the static part of each map (ground, water, paths, buildings, tunnels), drawn once
+    const mapBase = {};
+    function mapBaseCanvas(id) {
+      if (mapBase[id]) return mapBase[id];
+      const cv = document.createElement('canvas'); cv.width = cv.height = MAP_PX;
+      const g = cv.getContext('2d'), B = MAP2D[id];
+      const P = (x, z) => m2(B, x, z);
+      const rect = (x0, z0, x1, z1, fill, stroke) => { const [a, b] = P(x0, z0), [c, d] = P(x1, z1); g.fillStyle = fill; g.fillRect(a, b, c - a, d - b); if (stroke) { g.strokeStyle = stroke; g.lineWidth = 1.5; g.strokeRect(a, b, c - a, d - b); } };
+      const rrect = (cx, cz, w, d, ry, fill, stroke) => {             // a rotated rectangle (in world metres)
+        const c = Math.cos(ry), s = Math.sin(ry), pts = [[-w / 2, -d / 2], [w / 2, -d / 2], [w / 2, d / 2], [-w / 2, d / 2]].map(([a, b]) => P(cx + a * c + b * s, cz - a * s + b * c));
+        g.beginPath(); pts.forEach(([x, y], k) => (k ? g.lineTo(x, y) : g.moveTo(x, y))); g.closePath();
+        g.fillStyle = fill; g.fill(); if (stroke) { g.strokeStyle = stroke; g.lineWidth = 1.5; g.stroke(); }
+      };
+      const dot = (x, z, r, fill) => { const [a, b] = P(x, z); g.fillStyle = fill; g.beginPath(); g.arc(a, b, r, 0, Math.PI * 2); g.fill(); };
+      g.fillStyle = '#07090a'; g.fillRect(0, 0, MAP_PX, MAP_PX);
+      if (id === 'camp') {
+        rect(-44, -44, 44, 44, '#0c120d');                                                  // the dark tree line
+        rect(-WORLD_HALF, -WORLD_HALF, WORLD_HALF, WORLD_HALF, '#16201a', 'rgba(140,160,140,0.35)');
+        for (const t of trees) if (Math.abs(t.x) < 45 && Math.abs(t.z) < 45) dot(t.x, t.z, t.solid ? 2.2 : 1.6, t.solid ? '#22301f' : '#121a12');
+        const poly = (tab, fill) => { g.beginPath(); for (let i = 0; i < LAKE_N; i += 2) { const a = -Math.PI + (2 * Math.PI * i) / LAKE_N, r = tab[i]; const [x, y] = P(LAKE_C.x + r * Math.cos(a), LAKE_C.z + r * Math.sin(a)); i ? g.lineTo(x, y) : g.moveTo(x, y); } g.closePath(); g.fillStyle = fill; g.fill(); };
+        poly(lakeBeachTab, '#5a4c36');
+        rect(LAKE_C.x, CH.z - CH.hw - CH.bw, CH.x1, CH.z + CH.hw + CH.bw, '#5a4c36');
+        poly(lakeShoreTab, '#1c3a56');
+        rect(LAKE_C.x, CH.z - CH.hw, CH.x1 + 0.4, CH.z + CH.hw, '#1c3a56');
+        rect(RIDGE.x - RIDGE.w / 2, RIDGE.z - RIDGE.d / 2, RIDGE.x + RIDGE.w / 2, RIDGE.z + RIDGE.d / 2, '#2c2a24');
+        rect(DOCK.x0 - 0.3, DOCK.z0, DOCK.x1, DOCK.z1, '#7a5a38');
+        dot(FIRE.x, FIRE.z, 5.5 * S * B.s / 1.2, 'rgba(90,70,50,0.6)');
+        rrect(CABIN.x, CABIN.z + 0.4, CABIN.w + 1.1, CABIN.d + 1.3, 0, '#4a3624', '#a08060');
+        for (const c of CABINS) rrect(c.x, c.z, 3.1, 3.4, CABIN_FACE[c.face], '#4a3624', '#a08060');
+        dot(FIRE.x, FIRE.z, 3, '#ff8030');
+      } else if (id === 'graveyard') {
+        const G = GRAVE, GH2 = 28;
+        rect(G.x - GH2 - 4, G.z - GH2 - 4, G.x + GH2 + 4, G.z + GH2 + 4, '#14181a');
+        rect(G.x - GH2, G.z - GH2, G.x + GH2, G.z + GH2, '#1a2320', 'rgba(170,170,160,0.6)');
+        rect(GY.lake.x0, GY.lake.z0, GY.lake.x1, GY.lake.z1, '#1c3a56');
+        for (const p of GY.pathPts || []) dot(p.x, p.z, 1.3, 'rgba(150,150,140,0.55)');
+        for (const Pl of GY.plots) rect(G.x + Pl.x - Pl.w / 2, G.z + Pl.z - Pl.d / 2, G.x + Pl.x + Pl.w / 2, G.z + Pl.z + Pl.d / 2, 'rgba(60,64,58,0.7)', 'rgba(170,170,160,0.5)');
+        for (const t of GY.trees || []) dot(t.x, t.z, 2, '#2a2a22');
+        rect(GY.crypt.x - 3.6, GY.crypt.z - 3, GY.crypt.x + 3.6, GY.crypt.z + 3, '#4a4c48', '#a0a098');
+        rect(GY.dock.x0, GY.dock.z0, GY.dock.x1, GY.dock.z1, '#7a5a38');
+        const [gx, gy] = P(G.x, G.z + GH2); g.fillStyle = '#a0a098'; g.fillRect(gx - 8, gy - 2, 16, 4);    // the gate
+      } else {
+        const M = MN.grid;
+        if (M) for (let i = 0; i < M.NX; i++) for (let j = 0; j < M.NZ; j++) {
+          if (!M.open[i][j]) continue;
+          const x = M.X0 + i, z = M.Z0 + j, L = MN.lake, inLake = x + 0.5 > L.x0 && x + 0.5 < L.x1 && z + 0.5 > L.z0 && z + 0.5 < L.z1;
+          rect(x, z, x + 1.02, z + 1.02, inLake ? '#1c3a56' : M.tall[i][j] ? '#4a3c2e' : '#3a3026');
+        }
+        rect(MN.ex, MINE.z - 7.8, MN.ex + 9, MINE.z + 7.8, '#2a2a24', 'rgba(150,140,120,0.5)');   // the yard outside
+        rect(MN.dock.x0, MN.dock.z0, MN.dock.x1, MN.dock.z1, '#7a5a38');
+        const [a, b] = P(MINE.x - 22.4, MINE.z), [c] = P(MN.ex + 9, MINE.z);
+        g.strokeStyle = 'rgba(160,160,170,0.5)'; g.setLineDash([3, 3]); g.beginPath(); g.moveTo(a, b); g.lineTo(c, b); g.stroke(); g.setLineDash([]);   // the rail line
+      }
+      mapBase[id] = cv;
+      return cv;
+    }
+    const _mmP = new THREE.Vector3(), _mmD = new THREE.Vector3();
+    // icons: filled shapes with a dark outline so they read on the map
+    function mmIcon(g, x, y, kind, color, size = 7) {
+      g.save(); g.translate(x, y);
+      g.fillStyle = color; g.strokeStyle = 'rgba(0,0,0,0.85)'; g.lineWidth = 2;
+      g.beginPath();
+      if (kind === 'square') g.rect(-size, -size, size * 2, size * 2);
+      else if (kind === 'diamond') { g.moveTo(0, -size - 1); g.lineTo(size + 1, 0); g.lineTo(0, size + 1); g.lineTo(-size - 1, 0); g.closePath(); }
+      else if (kind === 'tri') { g.moveTo(0, -size - 1); g.lineTo(size, size); g.lineTo(-size, size); g.closePath(); }
+      else g.arc(0, 0, size, 0, Math.PI * 2);
+      g.fill(); g.stroke();
+      g.restore();
+    }
+    function mmLabel(g, x, y, t, color) { g.font = 'bold 13px "Courier New", monospace'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = 'rgba(0,0,0,0.85)'; g.fillText(t, x + 1, y + 1); g.fillStyle = color; g.fillText(t, x, y); }
+    function drawMenuMap(g, X, Y, SIZE, map, survivor) {
+      const B = MAP2D[map], k = SIZE / MAP_PX;
+      g.save();
+      g.beginPath(); g.rect(X, Y, SIZE, SIZE); g.clip();
+      g.drawImage(mapBaseCanvas(map), X, Y, SIZE, SIZE);
+      const P = (x, z) => { const [a, b] = m2(B, x, z); return [X + a * k, Y + b * k]; };
+      if (survivor) {
+        const gens = map === 'camp' ? generators : mapGens(map);
+        for (const gn of gens) { const [a, b] = P(gn.pos.x, gn.pos.z); mmIcon(g, a, b, 'square', gn.running ? '#40d060' : '#ff4a3a', 7); mmLabel(g, a, b, 'G', '#ffffff'); }
+        const boatAt = (pos, yaw) => {                               // the escape boat: a little hull pointing along its bow
+          const [a, b] = P(pos.x, pos.z);
+          g.save(); g.translate(a, b); g.rotate(-yaw);
+          g.fillStyle = '#e8d8b0'; g.strokeStyle = '#000'; g.lineWidth = 2;
+          g.beginPath(); g.moveTo(11, 0); g.lineTo(3, -5); g.lineTo(-9, -5); g.lineTo(-9, 5); g.lineTo(3, 5); g.closePath(); g.fill(); g.stroke();
+          g.restore();
+        };
+        const exitAt = (x, z) => { const [a, b] = P(x, z); g.strokeStyle = '#60ff80'; g.lineWidth = 3; g.beginPath(); g.moveTo(a - 8, b); g.lineTo(a + 6, b); g.moveTo(a + 1, b - 6); g.lineTo(a + 7, b); g.lineTo(a + 1, b + 6); g.stroke(); mmLabel(g, a, b - 13, 'EXIT', '#60ff80'); };
+        if (map === 'camp') {
+          const PC = { prop: '#80c8ff', plug: '#ffa040', gas: '#ff4030' };
+          for (const pt of parts) if (!pt.installed) { const [a, b] = P(pt.mesh.position.x, pt.mesh.position.z); mmIcon(g, a, b, 'diamond', PC[pt.kind] || '#fff', 6); }
+          boatAt(boat.pos, boat.yaw);
+          exitAt(CH.x1 - 4, CH.z);
+        } else if (map === 'graveyard') {
+          for (const br of braziers) { const [a, b] = P(br.p.x, br.p.z); mmIcon(g, a, b, 'tri', br.lit ? '#5a5048' : '#ff9a30', br.lit ? 4 : 7); }
+          for (const sk of skulls) if (!sk.placed) { const [a, b] = P(sk.group.position.x, sk.group.position.z); mmIcon(g, a, b, 'circle', '#f0ead8', 6); }
+          { const [a, b] = P(GY.altar.x, GY.altar.z); mmIcon(g, a, b, 'diamond', quest.graveyard.skulls >= 3 ? '#5a5048' : '#c070ff', 6); }
+          for (const pt of exParts) if (pt.map === 'graveyard' && !pt.installed) { const [a, b] = P(pt.mesh.position.x, pt.mesh.position.z); mmIcon(g, a, b, 'diamond', pt.kind === 'prop' ? '#80c8ff' : '#ffa040', 6); }
+          boatAt(escapeBoats.graveyard.group.position, escapeBoats.graveyard.yaw);
+          exitAt(GY.edgeX + 2, (GY.lake.z0 + GY.lake.z1) / 2);
+        } else {
+          for (const l of levers) { const [a, b] = P(l.pos.x, l.pos.z); mmIcon(g, a, b, 'square', l.pulled ? '#40d060' : '#ff4a3a', l.pulled ? 4 : 6); if (!l.pulled) mmLabel(g, a, b, 'B', '#fff'); }
+          for (const f of fuelCans) if (!f.taken) { const [a, b] = P(f.p.x, f.p.z); mmIcon(g, a, b, 'circle', '#ff8a20', 6); }
+          if (!mineRubble.cleared) {
+            { const [a, b] = P(MN.rubbleX, MINE.z); g.strokeStyle = '#d08a50'; g.lineWidth = 3; g.beginPath(); g.moveTo(a - 6, b - 6); g.lineTo(a + 6, b + 6); g.moveTo(a + 6, b - 6); g.lineTo(a - 6, b + 6); g.stroke(); }
+            { const [a, b] = P(mineCart.x, MINE.z); mmIcon(g, a, b, 'square', '#b0b0b8', 5); }
+          }
+          for (const pt of exParts) if (pt.map === 'mine' && !pt.installed) { const [a, b] = P(pt.mesh.position.x, pt.mesh.position.z); mmIcon(g, a, b, 'diamond', pt.kind === 'prop' ? '#80c8ff' : '#ffa040', 6); }
+          boatAt(escapeBoats.mine.group.position, escapeBoats.mine.yaw);
+          exitAt(MN.edgeX - 2, MINE.z);
+        }
+        // you: an arrow at your position, turned the way you're facing
+        if (currentMap === map) {
+          headWorld(_mmP); camera.getWorldDirection(_mmD);
+          const [a, b] = P(_mmP.x, _mmP.z), ang = Math.atan2(_mmD.z, _mmD.x);
+          g.save(); g.translate(a, b); g.rotate(ang);
+          g.fillStyle = '#ffe24a'; g.strokeStyle = '#000'; g.lineWidth = 2.5;
+          g.beginPath(); g.moveTo(12, 0); g.lineTo(-7, -8); g.lineTo(-3, 0); g.lineTo(-7, 8); g.closePath(); g.fill(); g.stroke();
+          g.restore();
+          const pulseR = 10 + 4 * Math.sin(performance.now() * 0.006);
+          g.strokeStyle = 'rgba(255,226,74,0.5)'; g.lineWidth = 2; g.beginPath(); g.arc(a, b, pulseR, 0, Math.PI * 2); g.stroke();
+        }
+      }
+      g.restore();
+      g.strokeStyle = 'rgba(216,200,160,0.7)'; g.lineWidth = 3; g.strokeRect(X, Y, SIZE, SIZE);
+      g.fillStyle = 'rgba(216,200,160,0.8)'; g.font = 'bold 14px "Courier New", monospace'; g.textAlign = 'left'; g.textBaseline = 'top';
+      g.fillText('N', X + SIZE / 2 - 4, Y + 4);
+    }
+    // the objectives tab of the menu: a checklist with progress bars on the left, the live map on the right
+    function drawMenuObjectives(g, p, y0, y1) {
+      const map = currentMap, survivor = playerRole !== 'monster';
+      const W = p.cw, LX = 34, LW = 330, MX = 380, MS = Math.min(W - MX - 30, y1 - y0 - 70);
+      g.textBaseline = 'middle'; g.textAlign = 'left';
+      g.fillStyle = '#c8b894'; g.font = `bold 24px ${UI_FONT}`; g.fillText(survivor ? 'OBJECTIVES' : 'HUNT', LX, y0 + 18);
+      if (!survivor) {
+        g.fillStyle = '#ff6a5a'; g.font = `19px ${UI_FONT}`;
+        ['You are the MONSTER.', "The survivors' objectives", 'and items stay hidden.', '', 'Stalk the generators and', 'the boat, slash their', 'repairs and catch them', 'before they escape.'].forEach((t, k) => g.fillText(t, LX, y0 + 62 + k * 30));
+      } else if (ending) {
+        g.fillStyle = '#6dff8a'; g.font = `bold 26px ${UI_FONT}`; g.fillText('YOU ESCAPED!', LX, y0 + 70);
+      } else {
+        const lines = objectiveLines(map);
+        const rowH = Math.min(70, (y1 - y0 - 50) / lines.length);
+        lines.forEach(([text, done], k) => {
+          const y = y0 + 48 + k * rowH;
+          // check box
+          g.strokeStyle = done ? '#6dff8a' : 'rgba(216,200,160,0.7)'; g.lineWidth = 3; g.strokeRect(LX, y - 11, 22, 22);
+          if (done) { g.strokeStyle = '#6dff8a'; g.lineWidth = 4; g.beginPath(); g.moveTo(LX + 4, y); g.lineTo(LX + 10, y + 7); g.lineTo(LX + 19, y - 8); g.stroke(); }
+          const m = text.match(/(\d+)\/(\d+)\s*$/), label = text.replace(/\s+\d+\/\d+\s*$/, '');
+          g.fillStyle = done ? '#8aff9a' : '#f0e6d0';
+          g.font = `bold 19px ${UI_FONT}`;
+          if (g.measureText(label).width <= LW - 30) g.fillText(label, LX + 34, y);
+          else {                                                      // too long for one line: wrap it onto two
+            g.font = `bold 16px ${UI_FONT}`;
+            const words = label.split(' '); let l1 = '';
+            while (words.length && g.measureText((l1 + ' ' + words[0]).trim()).width <= LW - 30) l1 = (l1 + ' ' + words.shift()).trim();
+            g.fillText(l1, LX + 34, y - 8); g.fillText(words.join(' '), LX + 34, y + 10);
+          }
+          if (m) {                                                    // the progress bar
+            const n = +m[1], of = Math.max(1, +m[2]), f = Math.min(1, n / of), by = y + 22;
+            g.fillStyle = 'rgba(255,255,255,0.1)'; g.fillRect(LX + 34, by, LW - 90, 9);
+            g.fillStyle = done ? '#40d060' : '#ffb040'; g.fillRect(LX + 34, by, (LW - 90) * f, 9);
+            g.fillStyle = '#c8b894'; g.font = `15px ${UI_FONT}`; g.fillText(`${n}/${of}`, LX + LW - 50, by + 5);
+          }
+        });
+      }
+      drawMenuMap(g, MX, y0 + 6, MS, map, survivor);
+      // the key under the map
+      if (survivor) {
+        const ky = y0 + 6 + MS + 18;
+        const keys = map === 'camp' ? [['square', '#ff4a3a', 'GENERATOR'], ['diamond', '#80c8ff', 'BOAT PART'], ['tri', '#ffe24a', 'YOU']]
+          : map === 'graveyard' ? [['square', '#ff4a3a', 'GEN'], ['tri', '#ff9a30', 'BRAZIER'], ['circle', '#f0ead8', 'SKULL'], ['diamond', '#80c8ff', 'PART']]
+          : [['square', '#ff4a3a', 'GEN / BREAKER'], ['circle', '#ff8a20', 'FUEL'], ['diamond', '#80c8ff', 'PART']];
+        let kx = MX + 8;
+        g.font = `14px ${UI_FONT}`; g.textAlign = 'left';
+        for (const [kind, col, t] of keys) { mmIcon(g, kx, ky, kind, col, 5); g.fillStyle = '#d8c8a0'; g.textBaseline = 'middle'; g.fillText(t, kx + 10, ky); kx += 18 + g.measureText(t).width + 12; }
+      }
+    }
+    // the HUD and the wrist no longer list objectives (they're in the menu now): just a hint
+    {
+      const baseObjText = objectiveText;
+      objectiveText = function () {
+        const o = baseObjText();
+        if (playerRole !== 'monster' && currentMap !== 'waiting' && !ending && o.cls === '')
+          return { text: renderer.xr.isPresenting ? 'OBJECTIVES & MAP: B / Y' : 'OBJECTIVES & MAP: TAB', cls: '' };
+        return o;
+      };
+    }
+    // opening the menu on a map shows the objectives first
+    {
+      const baseSetMenu = setMenu;
+      setMenu = function (open) { if (open && currentMap !== 'waiting' && !menuGroup.visible) menuTab = 'obj'; return baseSetMenu(open); };
+    }
+    // no shadows cast by the graveyard's and the mine's props (they still receive them)
+    for (const id of ['graveyard', 'mine']) for (const o of mapLoad.owned[id]) o.traverse((m) => { if (m.isMesh) m.castShadow = false; });
+    // per-map rendering budget: the far plane (the fog hides everything past it anyway) and the flashlight's shadow map
+    const MAP_FAR = { camp: 240, waiting: 40, graveyard: 42, mine: 34 };
+    let menuRedrawT = 0, cueT = 0, perfMap = '';
+    const CUE_SPARK = new THREE.Color(0xffc060);
+    function updateMenuAndPerf(dt) {
+      const far = ending ? 240 : (MAP_FAR[currentMap] || 240);
+      if (camera.far !== far) { camera.far = far; camera.updateProjectionMatrix(); }
+      if (perfMap !== currentMap) {
+        perfMap = currentMap;
+        const spot = flashlight.userData.spot, size = currentMap === 'camp' ? 1024 : 512;
+        if (spot && spot.shadow && spot.shadow.mapSize.x !== size) { spot.shadow.mapSize.set(size, size); if (spot.shadow.map) { spot.shadow.map.dispose(); spot.shadow.map = null; } }
+      }
+      // the live checklist and map
+      if (menuGroup.visible && menuTab === 'obj' && currentMap !== 'waiting' && (menuRedrawT -= dt) <= 0) { menuRedrawT = 0.2; redrawPanel(menuPanel); }
+      // the mine: faint sparks spitting from the breakers still to pull and round the fuel still lying about
+      if (currentMap === 'mine' && playerRole !== 'monster' && (cueT -= dt) <= 0) {
+        cueT = 0.7 + Math.random() * 0.6;
+        headWorld(_mmP);
+        const spots = [...levers.filter((l) => !l.pulled).map((l) => l.pos), ...fuelCans.filter((f) => !f.taken).map((f) => f.p)];
+        for (const q of spots) {
+          if (q.distanceTo(_mmP) > 16 || Math.random() < 0.4) continue;
+          for (let k = 0; k < 3; k++) fxSparks.spawn(q.x + (Math.random() - 0.5) * 0.2, q.y + 0.1, q.z + (Math.random() - 0.5) * 0.2, (Math.random() - 0.5) * 0.8, 0.6 + Math.random(), (Math.random() - 0.5) * 0.8, 0.3 + Math.random() * 0.3, CUE_SPARK, { grav: 5, drag: 1.5 });
+        }
+      }
+      if (currentMap === 'mine') for (const f of fuelCans) if (!f.taken) f.glow.material.opacity = 0.45 + 0.3 * Math.sin(performance.now() * 0.004 + f.p.x);
+    }
+
     // ---------- XR session hooks ----------
     renderer.xr.addEventListener('sessionstart', () => {
       if (!titleActive) horrorAudio.start(); // backup in case the click handler didn't get to run (on the title screen PLAY starts it)
@@ -14668,6 +15125,7 @@
         updateExParts(dt); // carrying the propeller / spark plug to the graveyard's and mine's boats
         updateCharmSwing(dt); // wrist and necklace charms swinging on their chains, the compass needle, shop display
         updateMapsAndRun(dt); // only the current map stays loaded (others freed); the sunrise boat-run minigame
+        updateMenuAndPerf(dt); // live objectives + map in the menu; per-map far plane / shadow size; mine spark cues
       } catch (err) {
         if (!loopErrorReported) {
           loopErrorReported = true;
