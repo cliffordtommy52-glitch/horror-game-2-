@@ -61,12 +61,13 @@
   <div id="info">
     <b>WebXR Flashlight Starter + Gorilla Locomotion</b><br />
     VR: push off the ground, trees, rocks, tents and the cabin with your hands to move, jump and climb (the mossy log is slippery).<br />
-    <b>A</b> (right controller) toggles the flashlight; grip moves it to that hand.<br />
+    <b>A</b> (right controller) toggles your head-mounted flashlight (it shines wherever you look).<br />
+    Cabin doors: grab the handle with Grip or Trigger, or push them open; on desktop press <b>E</b> or click a door. Hit doors and windows hard to break them.<br />
     Right thumbstick left/right: 45° snap turn.<br />
-    Desktop: drag to orbit, <b>F</b> toggles the flashlight (no locomotion).<br />
+    Desktop: drag to orbit, <b>F</b> toggles the flashlight, <b>E</b> opens / closes the nearest door (no locomotion).<br />
     Generator: hold Trigger or Grip on its yellow handle, then hit each skill check with the other Trigger (or A / X). Beat 5 to power the floodlights.<br />
     Four generators are spread round the bigger campground (camp, cabin row, deep woods, lakeside ridge): power all 4 to light the whole camp.<br />
-    Lake (east of camp): swim by sweeping your hands through the water. Find the 3 glowing boat parts, carry them with Grip and drop them at the boat's motor; then grab the wheel and use Trigger or the thumbstick to drive.<br />
+    Lake (east of camp): walk down the sandy beach into the water, or out along the dock; swim by sweeping your hands through the water. Find the 3 glowing boat parts, carry them with Grip and drop them at the boat's motor; then grab the wheel and use Trigger or the thumbstick to drive.<br />
     Ambient horror music starts when you press ENTER VR (headphones recommended).
   </div>
   <!-- GRIMAPE title screen (desktop). Sits under the ENTER VR button and the diagnostics panel. -->
@@ -74,7 +75,7 @@
     <canvas id="title-logo" width="2048" height="900" aria-label="GRIMAPE"></canvas>
     <div id="title-tag">Something in the woods is awake</div>
     <button id="play-btn" type="button">PLAY</button>
-    <div id="title-hint">Desktop: click PLAY &nbsp;·&nbsp; VR: press ENTER VR, then touch PLAY or point at it and pull Trigger</div>
+    <div id="title-hint">Desktop: click PLAY &nbsp;·&nbsp; VR: press ENTER VR, then touch PLAY or point at it and pull Trigger &nbsp;·&nbsp; Click anywhere to hear the music</div>
   </div>
   <div id="diag"></div>
 
@@ -203,7 +204,7 @@
     const vrButton = VRButton.createButton(renderer); // "Enter VR" button
     document.body.appendChild(vrButton);
     // Browsers only allow audio to start inside a user gesture, so start the music in the button's own click.
-    vrButton.addEventListener('click', () => horrorAudio.start());
+    vrButton.addEventListener('click', () => { if (!titleActive) horrorAudio.start(); }); // on the title screen the lobby song plays instead; PLAY starts this
 
     // ---------- Scene, player rig & camera ----------
     const scene = new THREE.Scene();
@@ -518,11 +519,11 @@
     const S = CAMP_SCALE;
     const FIRE = new THREE.Vector3(0, 0, -4.5 * S);
     // cabin: footprint scaled, walls kept a little taller so the doorway clears your head
-    const CABIN = { x: 0, z: -14 * S, w: 5 * S, d: 4 * S, h: 1.6 };
+    const CABIN = { x: 0, z: -10, w: 4.6, d: 3.6, h: 1.8 };   // main front cabin (bigger now: was 2.75 x 2.2 at z -7.7), wrap-around porch to the front and right
     const GEN_POS = new THREE.Vector3(-2.6, 0, -0.6);               // the old generator
     const FLOOD_POS = [[2.9, -0.9], [-3.6, -2.2], [1.6, -6.2]];     // floodlight poles around the camp
     const LAKE = { x0: 5, x1: 14, z0: -4, z1: 5 };                  // lake water area (world X/Z), east of the camp
-    const WATER_LEVEL = 0.6;                                         // water surface height (m)
+    const WATER_LEVEL = -0.18;                                       // water surface height (m): the lake now sits in a sunken basin (was 0.6 in a walled pool)
     const DOCK = { x0: 3.5, x1: 7.4, z0: 0.4, z1: 1.6 };            // wooden dock reaching into the lake
     const REPAIR_SPOTS = { gas: [1.9, -6.2], prop: [-3.6, -4.9], plug: [-3.25, 0.25] }; // boat parts: cabin, tents, generator
     // Expanded campground landmarks (cabins face their doors towards: S = +z, N = -z, E = +x, W = -x)
@@ -546,6 +547,61 @@
     ];
     const nearCabin = (x, z, r) => CABINS.some((c) => Math.hypot(x - c.x, z - c.z) < r);
 
+    // ---------- Natural lake shape (shared by the lake terrain, its colliders, the water, the grass and the beach props) ----------
+    // Shoreline and beach-edge radius are tables around the lake centre. The shoreline is a wobbly rounded blob that
+    // always keeps the whole area the boat can reach in water (the boat's centre stays 1.3 m inside the LAKE rectangle
+    // and its hull reaches about 1.3 m from its centre). The beach is wide to the north and south, and narrower towards
+    // the camp (west) and the lakeside ridge (east) so it doesn't run into them.
+    const LAKE_C = { x: (LAKE.x0 + LAKE.x1) / 2, z: (LAKE.z0 + LAKE.z1) / 2 };
+    const LAKE_DEPTH = 0.65;                     // deepest lakebed, below the water surface (m)
+    const LAKE_SHELF = 1.3;                      // how far out from the shore the bed takes to reach full depth (m)
+    const LAKE_N = 360;
+    const lakeShoreTab = new Float32Array(LAKE_N), lakeBeachTab = new Float32Array(LAKE_N);
+    {
+      const hx = (LAKE.x1 - LAKE.x0) / 2 - 1.3, hz = (LAKE.z1 - LAKE.z0) / 2 - 1.3, reach = 1.4;
+      const boatReach = (c, s) => {                // distance to the edge of the boat-reachable area along (c, s)
+        let lo = 0, hi = 20;
+        for (let k = 0; k < 40; k++) {
+          const t = (lo + hi) / 2;
+          if (Math.hypot(Math.max(Math.abs(t * c) - hx, 0), Math.max(Math.abs(t * s) - hz, 0)) <= reach) lo = t; else hi = t;
+        }
+        return lo;
+      };
+      const eastLimit = RIDGE.x - RIDGE.w / 2 - 0.7, westLimit = 2.4;   // keep the sand off the ridge steps and the camp
+      for (let i = 0; i < LAKE_N; i++) {
+        const a = -Math.PI + (2 * Math.PI * i) / LAKE_N, c = Math.cos(a), s = Math.sin(a);
+        const blob = 5.4 / Math.cbrt(Math.abs(c) ** 3 + Math.abs(s) ** 3);           // rounded shape (superellipse)
+        let R = blob * (1 + 0.05 * Math.sin(3 * a + 1.1) + 0.035 * Math.sin(5 * a + 2.4) + 0.025 * Math.sin(8 * a + 0.3));
+        R = Math.max(R, boatReach(c, s) + 0.55);
+        let W = 2.2 - 0.6 * Math.cos(2 * a) + 0.25 * Math.sin(3 * a + 0.5);           // beach width
+        const ex = LAKE_C.x + (R + W) * c;
+        if (c > 0 && ex > eastLimit) W = Math.max(1.0, (eastLimit - LAKE_C.x) / c - R);
+        if (c < 0 && ex < westLimit) W = Math.max(1.0, (westLimit - LAKE_C.x) / c - R);
+        lakeShoreTab[i] = R;
+        lakeBeachTab[i] = R + W;
+      }
+    }
+    const lakeBeachMax = Math.max(...lakeBeachTab);
+    function lakeTab(tab, a) {
+      const f = ((a + Math.PI) / (2 * Math.PI)) * LAKE_N, i = Math.floor(f), t = f - i;
+      return tab[((i % LAKE_N) + LAKE_N) % LAKE_N] * (1 - t) + tab[(((i + 1) % LAKE_N) + LAKE_N) % LAKE_N] * t;
+    }
+    const smooth01 = (t) => t * t * (3 - 2 * t);
+    // Terrain height: 0 on the forest floor, a sandy beach sloping gently down to the water, then the lakebed
+    function lakeHeight(x, z) {
+      const dx = x - LAKE_C.x, dz = z - LAKE_C.z, r = Math.hypot(dx, dz), a = Math.atan2(dz, dx);
+      const rs = lakeTab(lakeShoreTab, a), rb = lakeTab(lakeBeachTab, a);
+      if (r >= rb) return 0;
+      if (r >= rs) return WATER_LEVEL * (1 - smooth01((r - rs) / (rb - rs)));
+      const d = Math.min(1, (rs - r) / LAKE_SHELF);
+      return WATER_LEVEL - LAKE_DEPTH * smooth01(d) + 0.04 * Math.sin(x * 1.7) * Math.sin(z * 1.3) * d;  // lumpy bed
+    }
+    // inside the beach's outer edge (plus a margin)
+    function inLakeArea(x, z, m = 0) {
+      const dx = x - LAKE_C.x, dz = z - LAKE_C.z;
+      return Math.hypot(dx, dz) < lakeTab(lakeBeachTab, Math.atan2(dz, dx)) + m;
+    }
+
     // Bare trampled dirt around the fire
     const clearing = new THREE.Mesh(new THREE.CircleGeometry(5.5 * S, 48),
       new THREE.MeshStandardMaterial({ map: clearingTex, transparent: true, depthWrite: false, roughness: 1,
@@ -559,10 +615,10 @@
     const occupied = [
       { x: 0, z: 0, r: 1.6 },                    // where you spawn
       { x: FIRE.x, z: FIRE.z, r: 6.0 * S },      // campsite clearing
-      { x: CABIN.x, z: CABIN.z, r: 4.2 * S },    // ranger cabin
+      { x: CABIN.x, z: CABIN.z, r: 4.9 },        // main cabin with its porch and chimney (was r 2.3)
       { x: GEN_POS.x, z: GEN_POS.z, r: 0.9 },    // generator
       ...FLOOD_POS.map(([x, z]) => ({ x, z, r: 0.4 })), // floodlight poles
-      { x: (LAKE.x0 + LAKE.x1) / 2, z: (LAKE.z0 + LAKE.z1) / 2, r: 7.2 }, // lake + banks: keep trees/rocks/logs out
+      { x: LAKE_C.x, z: LAKE_C.z, r: lakeBeachMax + 0.4 },  // lake + beach: keep trees/rocks/logs out (was r 7.2 round the walled pool)
       { x: (DOCK.x0 + DOCK.x1) / 2 - 1, z: (DOCK.z0 + DOCK.z1) / 2, r: 1.6 }, // dock steps
       ...Object.values(REPAIR_SPOTS).map(([x, z]) => ({ x, z, r: 0.5 })), // boat repair parts
       ...CABINS.map((c) => ({ x: c.x, z: c.z, r: 3.3 })),                         // the four new cabins (with porches)
@@ -639,7 +695,9 @@
         const x = rr(-WORLD_HALF, WORLD_HALF), z = rr(-WORLD_HALF, WORLD_HALF);
         if (Math.hypot(x - FIRE.x, z - FIRE.z) < 5.8 * S) continue;
         if (Math.abs(x - CABIN.x) < CABIN.w / 2 + 0.3 && Math.abs(z - CABIN.z) < CABIN.d / 2 + 0.3) continue;
+        if (x > CABIN.x - CABIN.w / 2 - 0.8 && x < CABIN.x + CABIN.w / 2 + 1.3 && z > CABIN.z - CABIN.d / 2 - 0.3 && z < CABIN.z + CABIN.d / 2 + 1.7) continue; // main cabin porch and chimney
         if (x > LAKE.x0 - 0.8 && x < LAKE.x1 + 0.8 && z > LAKE.z0 - 0.8 && z < LAKE.z1 + 0.8) continue; // no grass in the lake
+        if (inLakeArea(x, z, 0.3)) continue;                              // no grass on the beach
         if (nearCabin(x, z, 2.7)) continue;                                // no grass through the new cabins' floors
         const sc = rr(0.6, 1.6);
         q.setFromEuler(e.set(rr(-0.25, 0.25), rr(0, 6.3), rr(-0.25, 0.25)));
@@ -867,59 +925,650 @@
     addTent(-4.8 * S, -7.6 * S, 0x3a4a2e);
     addTent(4.6 * S, -7.3 * S, 0x5a3a1e);
 
-    // ---------- Abandoned ranger cabin with an open doorway facing the camp ----------
+    // =====================================================================
+    //  Cabin doors and windows (every cabin).
+    //  Doors hang on hinges: grab the handle with Grip or Trigger and swing it, push it open with your hand,
+    //  or press E / click it on desktop. A closed door blocks the doorway (its collider is switched off once
+    //  it's open). Hit a door hard with a fast hand swing (or with a boat part in your hand) and it splinters
+    //  off its hinges after a few blows; one fast hit shatters a window pane.
+    // =====================================================================
+    const DOOR_OPEN_MAX = 1.75;                        // how far a door swings either way (rad)
+    const DOOR_PASS_ANGLE = 0.3;                       // open wider than this and the doorway collider switches off
+    const DOOR_GRAB_RADIUS = 0.17;                     // how close your hand must be to a door handle to grab it (m)
+    const DOOR_HEALTH = 3;                             // damaging hits a door takes before it breaks
+    const DOOR_HIT_SPEED = 2.6, DOOR_HEAVY_HIT_SPEED = 4.0;   // hand speed (m/s, in the scaled VR world) for a damaging / double-damage hit
+    const GLASS_HIT_SPEED = 2.0;                       // hand speed that shatters a window pane
+    const doors = [], panes = [], debris = [], floorRects = [];   // floorRects: raised floors debris can land on
+    const doorWoodMat = new THREE.MeshStandardMaterial({ map: woodTex, color: 0x8a6a4c, roughness: 0.85 });
+    const glassShardMat = new THREE.MeshStandardMaterial({ color: 0x9fb8c0, emissive: 0x24160a, roughness: 0.05, metalness: 0.2,
+      transparent: true, opacity: 0.6, side: THREE.DoubleSide, depthWrite: false });
+    const windowVoidMat = new THREE.MeshBasicMaterial({ color: 0x140b05 });      // the dark room you see through a broken window
+    const cabinGlows = [];                             // flickering lights in the main cabin (updated in updateCampExtras)
+
+    // ---------- Door, window and debris sounds (their own small Web Audio graph; the music code is untouched) ----------
+    const cabinAudio = (() => {
+      let ctx = null, out = null, noise = null;
+      function build() {
+        ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const comp = ctx.createDynamicsCompressor();
+        comp.threshold.value = -14; comp.ratio.value = 5;
+        out = ctx.createGain(); out.gain.value = 0.6;
+        out.connect(comp); comp.connect(ctx.destination);
+        const len = ctx.sampleRate * 2;
+        noise = ctx.createBuffer(1, len, ctx.sampleRate);
+        const d = noise.getChannelData(0);
+        for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+      }
+      const ok = () => ctx && ctx.state === 'running';
+      const att = (dist) => 1 / (1 + (dist / 3) * (dist / 3));       // quieter further away
+      function hit(t, g0, { type = 'bandpass', freq, q = 1, peak, decay }) {
+        const src = ctx.createBufferSource(); src.buffer = noise;
+        const f = ctx.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q;
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(peak * g0, t + 0.002);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.002 + decay);
+        src.connect(f); f.connect(g); g.connect(out);
+        src.start(t, Math.random() * 1.5); src.stop(t + decay + 0.05);
+      }
+      function tone(t, g0, f0, f1, peak, dur, type = 'sine') {
+        const o = ctx.createOscillator(); o.type = type;
+        o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + dur);
+        const g = ctx.createGain(); g.gain.setValueAtTime(peak * g0, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+        o.connect(g); g.connect(out); o.start(t); o.stop(t + dur + 0.05);
+      }
+      return {
+        unlock() { try { if (!ctx) build(); ctx.resume(); } catch (e) { console.warn('Cabin audio could not start:', e); } },
+        creak(dist) {                                   // slow rusty hinge
+          if (!ok()) return;
+          const t = ctx.currentTime + 0.01, g0 = att(dist);
+          const o = ctx.createOscillator(); o.type = 'sawtooth';
+          o.frequency.setValueAtTime(190 + Math.random() * 60, t);
+          o.frequency.linearRampToValueAtTime(320 + Math.random() * 120, t + 0.25);
+          o.frequency.linearRampToValueAtTime(240, t + 0.6);
+          const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1100; bp.Q.value = 6;
+          const g = ctx.createGain();
+          g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.09 * g0, t + 0.08);
+          for (let k = 0; k < 7; k++) g.gain.linearRampToValueAtTime((0.03 + Math.random() * 0.07) * g0, t + 0.12 + k * 0.06);
+          g.gain.exponentialRampToValueAtTime(0.0001, t + 0.7);
+          o.connect(bp); bp.connect(g); g.connect(out); o.start(t); o.stop(t + 0.75);
+        },
+        latch(dist) {                                   // door clicks shut
+          if (!ok()) return;
+          const t = ctx.currentTime + 0.01, g0 = att(dist);
+          tone(t, g0, 150, 70, 0.35, 0.12);
+          hit(t, g0, { freq: 2600, q: 3, peak: 0.35, decay: 0.03 });
+        },
+        knock(dist) {                                   // a hit that doesn't break anything (yet)
+          if (!ok()) return;
+          const t = ctx.currentTime + 0.01, g0 = att(dist);
+          tone(t, g0, 120, 55, 0.6, 0.2);
+          hit(t, g0, { type: 'lowpass', freq: 700, peak: 0.5, decay: 0.12 });
+          hit(t + 0.01, g0, { freq: 1800, q: 4, peak: 0.2, decay: 0.05 });
+        },
+        woodSmash(dist) {                               // door splinters off its hinges
+          if (!ok()) return;
+          const t = ctx.currentTime + 0.01, g0 = att(dist);
+          tone(t, g0, 110, 40, 0.8, 0.45);
+          hit(t, g0, { type: 'lowpass', freq: 900, peak: 0.8, decay: 0.35 });
+          for (let k = 0; k < 14; k++) {
+            hit(t + Math.random() * 0.35, g0, { freq: 600 + Math.random() * 2800, q: 3 + Math.random() * 5, peak: 0.25 + Math.random() * 0.35, decay: 0.02 + Math.random() * 0.06 });
+          }
+          for (let k = 0; k < 5; k++) tone(t + 0.2 + Math.random() * 0.6, g0, 300 + Math.random() * 200, 150, 0.12, 0.12, 'triangle'); // bits landing
+        },
+        glass(dist) {                                   // window shatters, shards tinkle down
+          if (!ok()) return;
+          const t = ctx.currentTime + 0.01, g0 = att(dist);
+          hit(t, g0, { type: 'highpass', freq: 2500, q: 0.7, peak: 0.9, decay: 0.25 });
+          hit(t, g0, { freq: 5200, q: 2, peak: 0.5, decay: 0.12 });
+          for (let k = 0; k < 26; k++) {
+            const tt = t + 0.02 + Math.random() * (k < 10 ? 0.25 : 0.9), f = 2500 + Math.random() * 5500;
+            const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = f;
+            const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, tt);
+            g.gain.linearRampToValueAtTime((0.04 + Math.random() * 0.08) * g0, tt + 0.002);
+            g.gain.exponentialRampToValueAtTime(0.0001, tt + 0.08 + Math.random() * 0.25);
+            o.connect(g); g.connect(out); o.start(tt); o.stop(tt + 0.4);
+          }
+        },
+      };
+    })();
+    vrButton.addEventListener('click', () => cabinAudio.unlock());
+
+    // ---------- Hinged door ----------
+    // hinge (x, y, z) is the bottom of the hinge edge, in the world. yaw is a multiple of 90°: closed, the door runs
+    // along its local +x from the hinge, so the closed-door collider stays an axis-aligned box.
+    function makeDoor({ x, y, z, yaw, w = 0.85, h = 1.25, t = 0.05, slot = 0.12 }) {
+      const pivot = new THREE.Group();
+      pivot.position.set(x, y, z);
+      pivot.rotation.y = yaw;
+      scene.add(pivot);
+      const b = makeBatch();
+      for (let k = 0; k < 4; k++) b.add(UNIT_BOX, doorWoodMat, (k + 0.5) * w / 4, h / 2, 0, 0, 0, 0, w / 4 - 0.006, h - 0.01, t); // planks
+      const braceAng = Math.atan2(h - 0.46, w - 0.16), braceLen = Math.hypot(w - 0.16, h - 0.46);
+      for (const s of [-1, 1]) {
+        for (const yy of [0.2, h - 0.2]) b.add(UNIT_BOX, doorWoodMat, w / 2, yy, s * (t / 2 + 0.012), 0, 0, 0, w - 0.06, 0.1, 0.024); // ledges
+        b.add(UNIT_BOX, doorWoodMat, w / 2, h / 2, s * (t / 2 + 0.012), 0, 0, braceAng, braceLen, 0.08, 0.022);                       // Z brace
+        for (const yy of [0.2, h - 0.2]) b.add(UNIT_BOX, ironMat, 0.15, yy, s * (t / 2 + 0.026), 0, 0, 0, 0.3, 0.035, 0.008);       // strap hinges
+        b.add(UNIT_BOX, ironMat, w - 0.1, h * 0.45, s * (t / 2 + 0.006), 0, 0, 0, 0.05, 0.12, 0.012);                              // latch plate
+        b.add(new THREE.TorusGeometry(0.03, 0.007, 6, 14), ironMat, w - 0.1, h * 0.45 - 0.03, s * (t / 2 + 0.03));                  // ring pull
+      }
+      const meshes = b.build(pivot);
+      const door = {
+        pivot, yaw, w, h, t, hinge: new THREE.Vector3(x, y, z), angle: 0, target: null, grabbed: -1,
+        health: DOOR_HEALTH, broken: false, hitCool: 0, creakT: 0, wasOpen: false, meshes,
+        col: { box: new THREE.Box3() }, closedBox: new THREE.Box3(),
+      };
+      const c = Math.cos(yaw), s = Math.sin(yaw), swap = Math.abs(s) > 0.5;
+      const cx = x + c * w / 2, cz = z - s * w / 2, ex = (swap ? slot : w) / 2, ez = (swap ? w : slot) / 2;
+      door.closedBox.min.set(cx - ex, y, cz - ez);
+      door.closedBox.max.set(cx + ex, y + h, cz + ez);
+      door.col.box.copy(door.closedBox);
+      colliders.push(door.col);
+      doors.push(door);
+      return door;
+    }
+    // world point -> door-local (x along the door from the hinge, y up from the bottom, z through it)
+    function toDoorLocal(door, p, out) {
+      const a = door.yaw + door.angle, c = Math.cos(a), s = Math.sin(a);
+      const wx = p.x - door.hinge.x, wz = p.z - door.hinge.z;
+      return out.set(wx * c - wz * s, p.y - door.hinge.y, wx * s + wz * c);
+    }
+    function doorPoint(door, lx, ly, lz, out) {      // door-local -> world
+      const a = door.yaw + door.angle, c = Math.cos(a), s = Math.sin(a);
+      return out.set(door.hinge.x + lx * c + lz * s, door.hinge.y + ly, door.hinge.z - lx * s + lz * c);
+    }
+
+    // ---------- Breakable window pane (both faces of the glass, on a wall) ----------
+    // parent: the cabin group; (x, y, z) the centre of the window on the wall's outer face (parent-local);
+    // ry turns the pane to face out of the wall; thick = wall thickness; mat = the cabin's glowing glass material
+    function makePane(parent, { x, y, z, ry, w, h, thick, mat }) {
+      const holder = new THREE.Group();
+      holder.position.set(x, y, z);
+      holder.rotation.y = ry;
+      parent.add(holder);
+      const glass = new THREE.PlaneGeometry(w, h);
+      const outer = new THREE.Mesh(glass, mat); outer.position.z = 0.004;
+      const inner = new THREE.Mesh(glass, mat); inner.position.z = -(thick + 0.004); inner.rotation.y = Math.PI;
+      holder.add(outer, inner);
+      // jagged bits of glass left in the frame once it's broken (hidden until then)
+      const tris = [];
+      const corner = (cx, cy, sx, sy) => {
+        const sh = new THREE.Shape();
+        sh.moveTo(cx, cy); sh.lineTo(cx + sx * (0.08 + Math.random() * 0.1), cy); sh.lineTo(cx, cy + sy * (0.08 + Math.random() * 0.12)); sh.closePath();
+        tris.push(new THREE.ShapeGeometry(sh).toNonIndexed());
+      };
+      corner(-w / 2, h / 2, 1, -1); corner(w / 2, h / 2, -1, -1); corner(-w / 2, -h / 2, 1, 1); corner(w / 2, -h / 2, -1, 1);
+      const mid = new THREE.Shape();
+      mid.moveTo(-0.06, -h / 2); mid.lineTo(0.07, -h / 2); mid.lineTo(0.01, -h / 2 + 0.14); mid.closePath();
+      tris.push(new THREE.ShapeGeometry(mid).toNonIndexed());
+      const strip = (g) => { for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal') g.deleteAttribute(k); return g; };
+      const remnant = new THREE.Mesh(mergeGeometries(tris.map(strip), false), glassShardMat);
+      remnant.position.z = 0.004;
+      remnant.visible = false;
+      holder.add(remnant);
+      parent.updateMatrixWorld(true);
+      const center = holder.localToWorld(new THREE.Vector3(0, 0, 0.004));
+      const q = holder.getWorldQuaternion(new THREE.Quaternion());
+      const pane = {
+        holder, outer, inner, remnant, w, h, broken: false, center,
+        normal: new THREE.Vector3(0, 0, 1).applyQuaternion(q), right: new THREE.Vector3(1, 0, 0).applyQuaternion(q),
+      };
+      panes.push(pane);
+      return pane;
+    }
+
+    // ---------- Flying debris: glass shards and wood splinters ----------
+    const shardGeos = [0, 1, 2, 3].map(() => {
+      const s = new THREE.Shape(), a = 0.02 + Math.random() * 0.05, b = 0.03 + Math.random() * 0.06;
+      s.moveTo(0, 0); s.lineTo(a, Math.random() * 0.02); s.lineTo(Math.random() * a, b); s.closePath();
+      return new THREE.ShapeGeometry(s);
+    });
+    function floorAt(x, z) {
+      let y = lakeHeight(x, z);
+      for (const r of floorRects) if (x > r.x0 && x < r.x1 && z > r.z0 && z < r.z1) y = Math.max(y, r.y);
+      return y;
+    }
+    function spawnDebris(mesh, vel, life, thick) {
+      mesh.castShadow = true;
+      scene.add(mesh);
+      debris.push({ mesh, vel, spin: new THREE.Vector3((Math.random() - 0.5) * 14, (Math.random() - 0.5) * 14, (Math.random() - 0.5) * 14),
+        life, age: 0, thick, floor: floorAt(mesh.position.x, mesh.position.z), resting: false });
+    }
+    function shatterPane(pane, hitVel) {
+      pane.broken = true;
+      pane.outer.visible = pane.inner.visible = false;
+      pane.remnant.visible = true;
+      const dir = hitVel.clone();
+      const push = Math.min(4, dir.length());
+      if (push > 0.01) dir.divideScalar(push);
+      for (let k = 0; k < 18; k++) {
+        const m = new THREE.Mesh(shardGeos[k % 4], glassShardMat);
+        m.position.copy(pane.center)
+          .addScaledVector(pane.right, (Math.random() - 0.5) * pane.w)
+          .add(new THREE.Vector3(0, (Math.random() - 0.5) * pane.h, 0));
+        m.rotation.set(Math.random() * 6, Math.random() * 6, Math.random() * 6);
+        const v = dir.clone().multiplyScalar(push * (0.25 + Math.random() * 0.45));
+        v.x += (Math.random() - 0.5) * 0.8; v.y += Math.random() * 0.8; v.z += (Math.random() - 0.5) * 0.8;
+        spawnDebris(m, v, 5 + Math.random() * 3, 0.005);
+      }
+      camera.getWorldPosition(_dwCam);
+      cabinAudio.glass(_dwCam.distanceTo(pane.center));
+    }
+    function breakDoor(door, hitVel) {
+      door.broken = true;
+      door.grabbed = -1;
+      door.pivot.visible = false;
+      door.col.box.min.set(0, -1000, 0); door.col.box.max.set(0, -1000, 0);   // collider gone
+      const dir = hitVel.clone(), push = Math.min(5, dir.length());
+      if (push > 0.01) dir.divideScalar(push);
+      const p = new THREE.Vector3();
+      for (let k = 0; k < 11; k++) {
+        const long = k < 4;                              // a few long planks, the rest splinters
+        const m = new THREE.Mesh(UNIT_BOX, doorWoodMat);
+        m.scale.set(long ? door.w / 4 - 0.01 : 0.03 + Math.random() * 0.06, long ? door.h * (0.4 + Math.random() * 0.5) : 0.1 + Math.random() * 0.3, door.t);
+        doorPoint(door, (long ? k + 0.5 : Math.random() * 4) * door.w / 4, door.h * (0.2 + Math.random() * 0.6), 0, p);
+        m.position.copy(p);
+        m.rotation.y = door.yaw + door.angle;
+        const v = dir.clone().multiplyScalar(push * (0.3 + Math.random() * 0.4));
+        v.x += (Math.random() - 0.5) * 1.2; v.y += 0.4 + Math.random() * 1.2; v.z += (Math.random() - 0.5) * 1.2;
+        spawnDebris(m, v, 25 + Math.random() * 10, door.t / 2);
+      }
+      camera.getWorldPosition(_dwCam);
+      cabinAudio.woodSmash(_dwCam.distanceTo(door.hinge));
+    }
+    function updateDebris(dt) {
+      for (let i = debris.length - 1; i >= 0; i--) {
+        const d = debris[i];
+        d.age += dt;
+        if (d.age > d.life) { scene.remove(d.mesh); debris.splice(i, 1); continue; }
+        if (d.age > d.life - 1) d.mesh.position.y -= dt * 0.05;          // sinks away at the end
+        if (d.resting) continue;
+        d.vel.y -= GRAVITY * dt;
+        d.mesh.position.addScaledVector(d.vel, dt);
+        d.mesh.rotation.x += d.spin.x * dt; d.mesh.rotation.y += d.spin.y * dt; d.mesh.rotation.z += d.spin.z * dt;
+        if (d.mesh.position.y < d.floor + d.thick) {                       // bounce, then settle on the floor
+          d.mesh.position.y = d.floor + d.thick;
+          d.vel.y *= -0.25; d.vel.x *= 0.55; d.vel.z *= 0.55; d.spin.multiplyScalar(0.5);
+          if (Math.abs(d.vel.y) < 0.3) { d.resting = true; d.mesh.rotation.x = d.thick > 0.01 ? Math.PI / 2 : d.mesh.rotation.x * 0.2; }
+        }
+      }
+    }
+
+    // ---------- Using the doors ----------
+    const _dwCam = new THREE.Vector3(), _dwL = new THREE.Vector3(), _dwL0 = new THREE.Vector3(), _dwH = new THREE.Vector3();
+    const doorRaw = [new THREE.Vector3(), new THREE.Vector3()], doorRawPrev = [new THREE.Vector3(), new THREE.Vector3()];
+    const doorRawOk = [false, false], doorHandVel = [new THREE.Vector3(), new THREE.Vector3()];
+    let doorBtnPrev = [[false, false], [false, false]];       // [grip, trigger] per controller
+    const wrapAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+    function handBusy(i) {                                       // already holding a generator handle, the boat's wheel or a boat part
+      return generators.some((g) => g.holding === i) || boat.holding === i || parts.some((p) => p.held === i);
+    }
+    function toggleDoor(door) {
+      if (door.broken) return;
+      door.target = Math.abs(door.angle) > DOOR_PASS_ANGLE ? 0 : (door.angle >= 0 ? 1.45 : -1.45);
+    }
+    function updateDoorsAndWindows(dt) {
+      updateDebris(dt);
+      camera.getWorldPosition(_dwCam);
+      const vr = renderer.xr.isPresenting;
+      // hands: the tracked hand position (not the physics hand, which stops at a closed door) and its velocity
+      for (let i = 0; i < hands.length; i++) {
+        const h = hands[i];
+        if (!vr || !h.tracked || dt <= 0) { doorRawOk[i] = false; continue; }
+        doorRawPrev[i].copy(doorRaw[i]);
+        currentHandPosition(h, doorRaw[i]);
+        if (doorRawOk[i]) doorHandVel[i].subVectors(doorRaw[i], doorRawPrev[i]).divideScalar(dt);
+        else doorHandVel[i].set(0, 0, 0);
+        doorRawOk[i] = true;
+      }
+      // grabbing a handle (Grip or Trigger)
+      for (let i = 0; i < controllers.length; i++) {
+        const c = controllers[i];
+        const grip = btn(c, 1), trig = btn(c, 0);
+        const edge = (grip && !doorBtnPrev[i][0]) || (trig && !doorBtnPrev[i][1]);
+        doorBtnPrev[i] = [grip, trig];
+        if (!vr || !hands[i].tracked) continue;
+        const held = doors.find((d) => d.grabbed === i);
+        if (held && !(grip || trig)) held.grabbed = -1;
+        if (!edge || held || handBusy(i)) continue;
+        let best = null, bestD = DOOR_GRAB_RADIUS;
+        for (const d of doors) {
+          if (d.broken || d.grabbed >= 0) continue;
+          for (const side of [-1, 1]) {
+            const dist = doorPoint(d, d.w - 0.1, d.h * 0.45 - 0.03, side * (d.t / 2 + 0.03), _dwH).distanceTo(hands[i].last);
+            if (dist < bestD) { best = d; bestD = dist; }
+          }
+        }
+        if (best) { best.grabbed = i; best.target = null; pulse(c, 0.4, 40); }
+      }
+      for (const d of doors) {
+        if (d.broken) continue;
+        const prevAngle = d.angle;
+        d.hitCool = Math.max(0, d.hitCool - dt);
+        d.creakT = Math.max(0, d.creakT - dt);
+        if (d.grabbed >= 0) {
+          // the door swings to follow your hand round the hinge
+          const hl = hands[d.grabbed].last;
+          doorPoint(d, d.w - 0.1, d.h * 0.45, 0, _dwH);
+          if (!hands[d.grabbed].tracked || hl.distanceTo(_dwH) > 0.7) d.grabbed = -1;
+          else {
+            const want = THREE.MathUtils.clamp(wrapAngle(Math.atan2(-(hl.z - d.hinge.z), hl.x - d.hinge.x) - d.yaw), -DOOR_OPEN_MAX, DOOR_OPEN_MAX);
+            d.angle += wrapAngle(want - d.angle) * Math.min(1, dt * 12);
+          }
+        } else if (d.target !== null) {
+          // desktop toggle: swing smoothly to the target
+          const step = 2.2 * dt, diff = d.target - d.angle;
+          d.angle = Math.abs(diff) <= step ? d.target : d.angle + Math.sign(diff) * step;
+          if (d.angle === d.target) d.target = null;
+        }
+        // hands pushing on (or hitting) the door
+        for (let i = 0; i < hands.length; i++) {
+          if (!doorRawOk[i] || d.grabbed === i) continue;
+          toDoorLocal(d, doorRaw[i], _dwL);
+          if (_dwL.x < 0.05 || _dwL.x > d.w || _dwL.y < 0 || _dwL.y > d.h) continue;
+          const reach = d.t / 2 + MIN_RAYCAST_DISTANCE;
+          if (Math.abs(_dwL.z) > reach + 0.03) continue;
+          toDoorLocal(d, doorRawPrev[i], _dwL0);
+          const side = _dwL0.z >= 0 ? 1 : -1;                        // which face the hand came from
+          const a = d.yaw + d.angle, nx = Math.sin(a), nz = Math.cos(a);  // the door's +z face direction
+          const v = doorHandVel[i], into = -(v.x * nx + v.z * nz) * side; // hand speed into the door
+          const speed = v.length();
+          if (speed > DOOR_HIT_SPEED && into > 1.2 && d.hitCool <= 0) {
+            d.hitCool = 0.35;
+            d.health -= speed > DOOR_HEAVY_HIT_SPEED ? 2 : 1;
+            pulse(controllers[i], 1.0, 120);
+            if (d.health <= 0) { breakDoor(d, v); break; }
+            cabinAudio.knock(_dwCam.distanceTo(d.hinge));
+            d.angle += side * 0.25;                                   // the blow knocks it back a bit
+          }
+          // slow push: swing the door away from the hand
+          const overlap = reach - side * _dwL.z;
+          if (overlap > 0) d.angle += side * Math.min(0.12, overlap / Math.max(0.2, _dwL.x));
+          d.target = null;
+        }
+        if (d.broken) continue;
+        d.angle = THREE.MathUtils.clamp(d.angle, -DOOR_OPEN_MAX, DOOR_OPEN_MAX);
+        // creak while it moves, click when it swings shut
+        const speed = Math.abs(d.angle - prevAngle) / Math.max(dt, 1e-4);
+        if (speed > 0.5 && d.creakT <= 0) { d.creakT = 1.3; cabinAudio.creak(_dwCam.distanceTo(d.hinge)); }
+        if (Math.abs(d.angle) < 0.06 && d.grabbed < 0 && d.target === null && d.wasOpen) {
+          d.angle = 0; d.wasOpen = false;
+          cabinAudio.latch(_dwCam.distanceTo(d.hinge));
+        }
+        if (Math.abs(d.angle) > 0.15) d.wasOpen = true;
+        d.pivot.rotation.y = d.yaw + d.angle;
+        // the doorway is blocked only while the door is (nearly) shut
+        if (Math.abs(d.angle) > DOOR_PASS_ANGLE) { d.col.box.min.set(0, -1000, 0); d.col.box.max.set(0, -1000, 0); }
+        else d.col.box.copy(d.closedBox);
+      }
+      // window panes: one fast hit shatters them
+      for (const p of panes) {
+        if (p.broken) continue;
+        for (let i = 0; i < hands.length; i++) {
+          if (!doorRawOk[i]) continue;
+          const v = doorHandVel[i];
+          if (v.length() < GLASS_HIT_SPEED) continue;
+          _dwL.subVectors(doorRaw[i], p.center);
+          if (Math.abs(_dwL.dot(p.normal)) > 0.1 + MIN_RAYCAST_DISTANCE) continue;
+          if (Math.abs(_dwL.dot(p.right)) > p.w / 2 + 0.03 || Math.abs(_dwL.y) > p.h / 2 + 0.03) continue;
+          shatterPane(p, v);
+          pulse(controllers[i], 1.0, 150);
+          break;
+        }
+      }
+    }
+    // Desktop: E opens/closes the door nearest the camera; clicking a door opens/closes it
+    window.addEventListener('keydown', (e) => {
+      if (e.key.toLowerCase() !== 'e' || renderer.xr.isPresenting) return;
+      camera.getWorldPosition(_dwCam);
+      let best = null, bestD = 14;
+      for (const d of doors) {
+        if (d.broken) continue;
+        const dist = doorPoint(d, d.w / 2, d.h / 2, 0, _dwH).distanceTo(_dwCam);
+        if (dist < bestD) { best = d; bestD = dist; }
+      }
+      if (best) { cabinAudio.unlock(); toggleDoor(best); }
+    });
+    {
+      const down = new THREE.Vector2(), ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
+      renderer.domElement.addEventListener('pointerdown', (e) => down.set(e.clientX, e.clientY));
+      renderer.domElement.addEventListener('pointerup', (e) => {
+        if (renderer.xr.isPresenting || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) return; // a drag orbits the camera
+        ndc.set((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1);
+        ray.setFromCamera(ndc, camera);
+        const live = doors.filter((d) => !d.broken);
+        const hit = ray.intersectObjects(live.flatMap((d) => d.meshes), false)[0];
+        if (!hit) return;
+        const door = live.find((d) => d.meshes.includes(hit.object));
+        if (door) { cabinAudio.unlock(); toggleDoor(door); }
+      });
+    }
+
+    // ---------- Main front cabin (the big one facing the camp) ----------
+    // Lap-siding walls, a shingled gable roof, a covered wrap-around porch (front and right side) with timber posts,
+    // beams, knee braces and railings, a stone chimney, and two rooms: a main room with a stone fireplace, a table and
+    // chairs, shelves and wall lanterns, and a back room with a cot, a small table and shelves. Hinged doors at the front
+    // and between the rooms, six breakable windows. Every solid part has a box collider for climbing.
     let cabinLantern, cabinLanternMesh;
     {
-      const { x: cx, z: cz, w: W, d: D, h: H } = CABIN;
-      const T = 0.12, DOOR_W = 0.9, DOOR_H = 1.35, RISE = 1.2 * S; // doorway: 0.9 m wide, 1.35 m tall (you fit standing up)
-      // walls
-      solidBox(cx, 0, cz - D / 2 + T / 2, W, H, T, woodMat);                 // back
-      solidBox(cx - W / 2 + T / 2, 0, cz, T, H, D, woodMat);                 // left
-      solidBox(cx + W / 2 - T / 2, 0, cz, T, H, D, woodMat);                 // right
-      const segW = (W - DOOR_W) / 2;
-      solidBox(cx - W / 2 + segW / 2, 0, cz + D / 2 - T / 2, segW, H, T, woodMat); // front, left of door
-      solidBox(cx + W / 2 - segW / 2, 0, cz + D / 2 - T / 2, segW, H, T, woodMat); // front, right of door
-      solidBox(cx, DOOR_H, cz + D / 2 - T / 2, DOOR_W, H - DOOR_H, T, woodMat);   // lintel above the door
-      solidBox(cx, 0, cz, W - 2 * T, 0.05, D - 2 * T, plankMat);             // floorboards
+      const CX = CABIN.x, CZ = CABIN.z;
+      const W = CABIN.w, D = CABIN.d, H = CABIN.h, T = 0.12, FL = 0.14;
+      const DX = -0.55, DOOR_W = 0.9, DOOR_H = FL + 1.32;            // front door (centre x, width, top)
+      const ZP = -0.35, IDX = 1.25, IDW = 0.8, IDH = FL + 1.3;       // partition wall z, inner doorway centre x, width, top
+      const RISE = 0.95, OVER = 0.28, DROP = RISE * OVER / (D / 2);
+      const PD = 1.25, SW = 1.05, PH = 1.5;                           // front porch depth, side porch width, porch eave height
+      const group = new THREE.Group();
+      group.position.set(CX, 0, CZ);
+      scene.add(group);
+      const batch = makeBatch();
+      const glowMat = new THREE.MeshStandardMaterial({ color: 0x2a1a08, emissive: 0xffa040, emissiveIntensity: 0.7, roughness: 0.4 });
+      const fireMat = new THREE.MeshStandardMaterial({ color: 0x1a0a04, emissive: 0xff5a14, emissiveIntensity: 1.2, roughness: 1 });
+      const col = (lx, y0, lz, w, h, d) => addBoxCollider(CX + lx, y0, CZ + lz, w, h, d);
+      const box = (mat, lx, y0, lz, w, h, d, solid = true) => {
+        batch.add(UNIT_BOX, mat, lx, y0 + h / 2, lz, 0, 0, 0, w, h, d);
+        if (solid) col(lx, y0, lz, w, h, d);
+      };
 
-      // gable roof (visual) ...
-      const OVER = 0.3 * S, DROP = 0.18 * S; // eave overhang
-      const slopeLen = Math.hypot(D / 2 + OVER, RISE + DROP);
-      const angle = Math.atan2(RISE + DROP, D / 2 + OVER);
+      // foundation, floor and floorboards
+      box(stoneMat, 0, 0, 0, W + 0.1, FL - 0.015, D + 0.1, false);
+      col(0, 0, 0, W, FL, D);
+      box(woodMat, 0, FL - 0.012, 0, W - 2 * T, 0.012, D - 2 * T, false);
+      floorRects.push({ x0: CX - W / 2, x1: CX + W / 2, z0: CZ - D / 2, z1: CZ + D / 2, y: FL });
+
+      // outer walls (front has the door), and the wooden partition between the main room and the back room
+      box(sidingMat, 0, 0, -D / 2 + T / 2, W, H, T);
+      box(sidingMat, -W / 2 + T / 2, 0, 0, T, H, D - 2 * T);
+      box(sidingMat, W / 2 - T / 2, 0, 0, T, H, D - 2 * T);
+      const fl = DX - DOOR_W / 2 + W / 2, fr = W / 2 - (DX + DOOR_W / 2);
+      box(sidingMat, -W / 2 + fl / 2, 0, D / 2 - T / 2, fl, H, T);
+      box(sidingMat, W / 2 - fr / 2, 0, D / 2 - T / 2, fr, H, T);
+      box(sidingMat, DX, DOOR_H, D / 2 - T / 2, DOOR_W, H - DOOR_H, T);
+      const pl = IDX - IDW / 2 - (-W / 2 + T), pr = (W / 2 - T) - (IDX + IDW / 2);
+      box(woodMat, -W / 2 + T + pl / 2, FL, ZP, pl, H - FL, 0.08);
+      box(woodMat, W / 2 - T - pr / 2, FL, ZP, pr, H - FL, 0.08);
+      box(woodMat, IDX, IDH, ZP, IDW, H - IDH, 0.08);
+      // corner boards, door frames, threshold
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) box(trimMat, sx * (W / 2 - 0.02), 0, sz * (D / 2 - 0.02), 0.14, H, 0.14, false);
+      for (const sx of [-1, 1]) box(trimMat, DX + sx * (DOOR_W / 2 + 0.04), FL, D / 2 + 0.01, 0.08, DOOR_H - FL + 0.08, 0.04, false);
+      box(trimMat, DX, DOOR_H, D / 2 + 0.01, DOOR_W + 0.16, 0.09, 0.04, false);
+      box(trimMat, DX, FL, D / 2 - 0.05, DOOR_W, 0.02, T + 0.1, false);
+      for (const sx of [-1, 1]) box(trimMat, IDX + sx * (IDW / 2 + 0.03), FL, ZP, 0.06, IDH - FL + 0.06, 0.12, false);
+      box(trimMat, IDX, IDH, ZP, IDW + 0.12, 0.06, 0.12, false);
+
+      // main roof: shingles, fascia, ridge cap, gable ends; stepped colliders up to the ridge
+      const slopeLen = Math.hypot(D / 2 + OVER, RISE + DROP), ang = Math.atan2(RISE + DROP, D / 2 + OVER);
       for (const side of [1, -1]) {
-        const slab = new THREE.Mesh(new THREE.BoxGeometry(W + 0.5 * S, 0.1 * S, slopeLen), roofMat);
-        slab.position.set(cx, H - DROP + (RISE + DROP) / 2, cz + side * (D / 2 + OVER) / 2);
-        slab.rotation.x = side * angle;
-        slab.castShadow = slab.receiveShadow = true;
-        scene.add(slab);
-        rayTargets.push(slab);
+        batch.add(UNIT_BOX, shingleMat, 0, H - DROP + (RISE + DROP) / 2, side * (D / 2 + OVER) / 2, side * ang, 0, 0, W + 0.45, 0.08, slopeLen);
+        batch.add(UNIT_BOX, trimMat, 0, H - DROP - 0.02, side * (D / 2 + OVER - 0.02), 0, 0, 0, W + 0.47, 0.07, 0.05);
       }
+      batch.add(UNIT_BOX, trimMat, 0, H + RISE + 0.02, 0, 0, 0, 0, W + 0.5, 0.08, 0.16);
       const gable = new THREE.Shape();
       gable.moveTo(-D / 2, 0); gable.lineTo(D / 2, 0); gable.lineTo(0, RISE); gable.closePath();
-      for (const side of [1, -1]) {
-        const g = new THREE.Mesh(new THREE.ShapeGeometry(gable), woodMat2);
-        g.rotation.y = Math.PI / 2;
-        g.position.set(cx + side * (W / 2 - T / 2), H, cz);
-        scene.add(g);
-      }
-      // ... and its colliders: a ceiling slab plus stepped boxes up to the ridge, so you can climb onto the roof
+      const gableGeo = new THREE.ExtrudeGeometry(gable, { depth: T, bevelEnabled: false });
+      gableGeo.rotateY(Math.PI / 2);
+      for (const lx of [W / 2 - T, -W / 2]) batch.add(gableGeo, sidingMat, lx, H, 0);
       const step = RISE / 4;
-      addBoxCollider(cx, H, cz, W, step, D);
-      addBoxCollider(cx, H + step, cz, W, step, D * 0.66);
-      addBoxCollider(cx, H + 2 * step, cz, W, step, D * 0.4);
-      addBoxCollider(cx, H + 3 * step, cz, W, step, D * 0.15);
+      [1, 0.66, 0.4, 0.15].forEach((f, k) => col(0, H + k * step, 0, W + 0.2, step, (D + 2 * OVER) * f));
 
-      // inside: an old table, a cot, and a dying lantern
-      solidBox(cx + 1.3 * S, 0, cz - 0.9 * S, 1.2 * S, 0.75 * S, 0.7 * S, plankMat);
-      solidBox(cx - 1.5 * S, 0, cz - 0.4 * S, 0.8 * S, 0.4 * S, 1.8 * S, roofMat);
-      const lantern = new THREE.Mesh(new THREE.CylinderGeometry(0.06 * S, 0.07 * S, 0.18 * S, 8),
+      // stone chimney up the outside of the left wall, and the fireplace inside it
+      const FZ = 0.75;
+      box(stoneMat, -W / 2 - 0.27, 0, FZ, 0.54, H + RISE * 0.8 + 0.45, 0.8);
+      box(stoneMat, -W / 2 - 0.27, H + RISE * 0.8 + 0.45, FZ, 0.62, 0.07, 0.88, false);
+      box(stoneMat, -W / 2 + T + 0.3, FL, FZ, 0.6, 0.07, 1.15);                                  // hearth
+      for (const s of [-1, 1]) box(stoneMat, -W / 2 + T + 0.2, FL, FZ + s * 0.44, 0.4, 0.95, 0.2); // fireplace sides
+      box(trimMat, -W / 2 + T + 0.26, FL + 0.95, FZ, 0.52, 0.07, 1.2);                           // mantel shelf
+      box(stoneMat, -W / 2 + T + 0.15, FL + 1.02, FZ, 0.3, H - FL - 1.02, 0.95);                 // chimney breast
+      box(windowVoidMat, -W / 2 + T + 0.02, FL + 0.07, FZ, 0.04, 0.7, 0.68, false);              // soot-black back of the firebox
+      for (const s of [-1, 1]) batch.add(new THREE.CylinderGeometry(0.035, 0.04, 0.42, 7), fireMat, -W / 2 + T + 0.22, FL + 0.12, FZ + s * 0.06, Math.PI / 2, s * 0.35, 0); // glowing logs
+      batch.add(new THREE.SphereGeometry(0.1, 8, 6), fireMat, -W / 2 + T + 0.2, FL + 0.1, FZ, 0, 0, 0, 1.6, 0.4, 1.4);      // embers
+      for (let k = 0; k < 4; k++) batch.add(new THREE.CylinderGeometry(0.03, 0.03, 0.05, 8), brassMat, -W / 2 + T + 0.3, FL + 1.045, FZ - 0.4 + k * 0.27); // things on the mantel
+
+      // windows: frame, sill and mullions in the merged mesh; the glass is a separate breakable pane
+      const paneSpecs = [];
+      const win = (lx, lz, nx, nz) => {
+        const ry2 = Math.atan2(nx, nz), wy = FL + 0.85, ww = 0.55, wh = 0.45, ax = nz, az = -nx;
+        const voidPlane = new THREE.PlaneGeometry(ww, wh);
+        batch.add(voidPlane, windowVoidMat, lx + nx * 0.002, wy, lz + nz * 0.002, 0, ry2, 0);
+        batch.add(voidPlane, windowVoidMat, lx - nx * (T + 0.002), wy, lz - nz * (T + 0.002), 0, ry2 + Math.PI, 0);
+        const ox = lx + nx * 0.02, oz = lz + nz * 0.02;
+        batch.add(UNIT_BOX, trimMat, ox, wy + wh / 2 + 0.03, oz, 0, ry2, 0, ww + 0.12, 0.06, 0.04);
+        batch.add(UNIT_BOX, trimMat, ox + nx * 0.02, wy - wh / 2 - 0.03, oz + nz * 0.02, 0, ry2, 0, ww + 0.16, 0.05, 0.08);
+        for (const s of [-1, 1]) batch.add(UNIT_BOX, trimMat, ox + ax * s * (ww / 2 + 0.03), wy, oz + az * s * (ww / 2 + 0.03), 0, ry2, 0, 0.06, wh + 0.12, 0.04);
+        paneSpecs.push({ x: lx, y: wy, z: lz, ry: ry2, w: ww, h: wh });
+      };
+      win(-1.65, D / 2, 0, 1);  win(1.15, D / 2, 0, 1);                 // front, either side of the door
+      win(-W / 2, -1.1, -1, 0);                                          // left wall, back room
+      win(W / 2, 0.9, 1, 0);    win(W / 2, -1.1, 1, 0);                 // right wall, both rooms
+      win(-0.9, -D / 2, 0, -1);                                          // back wall
+
+      // furniture
+      const table = (x, z, w, d, y) => {
+        box(trimMat, x, y, z, w, 0.04, d, false);
+        for (const sx of [-1, 1]) for (const sz of [-1, 1]) box(trimMat, x + sx * (w / 2 - 0.05), FL, z + sz * (d / 2 - 0.05), 0.045, y - FL, 0.045, false);
+        col(x, FL, z, w, y + 0.04 - FL, d);
+      };
+      const chair = (x, z, ry) => {
+        const c = Math.cos(ry), s = Math.sin(ry), at = (lx, lz) => [x + lx * c + lz * s, z - lx * s + lz * c];
+        let [px, pz] = at(0, 0);
+        batch.add(UNIT_BOX, trimMat, px, FL + 0.27, pz, 0, ry, 0, 0.3, 0.035, 0.3);                     // seat
+        for (const lx of [-0.12, 0.12]) for (const lz of [-0.12, 0.12]) {
+          [px, pz] = at(lx, lz);
+          batch.add(UNIT_BOX, trimMat, px, FL + 0.13, pz, 0, ry, 0, 0.03, 0.26, 0.03);                   // legs
+        }
+        [px, pz] = at(0, -0.135);
+        batch.add(UNIT_BOX, trimMat, px, FL + 0.48, pz, 0, ry, 0, 0.3, 0.36, 0.03);                      // back
+      };
+      const lantern = (lx, ly, lz) => {
+        batch.add(new THREE.CylinderGeometry(0.05, 0.055, 0.025, 10), ironMat, lx, ly + 0.012, lz);
+        batch.add(new THREE.CylinderGeometry(0.035, 0.035, 0.1, 10), glowMat, lx, ly + 0.075, lz);
+        for (let k = 0; k < 4; k++) {
+          const a = (k / 4) * Math.PI * 2 + 0.4;
+          batch.add(new THREE.CylinderGeometry(0.004, 0.004, 0.11, 4), ironMat, lx + Math.cos(a) * 0.04, ly + 0.075, lz + Math.sin(a) * 0.04);
+        }
+        batch.add(new THREE.ConeGeometry(0.05, 0.04, 10), ironMat, lx, ly + 0.145, lz);
+      };
+      const shelves = (x, z, alongZ, len, n) => {
+        for (let k = 0; k < n; k++) {
+          const y = FL + 0.55 + k * 0.33;
+          box(trimMat, x, y, z, alongZ ? 0.22 : len, 0.03, alongZ ? len : 0.22, false);
+          for (let j = 0; j < 5; j++) {                                  // jars, bottles and books
+            const t = (j + 0.5) / 5 - 0.5, px = alongZ ? x : x + t * len * 0.9, pz = alongZ ? z + t * len * 0.9 : z;
+            if (j % 2) batch.add(UNIT_BOX, clothMat, px, y + 0.11, pz, 0, 0.3 * t, 0, 0.05, 0.16, 0.12);
+            else batch.add(new THREE.CylinderGeometry(0.035, 0.035, 0.12 + 0.04 * (k % 2), 8), j === 0 ? brassMat : glassShardMat, px, y + 0.08, pz);
+          }
+        }
+        col(x, FL, z, alongZ ? 0.24 : len, 0.55 + n * 0.33, alongZ ? len : 0.24);
+      };
+      // main room: table with chairs and the green lantern, shelves, a bench, two wall lanterns
+      table(0.55, 0.85, 1.0, 0.6, FL + 0.46);
+      chair(-0.1, 0.85, Math.PI / 2); chair(1.2, 0.85, -Math.PI / 2); chair(0.55, 0.3, 0);
+      shelves(W / 2 - T - 0.12, 0.05, true, 0.9, 3);
+      lantern(-1.25, FL + 1.12, ZP + 0.1);                               // on the partition
+      batch.add(UNIT_BOX, ironMat, -1.25, FL + 1.1, ZP + 0.07, 0, 0, 0, 0.04, 0.04, 0.08);
+      lantern(1.85, FL + 1.12, D / 2 - T - 0.1);                         // on the front wall
+      batch.add(UNIT_BOX, ironMat, 1.85, FL + 1.1, D / 2 - T - 0.07, 0, 0, 0, 0.04, 0.04, 0.08);
+      // back room: cot with a blanket, a small table with a chair and a lantern, shelves, a crate
+      box(trimMat, -1.4, FL, -1.2, 1.4, 0.26, 0.7);
+      box(clothMat, -1.35, FL + 0.26, -1.2, 1.25, 0.06, 0.66, false);
+      table(1.55, -1.25, 0.6, 0.45, FL + 0.44);
+      chair(1.55, -0.8, Math.PI);
+      lantern(1.55, FL + 0.48, -1.3);
+      shelves(0.0, -D / 2 + T + 0.12, false, 1.0, 3);
+      box(woodMat, 0.35, FL, -0.75, 0.36, 0.36, 0.36);
+
+      // wrap-around porch: front and right side decks, steps, timber posts, beams, knee braces, railings, porch roofs
+      const pz0 = D / 2, pz1 = D / 2 + PD, px0 = W / 2, px1 = W / 2 + SW, sz0 = -D / 2 + 0.35;
+      box(woodMat, (-W / 2 - 0.05 + px1) / 2, 0, (pz0 + pz1) / 2, px1 + W / 2 + 0.05, FL, PD);     // front deck
+      box(woodMat, (px0 + px1) / 2, 0, (sz0 + pz0) / 2, SW, FL, pz0 - sz0);                         // side deck
+      floorRects.push({ x0: CX - W / 2, x1: CX + px1, z0: CZ + pz0, z1: CZ + pz1, y: FL });
+      floorRects.push({ x0: CX + px0, x1: CX + px1, z0: CZ + sz0, z1: CZ + pz0, y: FL });
+      box(woodMat, DX, 0, pz1 + 0.15, 1.2, FL * 0.5, 0.3);                                          // step
+      const posts = [[-W / 2 + 0.06, pz1 - 0.06], [DX - 0.7, pz1 - 0.06], [DX + 0.7, pz1 - 0.06], [1.2, pz1 - 0.06],
+                     [px1 - 0.06, pz1 - 0.06], [px1 - 0.06, 0.4], [px1 - 0.06, sz0 + 0.06]];
+      for (const [x, z] of posts) box(trimMat, x, FL, z, 0.11, PH - FL, 0.11);
+      batch.add(UNIT_BOX, trimMat, (-W / 2 + px1) / 2, PH - 0.05, pz1 - 0.06, 0, 0, 0, px1 + W / 2 + 0.05, 0.12, 0.1);   // front beam
+      batch.add(UNIT_BOX, trimMat, px1 - 0.06, PH - 0.05, (sz0 + pz1) / 2, 0, 0, 0, 0.1, 0.12, pz1 - sz0);           // side beam
+      for (const [x, z] of posts) {                                                                 // knee braces under the beams
+        if (z > pz1 - 0.1) for (const s of [-1, 1]) if (x + s * 0.25 > -W / 2 && x + s * 0.25 < px1) batch.add(UNIT_BOX, trimMat, x + s * 0.13, PH - 0.22, z, 0, 0, s * 0.78, 0.05, 0.36, 0.05);
+        if (x > px1 - 0.1) for (const s of [-1, 1]) if (z + s * 0.25 > sz0 && z + s * 0.25 < pz1) batch.add(UNIT_BOX, trimMat, x, PH - 0.22, z + s * 0.13, -s * 0.78, 0, 0, 0.05, 0.36, 0.05);
+      }
+      const RH = 0.42;
+      const rail = (xa, za, xb, zb) => {                    // one railing run with balusters, along x or z
+        const len = Math.hypot(xb - xa, zb - za), alongX = Math.abs(zb - za) < 1e-6, xm = (xa + xb) / 2, zm = (za + zb) / 2;
+        box(trimMat, xm, FL + RH, zm, alongX ? len : 0.06, 0.05, alongX ? 0.06 : len, false);
+        box(trimMat, xm, FL + 0.08, zm, alongX ? len : 0.04, 0.04, alongX ? 0.04 : len, false);
+        const n = Math.max(2, Math.round(len / 0.12));
+        for (let k = 1; k < n; k++) box(trimMat, xa + (xb - xa) * k / n, FL + 0.08, za + (zb - za) * k / n, 0.025, RH - 0.08, 0.025, false);
+        col(xm, FL, zm, alongX ? len : 0.07, RH + 0.05, alongX ? 0.07 : len);
+      };
+      rail(-W / 2 + 0.12, pz1 - 0.06, DX - 0.6, pz1 - 0.06);                  // front, left of the steps
+      rail(DX + 0.6, pz1 - 0.06, px1 - 0.12, pz1 - 0.06);                     // front, right of the steps
+      rail(px1 - 0.06, pz1 - 0.12, px1 - 0.06, sz0 + 0.12);                   // right side
+      rail(px0 + 0.06, sz0 + 0.06, px1 - 0.12, sz0 + 0.06);                   // back end of the side porch
+      rail(-W / 2 + 0.06, pz0 + 0.06, -W / 2 + 0.06, pz1 - 0.12);             // left end of the front porch
+      // porch roofs (below the main eaves), with flat colliders on top
+      const pTop = H - 0.22;
+      const fLen = Math.hypot(PD + 0.15, pTop - PH), fAng = Math.atan2(pTop - PH, PD + 0.15);
+      batch.add(UNIT_BOX, shingleMat, (-W / 2 + px1) / 2, (pTop + PH) / 2 + 0.04, pz0 + (PD + 0.15) / 2, fAng, 0, 0, px1 + W / 2 + 0.3, 0.06, fLen);
+      col((-W / 2 + px1) / 2, PH, (pz0 + pz1) / 2 + 0.07, px1 + W / 2 + 0.3, 0.14, PD + 0.15);
+      const sLen = Math.hypot(SW + 0.15, pTop - PH), sAng = Math.atan2(pTop - PH, SW + 0.15);
+      batch.add(UNIT_BOX, shingleMat, px0 + (SW + 0.15) / 2, (pTop + PH) / 2 + 0.04, (sz0 + pz0) / 2 - 0.05, 0, 0, -sAng, sLen, 0.06, pz0 - sz0 + 0.2);
+      col((px0 + px1) / 2 + 0.07, PH, (sz0 + pz0) / 2, SW + 0.15, 0.14, pz0 - sz0);
+      // porch bench and a hanging lantern
+      box(trimMat, 1.5, FL + 0.24, pz0 + 0.3, 1.0, 0.05, 0.32, false);
+      for (const s of [-1, 1]) box(trimMat, 1.5 + s * 0.42, FL, pz0 + 0.3, 0.05, 0.24, 0.3, false);
+      col(1.5, FL, pz0 + 0.3, 1.0, 0.29, 0.32);
+      lantern(px1 - 0.25, PH - 0.36, pz1 - 0.2);
+
+      batch.build(group, { rayTarget: true });
+
+      // the green "dying" lantern on the main-room table (flickered by updateFire, as before)
+      const lan = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.04, 0.11, 8),
         new THREE.MeshStandardMaterial({ color: 0x223322, emissive: 0x6f9f5f, emissiveIntensity: 1 }));
-      lantern.position.set(cx + 1.4 * S, 0.75 * S + 0.05, cz - 0.9 * S);
-      scene.add(lantern);
+      lan.position.set(CX + 0.75, FL + 0.56, CZ + 0.9);
+      scene.add(lan);
       cabinLantern = new THREE.PointLight(0x9fdc8a, 2.5, 6, 2);
-      cabinLantern.position.set(cx + 1.4 * S, 0.75 * S + 0.2, cz - 0.9 * S);
+      cabinLantern.position.set(CX + 0.75, FL + 0.75, CZ + 0.9);
       scene.add(cabinLantern);
-      cabinLanternMesh = lantern;
+      cabinLanternMesh = lan;
+
+      // doors: front, and between the rooms
+      group.updateMatrixWorld(true);
+      makeDoor({ x: CX + DX - DOOR_W / 2, y: FL, z: CZ + D / 2 - T / 2, yaw: 0, w: DOOR_W, h: DOOR_H - FL, slot: T });
+      makeDoor({ x: CX + IDX - IDW / 2, y: FL, z: CZ + ZP, yaw: 0, w: IDW, h: IDH - FL, t: 0.04, slot: 0.08 });
+      for (const p of paneSpecs) makePane(group, { ...p, thick: T, mat: glowMat });
+
+      // flickering glows: the wall lanterns and porch lantern (warm), and the fireplace (orange, livelier)
+      const glowAt = (x, y, z, sc, color) => {
+        const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color, transparent: true, opacity: 0.5,
+          blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+        s.scale.set(sc, sc, 1);
+        s.position.set(CX + x, y, CZ + z);
+        scene.add(s);
+        return s;
+      };
+      cabinGlows.push({ mat: glowMat, sprites: [glowAt(-1.25, FL + 1.2, ZP + 0.1, 0.8, 0xffa040), glowAt(1.85, FL + 1.2, D / 2 - T - 0.1, 0.8, 0xffa040),
+        glowAt(1.55, FL + 0.56, -1.3, 0.7, 0xffa040), glowAt(px1 - 0.25, PH - 0.28, pz1 - 0.2, 0.6, 0xffa040)], phase: 1.7, dip: 1, base: 0.75 });
+      cabinGlows.push({ mat: fireMat, sprites: [glowAt(-W / 2 + T + 0.3, FL + 0.35, FZ, 1.3, 0xff6a20)], phase: 4.1, dip: 1, base: 1.3, fire: true });
     }
 
     // =====================================================================
@@ -1016,12 +1665,14 @@
       col(0, PH, pzc + 0.07, PW + 0.2, 0.12, PD + 0.15);
 
       // framed windows on both sides and the back: glass glows from the lantern inside
+      const paneSpecs = [];
       const win = (lx, lz, nx, nz) => {
         const ry2 = Math.atan2(nx, nz), wy = 0.95, ww = 0.5, wh = 0.42;
         const ax = nz, az = -nx;                              // along the wall
-        const glass = new THREE.PlaneGeometry(ww, wh);
-        batch.add(glass, glowMat, lx + nx * 0.004, wy, lz + nz * 0.004, 0, ry2, 0);                       // outside pane
-        batch.add(glass, glowMat, lx - nx * (T + 0.004), wy, lz - nz * (T + 0.004), 0, ry2 + Math.PI, 0); // inside pane
+        const voidPlane = new THREE.PlaneGeometry(ww, wh);
+        batch.add(voidPlane, windowVoidMat, lx + nx * 0.002, wy, lz + nz * 0.002, 0, ry2, 0);                       // dark room behind the glass
+        batch.add(voidPlane, windowVoidMat, lx - nx * (T + 0.002), wy, lz - nz * (T + 0.002), 0, ry2 + Math.PI, 0);
+        paneSpecs.push({ x: lx, y: wy, z: lz, ry: ry2, w: ww, h: wh });                                              // the glass: a breakable pane (added below)
         const ox = lx + nx * 0.02, oz = lz + nz * 0.02;
         batch.add(UNIT_BOX, trimMat, ox, wy + wh / 2 + 0.03, oz, 0, ry2, 0, ww + 0.12, 0.06, 0.04);         // head
         batch.add(UNIT_BOX, trimMat, ox + nx * 0.02, wy - wh / 2 - 0.03, oz + nz * 0.02, 0, ry2, 0, ww + 0.16, 0.05, 0.08); // sill
@@ -1055,6 +1706,18 @@
       lantern(PW / 2 - 0.2, PH - 0.32, pz1 - 0.05);            // porch lantern hanging from the porch beam
 
       batch.build(group, { rayTarget: true });
+
+      // hinged door in the doorway, breakable window panes, and the raised floors that debris can land on
+      group.updateMatrixWorld(true);
+      const hinge = group.localToWorld(new THREE.Vector3(-DOOR_W / 2, FL, D / 2 - T / 2));
+      makeDoor({ x: hinge.x, y: FL, z: hinge.z, yaw: ry, w: DOOR_W, h: DOOR_H - FL, slot: T });
+      for (const p of paneSpecs) makePane(group, { ...p, thick: T, mat: glowMat });
+      const rect = (x0, x1, z0, z1) => {
+        const a = group.localToWorld(new THREE.Vector3(x0, 0, z0)), b = group.localToWorld(new THREE.Vector3(x1, 0, z1));
+        floorRects.push({ x0: Math.min(a.x, b.x), x1: Math.max(a.x, b.x), z0: Math.min(a.z, b.z), z1: Math.max(a.z, b.z), y: FL });
+      };
+      rect(-W / 2, W / 2, -D / 2, D / 2);
+      rect(-PW / 2, PW / 2, D / 2, D / 2 + PD);
 
       // lantern glows (sprites, no real lights: keeps the headset frame rate up)
       group.updateMatrixWorld(true);
@@ -1716,8 +2379,11 @@
       parent.add(flashlight);
       flashlightHolder = parent;
       if (parent === camera) {
-        flashlight.position.set(0.15, -0.15, -0.2); // held a bit to the right on desktop
-        flashlight.children[0].visible = true;
+        // head-mounted lamp: just above and in front of your eyes, so it shines wherever you look
+        // (the lamp's body would sit inside your head, so only the beam is shown)
+        flashlight.position.set(0, 0.04, -0.03);
+        flashlight.children[0].visible = false;
+        flashlight.children[1].visible = false;
       } else {
         flashlight.position.set(0, 0, 0);
       }
@@ -1790,28 +2456,15 @@
         controller.userData.inputSource = src;
         hand.offset.copy(src.handedness === 'left' ? LEFT_HAND_OFFSET : RIGHT_HAND_OFFSET);
         ray.visible = src.targetRayMode === 'tracked-pointer';
-        // Put the flashlight in the right hand (or whichever controller shows up first)
-        if (src.handedness === 'right' || flashlightHolder === camera) {
-          attachFlashlight(controller);
-        }
+        // (the flashlight is head-mounted, so the controllers no longer take it)
       });
 
       controller.addEventListener('disconnected', () => {
         controller.userData.inputSource = null;
         ray.visible = false;
-        if (flashlightHolder === controller) {
-          const other = controllers.find((c) => c !== controller && c.userData.inputSource);
-          attachFlashlight(other || camera);
-        }
       });
 
-      // Squeeze (grip button) moves the flashlight to that hand
-      controller.addEventListener('squeezestart', () => {
-        if (isNearHandle(hand)) return; // squeezing the generator handle grabs it instead
-        if (boatGrabHere(hand)) return; // squeezing a boat part or the boat's wheel grabs it instead
-        attachFlashlight(controller);
-        pulse(controller, 0.6, 60);
-      });
+      // (Grip no longer moves the flashlight: it's a headlamp now, so both hands stay free)
 
       controllers.push(controller);
     }
@@ -2750,53 +3403,369 @@
     const lkRand = (a, b) => a + Math.random() * (b - a);
     const inLake = (x, z, m = 0) => x > LAKE.x0 + m && x < LAKE.x1 - m && z > LAKE.z0 + m && z < LAKE.z1 - m;
 
-    // ---------- Lake bed, water surface, banks ----------
-    {
-      const bed = new THREE.Mesh(new THREE.PlaneGeometry(lakeW, lakeD),
-        new THREE.MeshStandardMaterial({ color: 0x0b0d0c, roughness: 1, polygonOffset: true, polygonOffsetFactor: -2 }));
-      bed.rotation.x = -Math.PI / 2;
-      bed.position.set(lakeCx, 0.006, lakeCz);
-      bed.receiveShadow = true;
-      scene.add(bed);
+    // ---------- Natural lake: sunken basin, sloping sandy beach, lakebed, water ----------
+    // The lake is sunk into the forest floor: the beach slopes gently down from the grass to the water's edge
+    // (WATER_LEVEL), then the bed shelves away to LAKE_DEPTH. The shape comes from lakeHeight() (defined with the
+    // camp layout), so the visible sand and the colliders match.
+    const LAKE_GRID = 0.65;                                    // collider cell size (m)
+    const lakeRng = mulberry32(4711), lr = (a, b) => a + lakeRng() * (b - a);
+    let lkX0 = Infinity, lkX1 = -Infinity, lkZ0 = Infinity, lkZ1 = -Infinity;
+    for (let i = 0; i < LAKE_N; i++) {
+      const a = -Math.PI + (2 * Math.PI * i) / LAKE_N, r = lakeBeachTab[i];
+      lkX0 = Math.min(lkX0, LAKE_C.x + r * Math.cos(a)); lkX1 = Math.max(lkX1, LAKE_C.x + r * Math.cos(a));
+      lkZ0 = Math.min(lkZ0, LAKE_C.z + r * Math.sin(a)); lkZ1 = Math.max(lkZ1, LAKE_C.z + r * Math.sin(a));
     }
-    const waterGeo = new THREE.PlaneGeometry(lakeW, lakeD, 24, 24);
+    lkX0 = Math.floor(lkX0 - 0.5); lkZ0 = Math.floor(lkZ0 - 0.5);
+    const lkNX = Math.ceil((lkX1 + 0.5 - lkX0) / LAKE_GRID), lkNZ = Math.ceil((lkZ1 + 0.5 - lkZ0) / LAKE_GRID);
+    lkX1 = lkX0 + lkNX * LAKE_GRID; lkZ1 = lkZ0 + lkNZ * LAKE_GRID;
+
+    // Cut a hole for the basin out of the flat ground collider: the slab becomes four slabs around the lake area
+    {
+      const g = colliders.find((c) => c.box.min.x === -50 && c.box.max.x === 50 && c.box.max.y === 0) || colliders[0]; // (the ground slab is the first collider)
+      g.box.max.x = lkX0;                                                                              // west of the lake area
+      colliders.push({ box: new THREE.Box3(new THREE.Vector3(lkX1, -10, -50), new THREE.Vector3(50, 0, 50)) });       // east
+      colliders.push({ box: new THREE.Box3(new THREE.Vector3(lkX0, -10, -50), new THREE.Vector3(lkX1, 0, lkZ0)) });   // north
+      colliders.push({ box: new THREE.Box3(new THREE.Vector3(lkX0, -10, lkZ1), new THREE.Vector3(lkX1, 0, 50)) });    // south
+    }
+    // Terrain colliders inside the hole: one column per grid cell, its top at the terrain height (in small steps:
+    // 4 cm on the beach, 9 cm underwater, so there are no walls to snag on), merged into as few boxes as possible.
+    // Under the deep water the collider floor stops 0.36 m down: you float well above it, and it keeps the count down.
+    {
+      const qTop = (h) => h >= WATER_LEVEL
+        ? Math.min(0, Math.round(h / 0.04) * 0.04)
+        : WATER_LEVEL - Math.round((WATER_LEVEL - Math.max(h, WATER_LEVEL - 0.36)) / 0.09) * 0.09;
+      const top = [];
+      for (let i = 0; i < lkNX; i++) {
+        top.push([]);
+        for (let j = 0; j < lkNZ; j++) top[i].push(qTop(lakeHeight(lkX0 + (i + 0.5) * LAKE_GRID, lkZ0 + (j + 0.5) * LAKE_GRID)));
+      }
+      const used = top.map((col) => col.map(() => false));
+      for (let j = 0; j < lkNZ; j++) {
+        for (let i = 0; i < lkNX; i++) {
+          if (used[i][j]) continue;
+          const L = top[i][j];
+          let w = 1;
+          while (i + w < lkNX && !used[i + w][j] && top[i + w][j] === L) w++;
+          let d = 1;
+          while (j + d < lkNZ) {
+            let ok = true;
+            for (let k = 0; k < w && ok; k++) ok = !used[i + k][j + d] && top[i + k][j + d] === L;
+            if (!ok) break;
+            d++;
+          }
+          for (let k = 0; k < w; k++) for (let m = 0; m < d; m++) used[i + k][j + m] = true;
+          colliders.push({ box: new THREE.Box3(new THREE.Vector3(lkX0 + i * LAKE_GRID, -3, lkZ0 + j * LAKE_GRID),
+                                                new THREE.Vector3(lkX0 + (i + w) * LAKE_GRID, L, lkZ0 + (j + d) * LAKE_GRID)) });
+        }
+      }
+    }
+
+    // The forest-floor mesh gets the same hole, so the sunken sand shows through
+    {
+      const sq = new THREE.Shape();
+      sq.moveTo(-55, -55); sq.lineTo(55, -55); sq.lineTo(55, 55); sq.lineTo(-55, 55); sq.closePath();
+      const hole = new THREE.Path();
+      for (let i = 0; i < LAKE_N; i += 3) {
+        const a = -Math.PI + (2 * Math.PI * i) / LAKE_N, r = lakeBeachTab[i];
+        const x = LAKE_C.x + r * Math.cos(a), z = LAKE_C.z + r * Math.sin(a);
+        if (i === 0) hole.moveTo(x, -z); else hole.lineTo(x, -z);      // the ground plane is rotated: its local y is -z
+      }
+      hole.closePath();
+      sq.holes.push(hole);
+      const geo = new THREE.ShapeGeometry(sq);
+      const uv = geo.attributes.uv;
+      for (let k = 0; k < uv.count; k++) uv.setXY(k, (uv.getX(k) + 55) / 110, (uv.getY(k) + 55) / 110); // same tiling as before
+      ground.geometry.dispose();
+      ground.geometry = geo;
+    }
+
+    // Sand: fine grains and a few pebbles on a near-white base (the colour comes from the vertex colours below)
+    const sandTex = canvasTexture(256, (g, s) => {
+      g.fillStyle = '#e8e2d6'; g.fillRect(0, 0, s, s);
+      for (let i = 0; i < 14000; i++) {
+        const v = lr(150, 255) | 0;
+        g.fillStyle = `rgba(${v},${(v * 0.95) | 0},${(v * 0.86) | 0},${lr(0.25, 0.7).toFixed(2)})`;
+        g.fillRect(lr(0, s), lr(0, s), lr(1, 2.2), lr(1, 2.2));
+      }
+      for (let i = 0; i < 70; i++) {
+        const v = lr(90, 160) | 0;
+        g.fillStyle = `rgba(${v},${v},${(v * 0.95) | 0},0.8)`;
+        g.beginPath(); g.ellipse(lr(0, s), lr(0, s), lr(1.5, 4), lr(1, 3), lr(0, 3), 0, Math.PI * 2); g.fill();
+      }
+      g.strokeStyle = 'rgba(120,105,85,0.18)'; g.lineWidth = 2;          // faint wind ripples
+      for (let y = 8; y < s; y += 18) {
+        g.beginPath(); g.moveTo(0, y);
+        for (let x = 0; x <= s; x += 16) g.lineTo(x, y + Math.sin(x * 0.05 + y) * 3);
+        g.stroke();
+      }
+    });
+
+    // Lake terrain mesh: a polar grid from the centre out to the beach edge, coloured murky bed -> wet sand ->
+    // dry sand -> dark forest soil where it meets the ground
+    {
+      const SEG = 144;
+      const under = [99, 3.6, 2.7, 2.0, 1.5, 1.1, 0.8, 0.55, 0.35, 0.18, 0.06];   // metres inside the shoreline (99 = centre)
+      const beach = [0, 0.08, 0.2, 0.36, 0.55, 0.74, 0.9, 1];                     // fraction of the beach width
+      const rings = under.length + beach.length;
+      const pos = [], col = [], uvs = [], idx = [];
+      const cDeep = [0.07, 0.075, 0.06], cBed = [0.2, 0.17, 0.12], cWet = [0.36, 0.29, 0.2], cDry = [0.6, 0.5, 0.36], cSoil = [0.13, 0.11, 0.07];
+      const mix = (p, q, t) => [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t, p[2] + (q[2] - p[2]) * t];
+      for (let s = 0; s < SEG; s++) {
+        const a = -Math.PI + (2 * Math.PI * s) / SEG, rs = lakeTab(lakeShoreTab, a), rb = lakeTab(lakeBeachTab, a);
+        const c = Math.cos(a), sn = Math.sin(a);
+        for (let k = 0; k < rings; k++) {
+          let r, colr;
+          if (k < under.length) {
+            const d = under[k];
+            r = Math.max(0, rs - d);
+            const t = Math.min(1, (rs - r) / (LAKE_SHELF * 1.6));
+            colr = d < 0.2 ? mix(cWet, cBed, d / 0.2) : mix(cBed, cDeep, smooth01(t));
+          } else {
+            const t = beach[k - under.length];
+            r = rs + t * (rb - rs);
+            colr = t < 0.3 ? mix(cWet, cDry, t / 0.3) : t < 0.7 ? cDry : mix(cDry, cSoil, (t - 0.7) / 0.3);
+          }
+          const x = LAKE_C.x + r * c, z = LAKE_C.z + r * sn, n = 0.9 + 0.2 * lakeRng();
+          pos.push(x, lakeHeight(x, z), z);
+          col.push(colr[0] * n, colr[1] * n, colr[2] * n);
+          uvs.push(x * 0.45, z * 0.45);
+        }
+      }
+      for (let s = 0; s < SEG; s++) {
+        const s2 = (s + 1) % SEG;
+        for (let k = 0; k < rings - 1; k++) {
+          const a0 = s * rings + k, a1 = s2 * rings + k;
+          idx.push(a0, a1, a0 + 1, a1, a1 + 1, a0 + 1);   // counter-clockwise seen from above (faces up)
+        }
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+      geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+      geo.setIndex(idx);
+      geo.computeVertexNormals();
+      const terrain = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ map: sandTex, vertexColors: true, roughness: 0.95 }));
+      terrain.receiveShadow = true;
+      scene.add(terrain);
+    }
+
+    // Water: a polar grid shaped like the shoreline, reaching a little under the sand so the edge is wherever water meets beach.
+    // Vertex colours darken it towards the murky middle and fade it out at the shore; a scrolling bump map adds ripples.
+    // (Kept as `waterGeo` in the plane's local XY, so the wave animation in updateLake() works on it unchanged.)
+    const rippleTex = canvasTexture(256, (g, s) => {
+      g.fillStyle = '#808080'; g.fillRect(0, 0, s, s);
+      for (let i = 0; i < 90; i++) {
+        const x = lr(0, s), y = lr(0, s), r = lr(8, 40);
+        for (const dx of [-s, 0, s]) for (const dy of [-s, 0, s]) {
+          g.strokeStyle = `rgba(${lakeRng() < 0.5 ? 255 : 0},${lakeRng() < 0.5 ? 255 : 0},128,0.12)`;
+          g.lineWidth = lr(1, 3);
+          g.beginPath(); g.ellipse(x + dx, y + dy, r, r * lr(0.5, 0.9), lr(0, 3), 0, Math.PI * 2); g.stroke();
+        }
+      }
+    }, 5);
+    const waterGeo = (() => {
+      const SEG = 96;
+      const rings = [99, 4.0, 3.0, 2.2, 1.6, 1.1, 0.7, 0.4, 0.18, 0, -0.2, -0.4];  // metres inside the shoreline (negative: under the sand)
+      const pos = [], col = [], idx = [];
+      for (let s = 0; s < SEG; s++) {
+        const a = -Math.PI + (2 * Math.PI * s) / SEG, rs = lakeTab(lakeShoreTab, a);
+        for (const d of rings) {
+          const r = Math.max(0, rs - d);
+          pos.push(r * Math.cos(a), -r * Math.sin(a), 0);                 // local XY of the plane (rotated flat below)
+          const deep = Math.min(1, Math.max(0, (d - 0.2) / 3));
+          const alpha = d <= -0.2 ? 0 : d <= 0 ? 0.3 * (1 + d / 0.2) : Math.min(0.95, 0.35 + d * 0.9);
+          col.push(0.13 - 0.11 * deep, 0.15 - 0.09 * deep, 0.12 - 0.05 * deep, alpha);
+        }
+      }
+      const n = rings.length;
+      for (let s = 0; s < SEG; s++) {
+        const s2 = (s + 1) % SEG;
+        for (let k = 0; k < n - 1; k++) {
+          const a0 = s * n + k, a1 = s2 * n + k;
+          idx.push(a0, a1, a0 + 1, a1, a1 + 1, a0 + 1);
+        }
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 4));
+      geo.setAttribute('uv', new THREE.Float32BufferAttribute(pos.flatMap((v, i) => (i % 3 === 2 ? [] : [v * 0.12])), 2));
+      geo.setIndex(idx);
+      geo.computeVertexNormals();
+      return geo;
+    })();
     const water = new THREE.Mesh(waterGeo, new THREE.MeshStandardMaterial({
-      color: 0x0a1c26, roughness: 0.12, metalness: 0.35, transparent: true, opacity: 0.8, depthWrite: false }));
+      vertexColors: true, transparent: true, depthWrite: false, roughness: 0.08, metalness: 0.4, bumpMap: rippleTex, bumpScale: 0.7 }));
     water.rotation.x = -Math.PI / 2;
-    water.position.set(lakeCx, WATER_LEVEL, lakeCz);
+    water.position.set(LAKE_C.x, WATER_LEVEL, LAKE_C.z);
     water.receiveShadow = true;
+    water.renderOrder = 1;
     scene.add(water);
 
-    const bankMat = new THREE.MeshStandardMaterial({ color: 0x241b13, roughness: 1 });
-    const BANK_H = WATER_LEVEL + 0.08, BANK_T = 0.5;
-    solidBox(LAKE.x0 - BANK_T / 2, 0, lakeCz, BANK_T, BANK_H, lakeD + 2 * BANK_T, bankMat); // west bank
-    solidBox(LAKE.x1 + BANK_T / 2, 0, lakeCz, BANK_T, BANK_H, lakeD + 2 * BANK_T, bankMat); // east bank
-    solidBox(lakeCx, 0, LAKE.z0 - BANK_T / 2, lakeW, BANK_H, BANK_T, bankMat);              // north bank
-    solidBox(lakeCx, 0, LAKE.z1 + BANK_T / 2, lakeW, BANK_H, BANK_T, bankMat);              // south bank
-    for (let i = 0; i < 26; i++) { // loose shoreline stones (decoration only)
-      const side = i % 4, t = Math.random();
-      const x = side === 0 ? LAKE.x0 - 0.25 : side === 1 ? LAKE.x1 + 0.25 : LAKE.x0 + t * lakeW;
-      const z = side === 2 ? LAKE.z0 - 0.25 : side === 3 ? LAKE.z1 + 0.25 : LAKE.z0 + t * lakeD;
-      if (x < DOCK.x1 && x > DOCK.x0 - 0.5 && z > DOCK.z0 - 0.3 && z < DOCK.z1 + 0.3) continue; // keep the dock clear
-      const stone = new THREE.Mesh(new THREE.DodecahedronGeometry(lkRand(0.06, 0.14), 0), rockMat);
-      stone.position.set(x + lkRand(-0.15, 0.15), BANK_H, z + lkRand(-0.15, 0.15));
-      stone.rotation.set(lkRand(0, 3), lkRand(0, 3), 0);
-      scene.add(stone);
+    // A faint band of foam where the water laps the sand
+    const foamMat = new THREE.MeshBasicMaterial({ color: 0xd8dcd4, vertexColors: true, transparent: true, depthWrite: false, opacity: 0.5,
+      blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
+    {
+      const SEG = 120, offs = [0.14, 0.04, -0.06];
+      const pos = [], col = [], idx = [];
+      for (let s = 0; s < SEG; s++) {
+        const a = -Math.PI + (2 * Math.PI * s) / SEG, rs = lakeTab(lakeShoreTab, a);
+        const patch = 0.55 + 0.45 * Math.sin(a * 11 + 1.3) * Math.sin(a * 5 + 0.4);
+        offs.forEach((o, k) => {
+          const r = rs - o;
+          pos.push(LAKE_C.x + r * Math.cos(a), WATER_LEVEL + 0.006, LAKE_C.z + r * Math.sin(a));
+          const v = k === 1 ? patch : 0;
+          col.push(v, v, v);
+        });
+      }
+      for (let s = 0; s < SEG; s++) {
+        const s2 = (s + 1) % SEG;
+        for (let k = 0; k < 2; k++) { const a0 = s * 3 + k, a1 = s2 * 3 + k; idx.push(a0, a0 + 1, a1, a1, a0 + 1, a1 + 1); }
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+      geo.setIndex(idx);
+      const foam = new THREE.Mesh(geo, foamMat);
+      foam.renderOrder = 2;
+      scene.add(foam);
     }
 
-    // ---------- Wooden dock (with two steps up from the camp side) ----------
+    // ---------- Weathered wooden dock, from the sand out to where the boat is moored ----------
+    const DOCK_START = 3.0, DOCK_TOP = 0.03;                         // starts on the dry sand; deck top height
+    let mooringRope = null;
     {
-      const DECK_TOP = WATER_LEVEL + 0.12, dz = (DOCK.z0 + DOCK.z1) / 2, dw = DOCK.z1 - DOCK.z0;
-      solidBox((DOCK.x0 + DOCK.x1) / 2, DECK_TOP - 0.08, dz, DOCK.x1 - DOCK.x0, 0.08, dw, woodMat);   // deck
-      solidBox((DOCK.x0 + LAKE.x0 - BANK_T) / 2, 0, dz, LAKE.x0 - BANK_T - DOCK.x0, DECK_TOP - 0.08, dw, bankMat); // earth under the land end
-      solidBox(DOCK.x0 - 0.2, 0, dz, 0.4, DECK_TOP * 0.66, dw, plankMat);   // step 2
-      solidBox(DOCK.x0 - 0.6, 0, dz, 0.4, DECK_TOP * 0.33, dw, plankMat);   // step 1
-      for (const x of [LAKE.x0 + 0.3, (LAKE.x0 + DOCK.x1) / 2, DOCK.x1 - 0.08]) for (const z of [DOCK.z0 + 0.06, DOCK.z1 - 0.06]) {
-        const post = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.045, DECK_TOP + 0.12, 8), barkMat);
-        post.position.set(x, (DECK_TOP + 0.12) / 2, z);
-        post.castShadow = true;
-        scene.add(post);
+      const weathered = new THREE.MeshStandardMaterial({ map: woodTex, color: 0x9a9086, roughness: 0.97 });
+      const pileMat = new THREE.MeshStandardMaterial({ color: 0x3e352c, map: grimeTex, roughness: 1 });
+      const db = makeBatch();
+      const dz = (DOCK.z0 + DOCK.z1) / 2, dw = DOCK.z1 - DOCK.z0, len = DOCK.x1 - DOCK_START;
+      // deck boards laid across the dock, slightly uneven, a couple of them cracked short
+      for (let x = DOCK_START + 0.07, k = 0; x < DOCK.x1 - 0.04; x += 0.15, k++) {
+        const short = k % 11 === 7 ? 0.35 : 0;
+        db.add(UNIT_BOX, weathered, x, DOCK_TOP - 0.018 + lr(-0.004, 0.004), dz + short / 2, lr(-0.02, 0.02), lr(-0.02, 0.02), 0, 0.135, 0.036, dw - short);
       }
+      // stringers under the boards
+      for (const z of [DOCK.z0 + 0.12, dz, DOCK.z1 - 0.12]) db.add(UNIT_BOX, pileMat, (DOCK_START + DOCK.x1) / 2, DOCK_TOP - 0.08, z, 0, 0, 0, len, 0.08, 0.07);
+      // piles driven into the sand / lakebed, some sticking up as mooring posts, with cross braces
+      for (let k = 0; k < 5; k++) {
+        const x = DOCK_START + 0.2 + (k / 4) * (DOCK.x1 - DOCK_START - 0.3);
+        for (const z of [DOCK.z0 - 0.03, DOCK.z1 + 0.03]) {
+          const bed = lakeHeight(x, z) - 0.15, tall = x > DOCK.x1 - 1.2 || lakeRng() < 0.3 ? 0.22 : 0.04;
+          const h = DOCK_TOP + tall - bed;
+          db.add(new THREE.CylinderGeometry(0.055, 0.065, h, 8), pileMat, x, bed + h / 2, z, lr(-0.03, 0.03), 0, lr(-0.03, 0.03));
+        }
+        const bed = lakeHeight(x, dz) - 0.1;
+        if (DOCK_TOP - bed > 0.35) {
+          const bl = Math.hypot(dw, DOCK_TOP - 0.1 - bed);
+          db.add(UNIT_BOX, pileMat, x, (DOCK_TOP - 0.1 + bed) / 2 + 0.05, dz, Math.atan2(DOCK_TOP - 0.1 - bed, dw), 0, 0, 0.04, 0.05, bl);
+        }
+      }
+      // cleats on the boat side
+      for (const x of [DOCK.x1 - 1.4, DOCK.x1 - 0.35]) {
+        db.add(UNIT_BOX, ironMat, x, DOCK_TOP + 0.02, DOCK.z1 - 0.08, 0, 0, 0, 0.16, 0.02, 0.03);
+        for (const s of [-1, 1]) db.add(UNIT_BOX, ironMat, x + s * 0.05, DOCK_TOP + 0.01, DOCK.z1 - 0.08, 0, 0, 0, 0.02, 0.03, 0.03);
+      }
+      db.build(scene, { rayTarget: true });
+      // deck collider (you can walk out along it and step down into the boat)
+      addBoxCollider((DOCK_START + DOCK.x1) / 2, DOCK_TOP - 0.08, dz, len, 0.08, dw);
+      // mooring rope from the end cleat to the boat (it disappears once you drive the boat away)
+      const ropeMat = new THREE.MeshStandardMaterial({ color: 0x6f6046, roughness: 1 });
+      const a = new THREE.Vector3(DOCK.x1 - 0.35, DOCK_TOP + 0.03, DOCK.z1 - 0.08);
+      const moor = new THREE.Vector3(6.6, WATER_LEVEL, DOCK.z1 + BOAT_W / 2 + 0.12);   // where the boat starts (see `boat` below)
+      const b = new THREE.Vector3(moor.x + 0.55, WATER_LEVEL + 0.42, moor.z - BOAT_W / 2 + 0.03);
+      const mid = a.clone().lerp(b, 0.5); mid.y = Math.min(a.y, b.y) - 0.12;
+      mooringRope = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([a, mid, b]), 20, 0.008, 5, false), ropeMat);
+      mooringRope.userData.home = moor;
+      scene.add(mooringRope);
+    }
+
+    // ---------- Beach props: driftwood, smooth river stones, reeds and cattails ----------
+    {
+      const nearDock = (a) => Math.abs(Math.atan2(Math.sin(a - Math.PI), Math.cos(a - Math.PI))) < 0.45; // west, where the dock is
+      const at = (a, r) => [LAKE_C.x + r * Math.cos(a), LAKE_C.z + r * Math.sin(a)];
+      // driftwood: bleached, bent logs lying on the dry sand (along x or z so their box collider fits), with branch stubs
+      const driftMat = new THREE.MeshStandardMaterial({ color: 0x8f877a, map: grimeTex, roughness: 1 });
+      const fb = makeBatch();
+      for (let k = 0, placed = 0; k < 40 && placed < 7; k++) {
+        const a = lr(-Math.PI, Math.PI);
+        if (nearDock(a)) continue;
+        const rs = lakeTab(lakeShoreTab, a), rb = lakeTab(lakeBeachTab, a);
+        const [x, z] = at(a, rs + (rb - rs) * lr(0.3, 0.7));
+        const alongX = lakeRng() < 0.5, L = lr(0.9, 1.8), rad = lr(0.045, 0.08);
+        const pts = [-1, -0.35, 0.3, 1].map((t, i) => {
+          const off = (i === 1 || i === 2 ? lr(-0.08, 0.08) : 0);
+          return alongX ? new THREE.Vector3(x + t * L / 2, 0, z + off) : new THREE.Vector3(x + off, 0, z + t * L / 2);
+        });
+        for (const p of pts) p.y = lakeHeight(p.x, p.z) + rad * 0.7;
+        fb.add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 16, rad, 7, false), driftMat);
+        for (const p of [pts[0], pts[3]]) fb.add(new THREE.SphereGeometry(rad, 7, 5), driftMat, p.x, p.y, p.z);  // rounded ends
+        const s = pts[1].clone().lerp(pts[2], 0.5);
+        fb.add(new THREE.CylinderGeometry(rad * 0.35, rad * 0.5, rad * 4, 5), driftMat, s.x, s.y + rad * 1.5, s.z, alongX ? 0.5 : 0, 0, alongX ? 0 : 0.5);
+        const h0 = lakeHeight(x, z);
+        addBoxCollider(x, h0 - 0.05, z, alongX ? L : rad * 2.4, rad * 1.8 + 0.05, alongX ? rad * 2.4 : L);
+        placed++;
+      }
+      fb.build(scene, { rayTarget: true });
+      // smooth river stones along the waterline (some under the water) and scattered up the beach
+      const stoneA = new THREE.MeshStandardMaterial({ color: 0x6f6d68, roughness: 0.55 });
+      const stoneB = new THREE.MeshStandardMaterial({ color: 0x4f5458, roughness: 0.5 });
+      const sb = makeBatch();
+      const pebble = new THREE.SphereGeometry(1, 10, 7);
+      for (let k = 0; k < 110; k++) {
+        const a = lr(-Math.PI, Math.PI);
+        if (nearDock(a) && lakeRng() < 0.7) continue;
+        const rs = lakeTab(lakeShoreTab, a), rb = lakeTab(lakeBeachTab, a);
+        const shoreline = k < 75;
+        const [x, z] = at(a, shoreline ? rs + lr(-0.6, 0.35) : rs + (rb - rs) * lr(0.2, 0.9));
+        const big = k % 13 === 0, sc = big ? lr(0.12, 0.2) : lr(0.025, 0.08);
+        const y = lakeHeight(x, z);
+        sb.add(pebble, lakeRng() < 0.5 ? stoneA : stoneB, x, y + sc * 0.3, z, lr(-0.2, 0.2), lr(0, 6), lr(-0.2, 0.2), sc * lr(1, 1.4), sc * lr(0.45, 0.65), sc);
+        if (big) addBoxCollider(x, y - 0.05, z, sc * 1.6, sc * 0.95 + 0.05, sc * 1.6);
+      }
+      sb.build(scene);
+      // reeds and cattails in clumps along the water's edge (instanced: one draw call for the reeds, one for the heads)
+      const reedParts = [], headParts = [];
+      for (let k = 0; k < 11; k++) {
+        const ang = (k / 11) * Math.PI * 2 + 0.3, h = 0.45 + (k % 4) * 0.08;
+        const blade = new THREE.ConeGeometry(0.011, h, 3); blade.translate(0, h / 2, 0);
+        blade.rotateX(0.12 + (k % 3) * 0.08); blade.rotateY(ang); blade.translate(Math.cos(ang) * 0.05, 0, Math.sin(ang) * 0.05);
+        reedParts.push(blade.toNonIndexed());
+      }
+      for (let k = 0; k < 3; k++) {
+        const ang = (k / 3) * Math.PI * 2, x = Math.cos(ang) * 0.03, z = Math.sin(ang) * 0.03, h = 0.62 + k * 0.07;
+        const stalk = new THREE.CylinderGeometry(0.004, 0.005, h, 4); stalk.translate(x, h / 2, z);
+        reedParts.push(stalk.toNonIndexed());
+        const head = new THREE.CapsuleGeometry(0.017, 0.075, 3, 8); head.translate(x, h - 0.07, z);
+        headParts.push(head.toNonIndexed());
+      }
+      const strip = (g) => { for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal') g.deleteAttribute(k); return g; };
+      const reedGeo = mergeGeometries(reedParts.map(strip), false), headGeo = mergeGeometries(headParts.map(strip), false);
+      const mats = [];
+      const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), p = new THREE.Vector3(), sv = new THREE.Vector3();
+      for (let c = 0; c < 12; c++) {
+        let a = lr(-Math.PI, Math.PI);
+        if (nearDock(a)) a += 1.2;
+        const n = 5 + Math.floor(lakeRng() * 6);
+        for (let k = 0; k < n; k++) {
+          const aa = a + lr(-0.12, 0.12), rs = lakeTab(lakeShoreTab, aa);
+          const [x, z] = at(aa, rs + lr(-0.45, 0.15));
+          const sc = lr(0.7, 1.15);
+          m4.compose(p.set(x, lakeHeight(x, z) - 0.02, z), q.setFromEuler(e.set(lr(-0.08, 0.08), lr(0, 6.3), lr(-0.08, 0.08))), sv.set(sc, sc, sc));
+          mats.push(m4.clone());
+        }
+      }
+      const reeds = new THREE.InstancedMesh(reedGeo, new THREE.MeshStandardMaterial({ color: 0x4d5a2a, roughness: 0.9 }), mats.length);
+      const heads = new THREE.InstancedMesh(headGeo, new THREE.MeshStandardMaterial({ color: 0x4a2c16, roughness: 1 }), mats.length);
+      mats.forEach((m, i) => { reeds.setMatrixAt(i, m); heads.setMatrixAt(i, m); });
+      for (const im of [reeds, heads]) { im.instanceMatrix.needsUpdate = true; im.computeBoundingSphere(); scene.add(im); }
+    }
+
+    // ripples drift across the water; the foam breathes; the mooring rope goes once the boat leaves the dock
+    let beachT = 0;
+    function updateBeach(dt) {
+      beachT += dt;
+      rippleTex.offset.set(beachT * 0.012, beachT * 0.007);
+      foamMat.opacity = 0.35 + 0.15 * Math.sin(beachT * 1.3);
+      if (mooringRope) mooringRope.visible = boat.pos.distanceTo(mooringRope.userData.home) < 0.25;
     }
 
     // ---------- The boat ----------
@@ -3854,6 +4823,192 @@
       };
     })();
     vrButton.addEventListener('click', () => titleAudio.unlock());
+    // ---------- Lobby music: a slow, eerie 1950s doo-wop-style ballad (procedural, original) ----------
+    // 12/8 "slow triplet" feel at about 54 dotted-quarter beats a minute: a bell/celesta arpeggio in triplets, a plucked
+    // upright-style bass on beats 1 and 3, a soft organ pad, brushed snare on 2 and 4, a sparse vibraphone tune, plus
+    // vinyl hiss, crackle and a slow tape wobble. The chord progression and the melody are original (written for this
+    // game), not taken from any song. It plays on the title screen and fades out into the camp ambience on PLAY.
+    const lobbyMusic = (() => {
+      const EIGHTH = 60 / 54 / 3;                     // one triplet eighth note (s)
+      const MASTER = 0.42;
+      // eight bars in E-flat: Ebmaj7, Cm9, Abmaj7, Abm6, Ebmaj7/G, Gbdim7, Fm7, Bb7(b9)  (MIDI notes)
+      const CHORDS = [
+        [51, 55, 58, 62], [48, 51, 55, 58, 62], [44, 48, 51, 55], [44, 47, 51, 53],
+        [43, 51, 55, 58], [42, 45, 48, 51], [41, 48, 51, 56], [46, 50, 53, 56, 59],
+      ];
+      const BASS = [[39, 46], [36, 43], [32, 39], [32, 39], [31, 38], [30, 36], [29, 36], [34, 41]];   // root, fifth-ish
+      // melody: [bar, eighth, note, length in eighths]
+      const MELODY = [
+        [0, 0, 79, 6], [0, 6, 77, 3], [0, 9, 75, 3],
+        [1, 0, 74, 9], [1, 9, 72, 3],
+        [2, 0, 75, 6], [2, 6, 79, 6],
+        [3, 0, 77, 3], [3, 3, 75, 3], [3, 6, 71, 6],
+        [4, 0, 70, 9], [4, 9, 67, 3],
+        [5, 0, 69, 6], [5, 6, 72, 6],
+        [6, 0, 68, 6], [6, 6, 72, 3], [6, 9, 75, 3],
+        [7, 0, 74, 6], [7, 6, 71, 3], [7, 9, 70, 3],
+      ];
+      const ARP = [0, 1, 2, 3, 2, 1, 0, 1, 2, 3, 2, 1];  // which chord tone each triplet eighth plays
+      const hz = (m) => 440 * Math.pow(2, (m - 69) / 12);
+      let ctx = null, out = null, verb = null, wow = null, noise = null, hiss = null;
+      let timer = null, playing = false, nextTime = 0, bar = 0, eighth = 0;
+
+      function build() {
+        ctx = new (window.AudioContext || window.webkitAudioContext)();
+        // warm, slightly saturated master with a dull top end (old record)
+        const shaper = ctx.createWaveShaper();
+        const curve = new Float32Array(1024);
+        for (let i = 0; i < 1024; i++) { const x = i / 511.5 - 1; curve[i] = Math.tanh(1.6 * x) / Math.tanh(1.6); }
+        shaper.curve = curve;
+        const tone = ctx.createBiquadFilter(); tone.type = 'lowpass'; tone.frequency.value = 5200; tone.Q.value = 0.5;
+        const low = ctx.createBiquadFilter(); low.type = 'highpass'; low.frequency.value = 45;
+        out = ctx.createGain(); out.gain.value = 0;
+        out.connect(shaper); shaper.connect(tone); tone.connect(low); low.connect(ctx.destination);
+        // small dark room reverb
+        const len = ctx.sampleRate * 2.6, ir = ctx.createBuffer(2, len, ctx.sampleRate);
+        for (let ch = 0; ch < 2; ch++) { const d = ir.getChannelData(ch); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3); }
+        const conv = ctx.createConvolver(); conv.buffer = ir;
+        verb = ctx.createGain(); verb.gain.value = 0.35;
+        verb.connect(conv); conv.connect(out);
+        // tape wobble: a slow LFO on the pitch of every note (cents)
+        const lfo = ctx.createOscillator(); lfo.frequency.value = 0.45;
+        wow = ctx.createGain(); wow.gain.value = 9;
+        lfo.connect(wow); lfo.start();
+        // vinyl hiss
+        const nl = ctx.sampleRate * 2;
+        noise = ctx.createBuffer(1, nl, ctx.sampleRate);
+        const nd = noise.getChannelData(0);
+        for (let i = 0; i < nl; i++) nd[i] = Math.random() * 2 - 1;
+        hiss = ctx.createBufferSource(); hiss.buffer = noise; hiss.loop = true;
+        const hf = ctx.createBiquadFilter(); hf.type = 'bandpass'; hf.frequency.value = 3500; hf.Q.value = 0.6;
+        const hg = ctx.createGain(); hg.gain.value = 0.012;
+        hiss.connect(hf); hf.connect(hg); hg.connect(out); hiss.start();
+      }
+      function osc(type, f, t) {
+        const o = ctx.createOscillator(); o.type = type; o.frequency.value = f;
+        wow.connect(o.detune);
+        o.onended = () => wow.disconnect(o.detune);       // let finished notes be freed
+        o.start(t);
+        return o;
+      }
+      function env(t, a, peak, dec, dest, rev = 0.3) {
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(peak, t + a);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + a + dec);
+        g.connect(dest);
+        if (rev) { const s = ctx.createGain(); s.gain.value = rev; g.connect(s); s.connect(verb); }
+        return g;
+      }
+      function bell(t, m, pan) {                          // celesta / music-box tone
+        const p = ctx.createStereoPanner(); p.pan.value = pan; p.connect(out);
+        const g = env(t, 0.004, 0.06, 1.4, p, 0.5);
+        const o1 = osc('sine', hz(m), t), o2 = osc('sine', hz(m) * 4, t), o3 = osc('triangle', hz(m), t);
+        const g2 = ctx.createGain(); g2.gain.setValueAtTime(0.35, t); g2.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+        o1.connect(g); o2.connect(g2); g2.connect(g);
+        const g3 = ctx.createGain(); g3.gain.value = 0.3; o3.connect(g3); g3.connect(g);
+        for (const o of [o1, o2, o3]) o.stop(t + 1.5);
+      }
+      function bass(t, m) {                               // plucked upright-style bass
+        const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.setValueAtTime(900, t); lp.frequency.exponentialRampToValueAtTime(220, t + 0.4);
+        const g = env(t, 0.012, 0.32, 1.1, out, 0.08);
+        lp.connect(g);
+        const o1 = osc('triangle', hz(m), t), o2 = osc('sine', hz(m) * 2, t);
+        o1.frequency.setValueAtTime(hz(m) * 1.02, t); o1.frequency.exponentialRampToValueAtTime(hz(m), t + 0.05);   // a little thumb slide
+        const g2 = ctx.createGain(); g2.gain.value = 0.25;
+        o1.connect(lp); o2.connect(g2); g2.connect(lp);
+        o1.stop(t + 1.2); o2.stop(t + 1.2);
+      }
+      function organ(t, notes, dur) {                     // soft drawbar-ish pad with vibrato
+        const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1100; lp.Q.value = 0.7;
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.022, t + 0.6);
+        g.gain.setValueAtTime(0.022, t + dur - 0.4); g.gain.linearRampToValueAtTime(0.0001, t + dur + 0.3);
+        lp.connect(g); g.connect(out);
+        const s = ctx.createGain(); s.gain.value = 0.5; g.connect(s); s.connect(verb);
+        const vib = ctx.createOscillator(); vib.frequency.value = 5.3; const va = ctx.createGain(); va.gain.value = 7;
+        vib.connect(va); vib.start(t); vib.stop(t + dur + 0.4);
+        for (const m of notes) for (const dt of [-6, 6]) {
+          const o = osc(dt < 0 ? 'sawtooth' : 'square', hz(m + 12), t);
+          o.detune.value = dt; va.connect(o.detune);
+          const og = ctx.createGain(); og.gain.value = dt < 0 ? 0.5 : 0.25;
+          o.connect(og); og.connect(lp); o.stop(t + dur + 0.4);
+        }
+      }
+      function vibes(t, m, dur) {                         // vibraphone melody with tremolo
+        const g = env(t, 0.01, 0.075, dur + 0.8, out, 0.6);
+        const trem = ctx.createGain(); trem.gain.value = 1;
+        const lfo = ctx.createOscillator(); lfo.frequency.value = 4.6; const la = ctx.createGain(); la.gain.value = 0.35;
+        lfo.connect(la); la.connect(trem.gain); lfo.start(t); lfo.stop(t + dur + 1);
+        trem.connect(g);
+        const o1 = osc('sine', hz(m), t), o2 = osc('sine', hz(m) * 3.98, t);
+        const g2 = ctx.createGain(); g2.gain.setValueAtTime(0.18, t); g2.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
+        o1.connect(trem); o2.connect(g2); g2.connect(trem);
+        o1.stop(t + dur + 1); o2.stop(t + dur + 1);
+      }
+      function brush(t, peak) {                           // brushed snare swish
+        const src = ctx.createBufferSource(); src.buffer = noise;
+        const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 2800; f.Q.value = 0.8;
+        const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(peak, t + 0.03);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
+        src.connect(f); f.connect(g); g.connect(out);
+        src.start(t, Math.random()); src.stop(t + 0.32);
+      }
+      function crackle(t) {                               // vinyl pop
+        const src = ctx.createBufferSource(); src.buffer = noise;
+        const f = ctx.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 2000;
+        const g = ctx.createGain(); g.gain.setValueAtTime(0.03 + Math.random() * 0.05, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.004);
+        src.connect(f); f.connect(g); g.connect(out);
+        src.start(t, Math.random()); src.stop(t + 0.01);
+      }
+      function scheduleEighth(t) {
+        const chord = CHORDS[bar], up = chord.slice(-4);
+        if (eighth === 0) organ(t, chord, EIGHTH * 12);
+        bell(t, up[ARP[eighth] % up.length] + 12, eighth % 2 ? 0.25 : -0.25);
+        if (eighth === 0) bass(t, BASS[bar][0]);
+        if (eighth === 6) bass(t, BASS[bar][1]);
+        if (eighth === 3 || eighth === 9) brush(t, 0.05);
+        else if (eighth % 3 === 2) brush(t, 0.012);
+        for (const [b, e, m, l] of MELODY) if (b === bar && e === eighth) vibes(t, m, l * EIGHTH);
+        for (let k = 0; k < 3; k++) if (Math.random() < 0.35) crackle(t + Math.random() * EIGHTH);
+      }
+      function tick() {
+        if (!playing) return;
+        while (nextTime < ctx.currentTime + 0.25) {
+          scheduleEighth(nextTime);
+          nextTime += EIGHTH;
+          if (++eighth === 12) { eighth = 0; bar = (bar + 1) % CHORDS.length; }
+        }
+      }
+      return {
+        start() {
+          try {
+            if (!ctx) build();
+            ctx.resume();
+            if (playing) return;
+            playing = true;
+            bar = 0; eighth = 0; nextTime = ctx.currentTime + 0.15;
+            const t = ctx.currentTime;
+            out.gain.cancelScheduledValues(t); out.gain.setValueAtTime(out.gain.value, t);
+            out.gain.linearRampToValueAtTime(MASTER, t + 2.5);
+            timer = setInterval(tick, 40);
+            tick();
+          } catch (e) { console.warn('Lobby music could not start:', e); }
+        },
+        fadeOut(sec) {
+          if (!ctx || !playing) return;
+          const t = ctx.currentTime;
+          out.gain.cancelScheduledValues(t); out.gain.setValueAtTime(out.gain.value, t);
+          out.gain.linearRampToValueAtTime(0, t + sec);
+          setTimeout(() => { playing = false; clearInterval(timer); ctx.suspend(); }, sec * 1000 + 300);
+        },
+      };
+    })();
+    // Browsers only allow sound after you interact with the page: start the lobby music on the first click or key press
+    // (or on ENTER VR) while the title screen is up.
+    const startLobbyMusic = () => { if (titleActive) lobbyMusic.start(); cabinAudio.unlock(); };
+    window.addEventListener('pointerdown', startLobbyMusic);
+    window.addEventListener('keydown', startLobbyMusic);
+    vrButton.addEventListener('click', startLobbyMusic);
 
     // ---------- VR start area ----------
     function titleTextTexture(w, h, draw) {
@@ -4088,6 +5243,8 @@
       if (!titleActive) return;
       titleActive = false;
       titleAudio.cue();
+      lobbyMusic.fadeOut(3.5);     // the 1950s lobby song fades out...
+      horrorAudio.start();         // ...while the dark camp ambience fades in
       hideTitleOverlay();
       if (inVR) {
         titleTransition = { t: 0, swapped: false };   // fade to black, move to the camp, fade back in
@@ -4250,11 +5407,18 @@
     }
     function updateCampExtras(dt) {
       campExtrasT += dt;
+      updateBeach(dt);                       // lake ripples, foam, mooring rope
       for (const c of cabinLights) {
         const f = flickerLantern(c, dt, c.phase);
         c.mat.emissiveIntensity = 0.75 * f;
         for (const s of c.sprites) s.material.opacity = 0.55 * f;
       }
+      for (const c of cabinGlows) {                // main cabin: wall lanterns and the fireplace
+        const f = flickerLantern(c, dt * (c.fire ? 2.5 : 1), c.phase) * (c.fire ? 0.85 + Math.random() * 0.3 : 1);
+        c.mat.emissiveIntensity = c.base * f;
+        for (const s of c.sprites) s.material.opacity = (c.fire ? 0.45 : 0.55) * f;
+      }
+      updateDoorsAndWindows(dt);                   // cabin doors (grab, push, E / click) and breakable windows
       if (bowLantern) {
         const f = flickerLantern(bowLantern, dt, 4.2);
         bowLantern.mat.emissiveIntensity = 0.85 * f;
@@ -4264,7 +5428,7 @@
 
     // ---------- XR session hooks ----------
     renderer.xr.addEventListener('sessionstart', () => {
-      horrorAudio.start(); // backup in case the click handler didn't get to run
+      if (!titleActive) horrorAudio.start(); // backup in case the click handler didn't get to run (on the title screen PLAY starts it)
       orbit.enabled = false;
       playerRig.scale.setScalar(PLAYER_SCALE); // shrink head + controllers together in VR
       resetLocomotion();
