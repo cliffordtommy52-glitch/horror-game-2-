@@ -116,13 +116,13 @@
     // Defaults written in Player.cs:
     const MAX_ARM_LENGTH        = 1.5;   // maxArmLength
     const UNSTICK_DISTANCE      = 1.0;   // unStickDistance
-    const MIN_RAYCAST_DISTANCE  = 0.09;  // minimumRaycastDistance (= hand sphere radius). Player.cs default 0.05; bigger = easier floor slaps
+    const MIN_RAYCAST_DISTANCE  = 0.12;  // minimumRaycastDistance (= hand sphere radius). Player.cs default 0.05; bigger = easier floor slaps
     const DEFAULT_SLIDE_FACTOR  = 0.03;  // defaultSlideFactor (two-handed slide)
     const DEFAULT_PRECISION     = 0.995; // defaultPrecision
     // Set in the Unity inspector, not in Player.cs (chosen here):
     const VELOCITY_HISTORY_SIZE = 5;     // velocityHistorySize
     const VELOCITY_LIMIT        = 0.3;   // velocityLimit: min speed before a push launches you
-    const JUMP_MULTIPLIER       = 1.25;  // jumpMultiplier (try 1.1–1.3)
+    const JUMP_MULTIPLIER       = 1.3;   // jumpMultiplier (try 1.1–1.3); raised to offset the smaller PLAYER_SCALE
     const MAX_JUMP_SPEED        = 6.5;   // maxJumpSpeed (m/s)
     const LEFT_HAND_OFFSET      = new THREE.Vector3(0, 0, 0); // leftHandOffset (in controller space)
     const RIGHT_HAND_OFFSET     = new THREE.Vector3(0, 0, 0); // rightHandOffset
@@ -130,13 +130,19 @@
     const GRAVITY               = 9.8;   // m/s² (Player.cs also hard-codes 9.8 in its hand cast; 12 feels snappier)
     const BODY_FRICTION         = 0.6;   // Unity's default dynamic friction, used while the body slides on the ground
     const HEAD_RADIUS           = 0.15;  // headCollider (SphereCollider) radius
-    // Player height. The body collider only stops you sinking once your eyes are this low,
-    // so normally you're held up by your hands resting on the floor, like in Gorilla Tag.
-    const MIN_HEAD_HEIGHT       = 0.6;   // lowest eye height (m above the floor) the body allows
-    const SPAWN_HEAD_HEIGHT     = 0.6;   // eye height you start at when entering VR
-    const BODY_RADIUS           = 0.18;
+    // Player size & height.
+    // Your hands resting on the floor hold you up, so your eye height is set by how far your hands hang
+    // below your eyes. Lowering the rig alone can't change that: the hands just push you back up.
+    // PLAYER_SCALE shrinks your whole tracked body (height, arm reach, eye spacing) in VR, so relaxed arms
+    // reach the floor from a gorilla-like height. With hands hanging ~0.7 m below your eyes in real life,
+    // 0.6 puts your eyes about 0.54 m off the floor. Lower = shorter player, but each arm swing also
+    // moves you less far.
+    const PLAYER_SCALE          = 0.6;
+    const MIN_HEAD_HEIGHT       = 0.45;  // lowest eye height (m above the floor) the body allows
+    const SPAWN_HEAD_HEIGHT     = 0.45;  // eye height you start at when entering VR
+    const BODY_RADIUS           = 0.15;
     // bodyCollider: short vertical capsule under the head; its bottom touches the floor at MIN_HEAD_HEIGHT
-    const BODY_CAPSULE = { top: -0.2, bottom: -(MIN_HEAD_HEIGHT - BODY_RADIUS), radius: BODY_RADIUS };
+    const BODY_CAPSULE = { top: -0.15, bottom: -(MIN_HEAD_HEIGHT - BODY_RADIUS), radius: BODY_RADIUS };
 
     // ---------- Renderer ----------
     const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -586,16 +592,18 @@
     const denormalizedVelocityAverage = new THREE.Vector3();
     let locomotionReady = false;
 
+    // The rig only translates and uniformly scales: world = rig.position + local * PLAYER_SCALE
     function headWorld(out) {
-      return out.copy(headLocal).add(playerRig.position);
+      return out.copy(headLocal).multiplyScalar(PLAYER_SCALE).add(playerRig.position);
     }
 
     // CurrentLeftHandPosition / CurrentRightHandPosition: tracked hand + offset, clamped to maxArmLength from the head
     const _hwHead = new THREE.Vector3();
     const _hwDelta = new THREE.Vector3();
     function currentHandPosition(hand, out) {
-      // grip pose is local to the rig; the rig only translates, so world = rig.position + local
-      out.copy(hand.offset).applyQuaternion(hand.grip.quaternion).add(hand.grip.position).add(playerRig.position);
+      // grip pose is local to the rig: world = rig.position + local * PLAYER_SCALE
+      out.copy(hand.offset).applyQuaternion(hand.grip.quaternion).add(hand.grip.position)
+         .multiplyScalar(PLAYER_SCALE).add(playerRig.position);
       headWorld(_hwHead);
       _hwDelta.subVectors(out, _hwHead);
       if (_hwDelta.length() >= MAX_ARM_LENGTH) {
@@ -621,7 +629,7 @@
     // InitializeValues()
     function initializeValues() {
       // Spawn at gorilla height whatever your real height: shift the rig so your eyes start at SPAWN_HEAD_HEIGHT
-      playerRig.position.y = SPAWN_HEAD_HEIGHT - headLocal.y;
+      playerRig.position.y = SPAWN_HEAD_HEIGHT - headLocal.y * PLAYER_SCALE;
       headWorld(lastHeadPosition);
       lastPosition.copy(playerRig.position);
       locomotionReady = true;
@@ -803,8 +811,10 @@
       for (const h of hands) {
         if (h.tracked) {
           // Put the controller model where the physics hand is (undo the hand offset)
-          h.follower.position.copy(h.offset).applyQuaternion(h.grip.quaternion).negate().add(h.last);
+          h.follower.position.copy(h.offset).applyQuaternion(h.grip.quaternion)
+            .multiplyScalar(-PLAYER_SCALE).add(h.last);
           h.follower.quaternion.copy(h.grip.quaternion);
+          h.follower.scale.setScalar(PLAYER_SCALE); // controller model matches your scaled hands
           h.sphere.position.copy(h.last);
           h.follower.userData.sphereMat.color.set(h.colliding ? 0x66ff99 : 0x88aaff);
           if (h.colliding && !h.wasTouching) pulse(h.controller, 0.25, 20);
@@ -864,19 +874,21 @@
       if (hit) {
         hit.object.material.emissive.setHex(0x223344);
         ud.hovered = hit.object;
-        ud.ray.scale.z = hit.distance;
+        ud.ray.scale.z = hit.distance / playerRig.scale.x; // ray lives in the (scaled) rig
       } else {
-        ud.ray.scale.z = 5;
+        ud.ray.scale.z = 5 / playerRig.scale.x;
       }
     }
 
     // ---------- XR session hooks ----------
     renderer.xr.addEventListener('sessionstart', () => {
       orbit.enabled = false;
+      playerRig.scale.setScalar(PLAYER_SCALE); // shrink head + controllers together in VR
       resetLocomotion();
     });
     renderer.xr.addEventListener('sessionend', () => {
       orbit.enabled = true;
+      playerRig.scale.setScalar(1); // desktop view at normal size
       resetLocomotion();
       attachFlashlight(camera);
       camera.position.set(0, 1.6, 3);
