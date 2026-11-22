@@ -3909,8 +3909,15 @@
     const WHEEL_LOCK = 2.2;                              // wheel rotation (rad) for full lock
     const SWIM_STRENGTH = 3.0;                           // how hard a hand sweep through the water pushes you
     const WATER_DRAG = 1.6;                              // 1/s: slows you while swimming
-    const UNDERWATER_SINK = 1.1;                         // net downward pull in the water (m/s²): you sink unless you swim
-    const MAX_SINK_SPEED = 0.5;                          // the water won't let you sink faster than this (m/s)
+    // Balanced buoyancy: the water nearly cancels gravity, so you float just under the surface and only sink
+    // VERY slowly when you stop moving your arms. FLOAT_SINK is what is left of GRAVITY after buoyancy, once your
+    // head is a little below the surface; right at the surface the push is a touch stronger, so you bob up to it.
+    const FLOAT_SINK = 0.3;                              // net downward pull while floating (m/s²): about 3% of gravity
+    const UNDERWATER_SINK = GRAVITY - FLOAT_SINK;        // the buoyancy that cancels the rest of your weight
+    const SURFACE_BUOYANCY = 1.25;                       // extra lift within SURFACE_BAND below the waterline
+    const SURFACE_BAND = 0.28;                           // (m) how far under the surface that extra lift reaches
+    const SWIM_LIFT = 1.6;                               // an upward hand sweep pushes this much harder than a sideways one
+    const MAX_SINK_SPEED = 0.3;                          // the water won't let you sink faster than this (m/s)
     const PART_GRAB_RADIUS = 0.18, WHEEL_GRAB_RADIUS = 0.2, REPAIR_ZONE_RADIUS = 0.45;
     const PARTS_NEEDED = 3;
 
@@ -5440,13 +5447,18 @@
       swimming = inWater;
       if (!inWater) { prevRelOk[0] = prevRelOk[1] = false; return; }
 
-      // no free floating: the water takes most of your weight, but you still sink slowly towards the lakebed
-      // unless you stroke your hands through the water to swim up and along
-      rigVelocity.y += (GRAVITY - UNDERWATER_SINK) * dt;
+      // Balanced buoyancy: the water nearly cancels your weight, so you float with your head just under the
+      // surface. The tiny net pull that is left (FLOAT_SINK) makes you sink very slowly when you do nothing, and
+      // the extra lift in the top SURFACE_BAND keeps nudging you back up to the waterline instead of dropping.
+      const depthUnder = WATER_LEVEL - _lkHead.y;
+      const nearSurface = THREE.MathUtils.clamp(1 - Math.max(0, depthUnder) / SURFACE_BAND, 0, 1);
+      const buoyancy = UNDERWATER_SINK + SURFACE_BUOYANCY * nearSurface * nearSurface;
+      rigVelocity.y += (GRAVITY - buoyancy) * dt;
       rigVelocity.multiplyScalar(Math.exp(-WATER_DRAG * dt)); // water drag
       if (rigVelocity.y < -MAX_SINK_SPEED) rigVelocity.y += (-MAX_SINK_SPEED - rigVelocity.y) * Math.min(1, dt * 4);
 
-      // Gorilla-style strokes: a hand sweeping through the water pushes you the opposite way
+      // Gorilla-style strokes: a hand sweeping through the water pushes you the opposite way. A single firm
+      // stroke lifts and propels you, so sweeping up lifts you back to the surface and sweeping back moves you on.
       let stroking = false;
       for (let i = 0; i < hands.length; i++) {
         const h = hands[i];
@@ -5456,13 +5468,15 @@
         if (prevRelOk[i] && _lkHand.y < WATER_LEVEL) {
           _lkVel.subVectors(_lkRel, prevRel[i]).divideScalar(dt);
           if (_lkVel.length() > 4) _lkVel.setLength(4);
-          rigVelocity.addScaledVector(_lkVel, -SWIM_STRENGTH * dt);
+          const strokeVel = _lkVel.clone();
+          if (strokeVel.y > 0) strokeVel.y *= SWIM_LIFT;          // an upward sweep lifts you out of the sink
+          rigVelocity.addScaledVector(strokeVel, -SWIM_STRENGTH * dt);
           if (_lkVel.length() > 1.2) stroking = true;
         }
         prevRel[i].copy(_lkRel);
         prevRelOk[i] = true;
       }
-      if (rigVelocity.length() > 3) rigVelocity.setLength(3);
+      if (rigVelocity.length() > 3.2) rigVelocity.setLength(3.2);
       if (stroking && (strokeT -= dt) <= 0) { strokeT = 0.35; boatAudio.stroke(); }
     }
 
@@ -5693,6 +5707,13 @@
       hpHudEl.style.display = titleActive ? 'none' : 'flex';
       for (let i = 0; i < hands.length; i++) {
         wristSprites[i].visible = renderer.xr.isPresenting && !titleActive && controllers[i].userData.inputSource?.handedness === 'left';
+      }
+      if (catcher.active) {                           // the slasher ape's takedown owns the screen: no burns, no drowning
+        fxAudio.sizzle(0);
+        vignette.visible = false;
+        if (!renderer.xr.isPresenting) { blackout.visible = deathCard.visible = false; }
+        drawWrist();
+        return;
       }
       if (!inGame) {
         fxAudio.sizzle(0);
@@ -7060,6 +7081,1046 @@
       }
     }
 
+
+
+    // =====================================================================
+    //  THE CHAINED SLASHER APE  (self-contained; plugs into the loop with updateSlasher(dt))
+    //  A legless, Gorilla-bodied slasher wearing a tattered black jacket, a pale hockey mask and a chain round
+    //  its neck, hauling a rusty old machete in its right hand.
+    //    · It patrols quietly between the cabins, the woods and the generators with Gorilla-style arm-swinging
+    //      bounds (knuckle-dragging strides, a bound every few steps).
+    //    · See you (its line-of-sight cone, your headlamp on it, a noisy camp, or just getting close) and it goes
+    //      into STALK: it creeps in behind the nearest trees and cabins, keeping out of sight and watching you,
+    //      then its patience runs out and it HUNTS: a heavy, arm-swinging gorilla sprint with heartbeat audio.
+    //    · Within catch distance it takes you: your movement locks, the camera swings to a third-person angle on
+    //      both of you, it raises the machete overhead and slams it down as you collapse backwards (impact audio,
+    //      blood splatter, a dark horror sting), and ~3 s later the run resets to the camp spawn.
+    //  Nothing here touches the Gorilla locomotion, the lake, the generators, the lobby or the boat.
+    // =====================================================================
+    const APE_SCALE = 0.62;                 // the ape is a big survivor-shaped body: sized for the Gorilla-height player
+    const APE_PATROL_SPEED = 0.42;          // m/s, creeping patrol between waypoints
+    const APE_STALK_SPEED = 0.6;            // m/s, creeping in while stalking
+    const APE_HUNT_SPEED = 2.55;            // m/s, the gorilla-arm sprint
+    const APE_VIEW_DIST = 15, APE_VIEW_HALF = 0.62;   // line-of-sight cone: metres, half-angle (rad)
+    const APE_HEAR_DIST = 7.5;              // it hears you this close even when it can't see you
+    const APE_LAMP_DIST = 13;               // your headlamp on it is spotted from here...
+    const APE_LAMP_HALF = 0.42;             // ...if the beam points within this angle of it
+    const APE_CATCH_DIST = 0.85;            // close enough to swing
+    const APE_STARE_TIME = 2.4;             // stared at this long (inside STARE_DIST) and it stops being patient
+    const APE_STARE_DIST = 7;
+    const APE_LOSE_TIME = 4.5;              // seconds out of sight before it gives up the hunt
+    const APE_CATCH_LOCK = 0.8;             // how long the ape holds you before the camera has swung round
+    const APE_SWING_TIME = 0.9;             // wind-up (machete overhead) then the slam
+    const APE_RESET_AFTER = 3.0;            // seconds of aftermath before the run resets
+
+    // ---------- small geometry helpers (kept local to the ape) ----------
+    const apeV3 = (x, y, z) => new THREE.Vector3(x, y, z);
+    const apeMesh = (geo, mat, parent, x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0) => {
+      const m = new THREE.Mesh(geo, mat);
+      m.position.set(x, y, z);
+      m.rotation.set(rx, ry, rz);
+      m.castShadow = true;
+      m.receiveShadow = true;
+      parent.add(m);
+      return m;
+    };
+    const apeTube = (a, b, r0, r1, mat, parent, seg = 6) => {           // a tapered cylinder from a to b
+      const dir = new THREE.Vector3().subVectors(b, a);
+      const len = Math.max(0.001, dir.length());
+      const m = new THREE.Mesh(new THREE.CylinderGeometry(r1, r0, len, seg, 1), mat);
+      m.position.copy(a).addScaledVector(dir, 0.5);
+      m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
+      m.castShadow = true;
+      m.receiveShadow = true;
+      parent.add(m);
+      return m;
+    };
+
+    // ---------- the ape's own little audio kit (reuses the survival context, so it's always unlocked) ----------
+    const apeAudio = (() => {
+      let ctx = null, master = null, noiseBuf = null, beatG = null, beatTimer = 0, beatOn = false;
+      const ok = () => ctx && ctx.state === 'running';
+      function build() {
+        ctx = new (window.AudioContext || window.webkitAudioContext)();
+        master = ctx.createGain(); master.gain.value = 0.85;
+        const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -14; comp.ratio.value = 4;
+        master.connect(comp); comp.connect(ctx.destination);
+        const len = ctx.sampleRate * 2;
+        noiseBuf = ctx.createBuffer(1, len, ctx.sampleRate);
+        const d = noiseBuf.getChannelData(0);
+        for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+        beatG = ctx.createGain(); beatG.gain.value = 0; beatG.connect(master);
+      }
+      function noiseHit(t, { type = 'lowpass', freq = 900, q = 1, peak = 0.3, decay = 0.1, rate = 1 }) {
+        const s = ctx.createBufferSource(); s.buffer = noiseBuf; s.playbackRate.value = rate;
+        const f = ctx.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q;
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(peak, t + 0.006);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + decay);
+        s.connect(f); f.connect(g); g.connect(master); s.start(t, Math.random() * 1.5); s.stop(t + decay + 0.05);
+      }
+      function tone(t, f0, f1, peak, dur, type = 'sine', dest = null) {
+        const o = ctx.createOscillator(); o.type = type;
+        o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(Math.max(1, f1), t + dur);
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(peak, t + 0.012);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+        o.connect(g); g.connect(dest || master); o.start(t); o.stop(t + dur + 0.05);
+      }
+      return {
+        unlock() { try { if (!ctx) build(); if (ctx.state === 'suspended') ctx.resume(); } catch (e) { console.warn('Ape audio could not start:', e); } },
+        // one heavy knuckle thump, louder the closer it lands to you
+        step(level) {
+          if (!ok() || level < 0.02) return;
+          const t = ctx.currentTime + 0.005;
+          tone(t, 120 + Math.random() * 30, 42, 0.5 * level, 0.22);
+          noiseHit(t, { type: 'lowpass', freq: 380, q: 0.8, peak: 0.35 * level, decay: 0.16 });
+          noiseHit(t + 0.01, { freq: 1600, q: 3, peak: 0.06 * level, decay: 0.05 });
+        },
+        // a branch snapping / the creature breathing as it creeps
+        rustle(level) {
+          if (!ok() || level < 0.05) return;
+          const t = ctx.currentTime + 0.01;
+          noiseHit(t, { type: 'bandpass', freq: 1800 + Math.random() * 1400, q: 1.4, peak: 0.09 * level, decay: 0.12 });
+          noiseHit(t + 0.05, { type: 'bandpass', freq: 2600, q: 2, peak: 0.05 * level, decay: 0.07 });
+        },
+        // the terror heartbeat: two thumps, faster and louder as the ape closes in
+        heartbeat(level, bpm) {
+          if (!ok()) return;
+          if (!beatOn) { beatG.gain.setTargetAtTime(1, ctx.currentTime, 0.2); beatOn = true; }
+          if ((beatTimer -= 1 / 60) > 0) return;
+          beatTimer = 60 / Math.max(45, bpm);
+          const t = ctx.currentTime + 0.01;
+          tone(t, 62, 30, 0.55 * level, 0.24, 'sine', beatG);
+          tone(t + 0.19, 55, 26, 0.38 * level, 0.2, 'sine', beatG);
+        },
+        heartbeatOff() {
+          if (!ok() || !beatOn) return;
+          beatG.gain.setTargetAtTime(0, ctx.currentTime, 0.25);
+          beatOn = false; beatTimer = 0;
+        },
+        growl(level) {                                  // it has seen you: a low guttural huff
+          if (!ok()) return;
+          const t = ctx.currentTime + 0.01;
+          tone(t, 92, 58, 0.35 * level, 0.5, 'sawtooth');
+          noiseHit(t, { type: 'bandpass', freq: 420, q: 2, peak: 0.16 * level, decay: 0.4 });
+        },
+        swipe() {                                       // the machete coming off the shoulder
+          if (!ok()) return;
+          noiseHit(ctx.currentTime + 0.01, { type: 'bandpass', freq: 3200, q: 0.9, peak: 0.22, decay: 0.18, rate: 1.6 });
+        },
+        impact() {                                      // the slam: a deep body hit, wet, then ringing steel
+          if (!ok()) return;
+          const t = ctx.currentTime + 0.01;
+          tone(t, 150, 34, 0.95, 0.55, 'sine');
+          tone(t, 90, 26, 0.8, 0.7, 'triangle');
+          noiseHit(t, { type: 'lowpass', freq: 520, q: 0.7, peak: 0.7, decay: 0.35 });
+          noiseHit(t + 0.02, { type: 'bandpass', freq: 900, q: 0.6, peak: 0.32, decay: 0.22, rate: 0.8 });
+          tone(t + 0.05, 2400, 900, 0.1, 0.9, 'triangle');           // blade ring
+        },
+        sting() {                                       // the dark horror sting under the blackout
+          if (!ok()) return;
+          const t = ctx.currentTime + 0.05;
+          tone(t, 220, 216, 0.28, 2.4, 'sawtooth');
+          tone(t, 233, 228, 0.22, 2.4, 'sawtooth');
+          tone(t, 110, 44, 0.5, 2.8, 'sine');
+          noiseHit(t, { type: 'lowpass', freq: 260, q: 0.6, peak: 0.4, decay: 2.2, rate: 0.6 });
+        },
+      };
+    })();
+
+    // ---------- the map: where the ape likes to be, and what it can hide behind ----------
+    const apeWaypoints = [
+      apeV3(0, 0, 2.4),            // the camp spawn / fire
+      apeV3(-8.5, 0, -3.5),        // between the camp and the cabin row
+      apeV3(-15, 0, -11.4),        // the cabin row porch
+      apeV3(-11, 0, -10.5),        // the cabin row generator
+      apeV3(-20.4, 0, 9),          // the west-woods cabin
+      apeV3(-12, 0, 15),           // deep in the western woods
+      apeV3(-4, 0, 21),            // the deep-woods clearing generator
+      apeV3(4, 0, 12),             // the south camp edge
+      apeV3(14.5, 0, 13.6),        // the south-east cabin
+      apeV3(16, 0, -13.6),         // the north-east cabin, past the lake
+      apeV3(6.5, 0, -11),          // the north shore of the lake
+      apeV3(2.5, 0, -2.5),         // the camp generator's yard
+    ];
+    // Places the ape never walks: the lake itself (the survivors swim) and the ridge across the water
+    const apeBlocked = (x, z) => inLakeArea(x, z, 0.4) || (Math.abs(x - RIDGE.x) < RIDGE.w / 2 + 0.6 && Math.abs(z - RIDGE.z) < RIDGE.d / 2 + 0.6);
+    // Trees and cabins it can slink behind while it stalks you
+    const apeCover = [];
+    for (const t of trees) if (t.solid) apeCover.push({ x: t.x, z: t.z, r: t.r + 0.55, h: t.h });
+    for (const c of CABINS) apeCover.push({ x: c.x, z: c.z, r: 3.0, h: 2.4 });
+    apeCover.push({ x: CABIN.x, z: CABIN.z, r: 3.4, h: 2.4 });
+    apeCover.push({ x: RIDGE.x, z: RIDGE.z, r: 2.6, h: 1.6 });
+
+    function apeGroundY(x, z) {
+      return inLakeArea(x, z, -0.2) ? Math.max(lakeHeight(x, z), WATER_LEVEL - 0.1) : 0;
+    }
+    // Can the ape walk this line without crossing the lake? (a cheap sample along it)
+    function apeLineClear(x0, z0, x1, z1) {
+      const n = Math.max(2, Math.ceil(Math.hypot(x1 - x0, z1 - z0) / 0.8));
+      for (let i = 1; i <= n; i++) {
+        const t = i / n;
+        if (apeBlocked(x0 + (x1 - x0) * t, z0 + (z1 - z0) * t)) return false;
+      }
+      return true;
+    }
+
+    // ---------- the procedural model (built from the reference: legless ape, ragged jacket, hockey mask) ----------
+    //  Everything is parented to `ape.root` (which sits on the ground) so the bounds can pitch and roll it.
+    //  Local space: +Y up, the ape faces -Z (like the survivor), its RIGHT hand is at -X.
+    const ape = {
+      root: new THREE.Group(),              // on the ground, turned towards its heading
+      body: new THREE.Group(),              // the bounds: pitches forward / rolls as it swings
+      shoulderL: new THREE.Group(), shoulderR: new THREE.Group(),
+      torso: null, head: null, machete: null, machetePivot: null, chains: [],
+      leftHand: null, rightHand: null,
+      mat: {},
+    };
+    ape.root.visible = false;
+    scene.add(ape.root);
+    ape.root.add(ape.body);
+    {
+      const M = ape.mat;
+      // Ape skin: brownish-gray, blotchy and mottled like old hide (canvas texture, no external files)
+      const skinTex = canvasTexture(256, (g, s) => {
+        g.fillStyle = '#7c6e5f'; g.fillRect(0, 0, s, s);
+        for (let i = 0; i < 900; i++) {
+          const v = 60 + Math.random() * 70;
+          g.fillStyle = `rgba(${v | 0},${(v * 0.92) | 0},${(v * 0.8) | 0},${(0.15 + Math.random() * 0.35).toFixed(2)})`;
+          g.beginPath(); g.ellipse(Math.random() * s, Math.random() * s, 2 + Math.random() * 9, 1.5 + Math.random() * 6, Math.random() * 3, 0, Math.PI * 2); g.fill();
+        }
+        for (let i = 0; i < 60; i++) {                 // creases and wrinkles
+          g.strokeStyle = `rgba(40,34,28,${(0.12 + Math.random() * 0.22).toFixed(2)})`; g.lineWidth = 1;
+          const y = Math.random() * s;
+          g.beginPath(); g.moveTo(0, y);
+          for (let x = 0; x <= s; x += 16) g.lineTo(x, y + Math.sin(x * 0.06 + i) * 5);
+          g.stroke();
+        }
+      });
+      // The jacket: dark charcoal wool with torn holes (the ape's hide shows through) and ragged, frayed edges
+      const jacketTex = canvasTexture(256, (g, s) => {
+        g.fillStyle = '#26262a'; g.fillRect(0, 0, s, s);
+        for (let i = 0; i < 4000; i++) {               // wool weave
+          const v = 20 + Math.random() * 40;
+          g.fillStyle = `rgba(${v | 0},${v | 0},${(v + 4) | 0},${(0.2 + Math.random() * 0.5).toFixed(2)})`;
+          g.fillRect(Math.random() * s, Math.random() * s, 1 + Math.random() * 2, 1);
+        }
+        for (let i = 0; i < 26; i++) {                 // torn holes: ragged hide-coloured gashes
+          const x = Math.random() * s, y = Math.random() * s, r = 3 + Math.random() * 9;
+          g.fillStyle = `rgba(${110 + Math.random() * 30 | 0},${96 + Math.random() * 24 | 0},${78 + Math.random() * 20 | 0},0.85)`;
+          g.beginPath();
+          for (let k = 0; k < 9; k++) {
+            const a = (k / 9) * Math.PI * 2, rr2 = r * (0.6 + Math.random() * 0.8);
+            const px = x + Math.cos(a) * rr2, py = y + Math.sin(a) * rr2 * 0.7;
+            if (k === 0) g.moveTo(px, py); else g.lineTo(px, py);
+          }
+          g.closePath(); g.fill();
+          g.strokeStyle = 'rgba(8,8,10,0.8)'; g.lineWidth = 1.5; g.stroke();
+        }
+      });
+      jacketTex.repeat.set(2, 2);
+      // Rust: pitted orange-brown stains for the machete blade
+      const rustTex = canvasTexture(256, (g, s) => {
+        g.fillStyle = '#8d8d8c'; g.fillRect(0, 0, s, s);
+        for (let i = 0; i < 1400; i++) {
+          const r = 90 + Math.random() * 90, gg = 40 + Math.random() * 50, b = 20 + Math.random() * 30;
+          g.fillStyle = `rgba(${r | 0},${gg | 0},${b | 0},${(0.2 + Math.random() * 0.6).toFixed(2)})`;
+          g.beginPath(); g.ellipse(Math.random() * s, Math.random() * s, 1 + Math.random() * 8, 1 + Math.random() * 5, Math.random() * 3, 0, Math.PI * 2); g.fill();
+        }
+        for (let i = 0; i < 300; i++) {                // bright scratches in the steel
+          g.strokeStyle = `rgba(220,220,215,${(0.1 + Math.random() * 0.3).toFixed(2)})`; g.lineWidth = 1;
+          const x = Math.random() * s, y = Math.random() * s, a = Math.random() * Math.PI;
+          g.beginPath(); g.moveTo(x, y); g.lineTo(x + Math.cos(a) * 14, y + Math.sin(a) * 4); g.stroke();
+        }
+      });
+      M.skin = new THREE.MeshStandardMaterial({ map: skinTex, color: 0x9d8c79, roughness: 0.85, metalness: 0.02, flatShading: true });
+      M.skinDark = new THREE.MeshStandardMaterial({ map: skinTex, color: 0x6f6154, roughness: 0.9, flatShading: true });
+      M.jacket = new THREE.MeshStandardMaterial({ map: jacketTex, color: 0x3a3a40, roughness: 0.95, flatShading: true });
+      M.jacketDark = new THREE.MeshStandardMaterial({ map: jacketTex, color: 0x222227, roughness: 0.95, flatShading: true });
+      M.mask = new THREE.MeshStandardMaterial({ color: 0xe8e0b8, roughness: 0.45, metalness: 0.05, flatShading: true, emissive: 0x141208, emissiveIntensity: 0.4 });
+      M.maskDark = new THREE.MeshStandardMaterial({ color: 0x0a0908, roughness: 0.8 });
+      M.red = new THREE.MeshStandardMaterial({ color: 0xa81c1c, roughness: 0.6, emissive: 0x3a0000, emissiveIntensity: 0.6 });
+      M.blood = new THREE.MeshStandardMaterial({ color: 0x7a0d0d, roughness: 0.35, metalness: 0.1 });
+      M.chain = new THREE.MeshStandardMaterial({ color: 0xc4c8cc, roughness: 0.32, metalness: 0.95, flatShading: true });
+      M.steel = new THREE.MeshStandardMaterial({ map: rustTex, color: 0xb9a898, roughness: 0.55, metalness: 0.7, flatShading: true });
+      M.steelDark = new THREE.MeshStandardMaterial({ map: rustTex, color: 0x6a625a, roughness: 0.6, metalness: 0.8 });
+      M.grip = new THREE.MeshStandardMaterial({ color: 0x1b1410, roughness: 0.95 });
+
+      // ---- body: legless tapered torso in the ragged jacket ----
+      const torso = new THREE.Group();
+      ape.body.add(torso);
+      ape.torso = torso;
+      const torsoGeo = new THREE.CylinderGeometry(0.4, 0.3, 0.95, 9, 3);   // wide shoulders, tapering to the torn waist
+      {
+        const p = torsoGeo.attributes.position;
+        for (let i = 0; i < p.count; i++) {                                 // ragged, lumpy silhouette
+          const y = p.getY(i), a = Math.atan2(p.getZ(i), p.getX(i));
+          const k = 1 + 0.05 * Math.sin(a * 3 + y * 2) + 0.03 * Math.sin(a * 7 - y * 5);
+          p.setXYZ(i, p.getX(i) * k, y, p.getZ(i) * k * 0.78);
+        }
+        torsoGeo.computeVertexNormals();
+      }
+      apeMesh(torsoGeo, M.jacket, torso, 0, 0.5, 0);
+      // the open jacket front: two lapels and a dark seam
+      apeMesh(new THREE.BoxGeometry(0.05, 0.8, 0.04), M.jacketDark, torso, 0.1, 0.52, -0.3, 0.08, 0, 0.12);
+      apeMesh(new THREE.BoxGeometry(0.05, 0.8, 0.04), M.jacketDark, torso, -0.1, 0.52, -0.3, 0.08, 0, -0.12);
+      // torn holes in the jacket with hide showing through (as on the reference's back and sides)
+      const holeGeo = new THREE.CircleGeometry(0.085, 5);
+      [[0.17, 0.72, -0.29, 0.3], [-0.21, 0.4, -0.27, -0.4], [0.06, 0.22, -0.31, 0.1], [-0.14, 0.78, -0.3, -0.2]].forEach(([x, y, z, rz]) => {
+        apeMesh(holeGeo, M.skinDark, torso, x, y, z, 0, 0, rz);
+        apeMesh(new THREE.RingGeometry(0.085, 0.12, 5), M.jacketDark, torso, x, y, z - 0.004, 0, 0, rz);
+      });
+      // jagged jacket hem and collar
+      const jag = new THREE.ConeGeometry(0.055, 0.14, 3);
+      for (let i = 0; i < 9; i++) {
+        const a = (i / 9) * Math.PI * 2;
+        apeMesh(jag, M.jacketDark, torso, Math.cos(a) * 0.3, 0.02 - Math.random() * 0.04, Math.sin(a) * 0.24, Math.PI, a, 0);
+      }
+      // shoulders: big rounded jacket caps
+      apeMesh(new THREE.SphereGeometry(0.19, 8, 6), M.jacket, torso, 0.33, 0.94, 0, 0, 0, 0, 1, 0.9, 0.95);
+      apeMesh(new THREE.SphereGeometry(0.19, 8, 6), M.jacket, torso, -0.33, 0.94, 0, 0, 0, 0, 1, 0.9, 0.95);
+
+      // ---- head: low-poly brownish-gray ape skull with prominent side ears ----
+      const head = new THREE.Group();
+      head.position.set(0, 1.1, 0);
+      torso.add(head);
+      ape.head = head;
+      const skull = new THREE.IcosahedronGeometry(0.23, 1);
+      {
+        const p = skull.attributes.position;
+        for (let i = 0; i < p.count; i++) {
+          const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+          p.setXYZ(i, x * 1.02, y * 1.1 - 0.02, z * 0.98);           // a tall, narrow cranium
+        }
+        skull.computeVertexNormals();
+      }
+      apeMesh(skull, M.skin, head, 0, 0.06, 0.02);
+      apeMesh(new THREE.CylinderGeometry(0.16, 0.19, 0.14, 7), M.skinDark, head, 0, -0.16, 0.01);   // thick neck
+      apeMesh(new THREE.BoxGeometry(0.24, 0.1, 0.14), M.skinDark, head, 0, -0.14, -0.14);          // heavy jaw / muzzle
+      // prominent side ears
+      apeMesh(new THREE.SphereGeometry(0.075, 6, 5), M.skinDark, head, 0.235, 0.02, 0.04, 0, 0, 0, 0.6, 1.25, 1);
+      apeMesh(new THREE.SphereGeometry(0.075, 6, 5), M.skinDark, head, -0.235, 0.02, 0.04, 0, 0, 0, 0.6, 1.25, 1);
+      apeMesh(new THREE.SphereGeometry(0.04, 6, 4), M.skin, head, 0.26, 0.02, 0.04, 0, 0, 0, 0.5, 1.1, 0.9);
+      apeMesh(new THREE.SphereGeometry(0.04, 6, 4), M.skin, head, -0.26, 0.02, 0.04, 0, 0, 0, 0.5, 1.1, 0.9);
+
+      // ---- the pale hockey mask, mounted on the FRONT of the face ----
+      // The ape faces +Z (torso front, the jaw at +z and the chain's hanging front links all sit on +Z), and the
+      // mask's painted side, eye holes, mouth slits and crack all face the same way: forward, away from the skull.
+      const maskGroup = new THREE.Group();
+      maskGroup.position.set(0, 0.045, 0.225);                    // out past the muzzle, between the two side ears
+      maskGroup.rotation.set(-0.05, 0, 0);                        // a hair tipped back, sitting against the brow
+      head.add(maskGroup);
+      const maskShape = new THREE.Shape();                       // a slasher-mask oval: wide brow, narrower chin
+      maskShape.moveTo(-0.17, 0.13);
+      maskShape.quadraticCurveTo(0, 0.22, 0.17, 0.13);
+      maskShape.quadraticCurveTo(0.21, 0.0, 0.15, -0.14);
+      maskShape.quadraticCurveTo(0.08, -0.24, 0, -0.25);
+      maskShape.quadraticCurveTo(-0.08, -0.24, -0.15, -0.14);
+      maskShape.quadraticCurveTo(-0.21, 0.0, -0.17, 0.13);
+      const maskGeo = new THREE.ExtrudeGeometry(maskShape, { depth: 0.045, bevelEnabled: true, bevelSize: 0.012, bevelThickness: 0.012, bevelSegments: 1, curveSegments: 6 });
+      // ExtrudeGeometry builds the shape in XY and extrudes towards +Z, so no turn is needed: the painted front is
+      // already on +Z, the eyes (shape +y) at the top, the chin and mouth slits at the bottom.
+      const mask = apeMesh(maskGeo, M.mask, maskGroup, 0, 0, 0, 0, 0, 0);
+      mask.rotation.set(0, 0, 0);
+      mask.scale.set(1, 1, 1);
+      // the mask is slightly curved: pull its outer edge back towards the face so it hugs the skull instead of
+      // sticking out flat (centre of the shell unchanged, sides and chin bent in by a couple of centimetres)
+      {
+        const p = maskGeo.attributes.position;
+        for (let i = 0; i < p.count; i++) {
+          const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+          p.setXYZ(i, x, y, z - (x * x) * 1.1 - Math.max(0, -y - 0.05) * 0.16);
+        }
+        maskGeo.computeVertexNormals();
+        maskGeo.computeBoundingSphere();
+      }
+      // dark eye sockets (big and black), with a faint dead glint inside - at the TOP of the mask
+      const socket = new THREE.SphereGeometry(0.045, 8, 6);
+      apeMesh(socket, M.maskDark, maskGroup, 0.082, 0.085, 0.05, 0, 0, 0, 1.35, 0.95, 0.55);
+      apeMesh(socket, M.maskDark, maskGroup, -0.082, 0.085, 0.05, 0, 0, 0, 1.35, 0.95, 0.55);
+      apeMesh(new THREE.SphereGeometry(0.009, 5, 4), M.red, maskGroup, 0.076, 0.08, 0.072);
+      apeMesh(new THREE.SphereGeometry(0.009, 5, 4), M.red, maskGroup, -0.076, 0.08, 0.072);
+      // red triangular cheek markings, painted on the front face
+      const tri = new THREE.Shape(); tri.moveTo(-0.04, 0.02); tri.lineTo(0.04, 0.02); tri.lineTo(0, -0.05); tri.closePath();
+      const triGeo = new THREE.ShapeGeometry(tri);
+      apeMesh(triGeo, M.red, maskGroup, 0.105, -0.02, 0.0575, 0, 0, 0.35);
+      apeMesh(triGeo, M.red, maskGroup, -0.105, -0.02, 0.0575, 0, 0, -0.35);
+      // vertical mouth slits at the BOTTOM of the mask
+      for (let i = -2; i <= 2; i++) {
+        apeMesh(new THREE.BoxGeometry(0.012, 0.085 - Math.abs(i) * 0.012, 0.012), M.maskDark, maskGroup, i * 0.024, -0.13, 0.0575);
+      }
+      // the dark scratch/crack over the left eye (the ape's left = +X, so on the mask as seen from the front)
+      apeMesh(new THREE.BoxGeometry(0.014, 0.19, 0.012), M.maskDark, maskGroup, 0.11, 0.1, 0.0575, 0, 0, 0.45);
+      apeMesh(new THREE.BoxGeometry(0.012, 0.09, 0.012), M.maskDark, maskGroup, 0.145, 0.02, 0.0575, 0, 0, -0.5);
+      // a few rivet holes round the edge of the mask
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        apeMesh(new THREE.SphereGeometry(0.008, 4, 3), M.maskDark, maskGroup, Math.cos(a) * 0.15, 0.05 + Math.sin(a) * 0.15, 0.058);
+      }
+      // two straps running back from the mask's edges, round behind the ears
+      apeMesh(new THREE.BoxGeometry(0.022, 0.02, 0.2), M.jacketDark, head, 0.175, 0.08, 0.1, 0, -0.25, 0);
+      apeMesh(new THREE.BoxGeometry(0.022, 0.02, 0.2), M.jacketDark, head, -0.175, 0.08, 0.1, 0, 0.25, 0);
+
+      // ---- thick chain round the neck with a hanging front link ----
+      const linkGeo = new THREE.TorusGeometry(0.042, 0.014, 4, 8);
+      for (let i = 0; i < 16; i++) {
+        const a = -Math.PI * 0.62 + (i / 15) * Math.PI * 1.24;      // round the neck, dipping at the front
+        const rx = 0.22, rz = 0.19, dip = Math.max(0, Math.cos(a)) * 0.06;
+        const l = apeMesh(linkGeo, M.chain, torso, Math.sin(a) * rx, 1.02 - dip + Math.sin(a * 2) * 0.008, -Math.cos(a) * rz,
+                          Math.cos(a) * 0.5, a, i % 2 ? Math.PI / 2 : 0);
+        l.scale.set(1, 1.3, 1);
+      }
+      for (let i = 0; i < 5; i++) {                                 // the front drop, dangling over the chest
+        const l = apeMesh(linkGeo, M.chain, torso, 0.01 * (i % 2 ? 1 : -1), 0.93 - i * 0.07, -0.26 - i * 0.006, i % 2 ? 0.3 : -0.3, i % 2 ? Math.PI / 2 : 0);
+        l.scale.set(1, 1.3, 1);
+        ape.chains.push(l);
+      }
+      apeMesh(new THREE.TorusGeometry(0.048, 0.015, 4, 9), M.chain, torso, 0, 0.66, -0.28, 0, 0, 0).scale.set(1, 1.45, 1);   // the big hanging link
+
+      // ---- arms: long, muscular, jacket-sleeved, ending in clawed hands ----
+      const buildArm = (side) => {                                  // side = +1 is the ape's left (+X)
+        const shoulder = new THREE.Group();
+        shoulder.position.set(0.33 * side, 0.9, 0);
+        torso.add(shoulder);
+        // upper arm (jacket sleeve, with ridges of fabric)
+        apeMesh(new THREE.CylinderGeometry(0.115, 0.1, 0.46, 7, 2), M.jacket, shoulder, 0, -0.23, 0);
+        for (let i = 0; i < 3; i++) apeMesh(new THREE.TorusGeometry(0.105 - i * 0.004, 0.018, 4, 8), M.jacketDark, shoulder, 0, -0.1 - i * 0.12, 0, Math.PI / 2, 0, 0);
+        // elbow, then the forearm
+        const elbow = new THREE.Group();
+        elbow.position.set(0, -0.46, 0);
+        shoulder.add(elbow);
+        apeMesh(new THREE.SphereGeometry(0.105, 6, 5), M.jacketDark, elbow, 0, 0, 0);
+        apeMesh(new THREE.CylinderGeometry(0.095, 0.075, 0.42, 7, 2), M.jacket, elbow, 0, -0.21, 0);
+        for (let i = 0; i < 2; i++) apeMesh(new THREE.TorusGeometry(0.088, 0.016, 4, 8), M.jacketDark, elbow, 0, -0.12 - i * 0.13, 0, Math.PI / 2, 0, 0);
+        // jagged dark cuff at the wrist
+        apeMesh(new THREE.CylinderGeometry(0.085, 0.1, 0.1, 7), M.jacketDark, elbow, 0, -0.44, 0);
+        for (let i = 0; i < 5; i++) {
+          const a = (i / 5) * Math.PI * 2;
+          apeMesh(new THREE.ConeGeometry(0.028, 0.09, 3), M.jacketDark, elbow, Math.cos(a) * 0.085, -0.5, Math.sin(a) * 0.085, Math.PI, a, 0);
+        }
+        // silver wrist shackle with a dangling broken chain
+        apeMesh(new THREE.TorusGeometry(0.088, 0.019, 5, 12), M.chain, elbow, 0, -0.36, 0, Math.PI / 2, 0, 0);
+        apeMesh(new THREE.BoxGeometry(0.05, 0.035, 0.03), M.chain, elbow, 0, -0.36, -0.09);
+        for (let i = 0; i < 3; i++) {
+          const l = apeMesh(linkGeo, M.chain, elbow, 0.02 * side * (i % 2 ? 1 : 0), -0.42 - i * 0.065, -0.06, i % 2 ? 0.4 : -0.4, i % 2 ? Math.PI / 2 : 0);
+          l.scale.set(0.9, 1.2, 0.9);
+        }
+        // the hand: a wide ape palm, four long fingers with bright red bloodied tips, and a thumb
+        const hand = new THREE.Group();
+        hand.position.set(0, -0.53, 0);
+        elbow.add(hand);
+        apeMesh(new THREE.BoxGeometry(0.13, 0.11, 0.09), M.skin, hand, 0, -0.03, 0);
+        const fingers = [];
+        for (let f = 0; f < 4; f++) {
+          const fx = (f - 1.5) * 0.033;
+          const fg = new THREE.Group();
+          fg.position.set(fx, -0.08, -0.01);
+          fg.rotation.x = -0.35 - f * 0.05;                          // curled, ready to grab
+          hand.add(fg);
+          apeMesh(new THREE.CylinderGeometry(0.017, 0.013, 0.11, 5), M.skin, fg, 0, -0.055, 0);
+          apeMesh(new THREE.CylinderGeometry(0.013, 0.009, 0.07, 5), M.skin, fg, 0, -0.145, -0.01, -0.3, 0, 0);
+          apeMesh(new THREE.ConeGeometry(0.011, 0.035, 4), M.blood, fg, 0, -0.195, -0.026, Math.PI - 0.3, 0, 0);   // bloodied claw tip
+          fingers.push(fg);
+        }
+        const thumb = new THREE.Group();
+        thumb.position.set(-0.06 * side, -0.03, -0.02);
+        thumb.rotation.z = -0.8 * side;
+        hand.add(thumb);
+        apeMesh(new THREE.CylinderGeometry(0.019, 0.014, 0.1, 5), M.skin, thumb, 0, -0.05, 0);
+        apeMesh(new THREE.ConeGeometry(0.012, 0.035, 4), M.blood, thumb, 0, -0.115, 0, Math.PI, 0, 0);
+        return { shoulder, elbow, hand, fingers };
+      };
+      const armL = buildArm(1), armR = buildArm(-1);
+      ape.shoulderL = armL.shoulder; ape.shoulderR = armR.shoulder;
+      ape.leftHand = armL.hand; ape.rightHand = armR.hand;
+      ape.armL = armL; ape.armR = armR;
+      ape.shoulderL.rotation.z = 0.08; ape.shoulderR.rotation.z = -0.08;
+
+      // ---- the rusty old machete in the right hand ----
+      const rig = new THREE.Group();                                 // the wrist pivot: this is what swings the blade
+      rig.position.set(0, -0.06, -0.02);
+      armR.hand.add(rig);
+      ape.machetePivot = rig;
+      const machete = new THREE.Group();
+      rig.add(machete);
+      ape.machete = machete;
+      apeMesh(new THREE.CylinderGeometry(0.019, 0.021, 0.2, 6), M.grip, machete, 0, -0.08, 0);          // dark wrapped handle
+      for (let i = 0; i < 5; i++) apeMesh(new THREE.TorusGeometry(0.021, 0.005, 3, 7), M.steelDark, machete, 0, -0.02 - i * 0.032, 0, Math.PI / 2, 0, 0);
+      apeMesh(new THREE.BoxGeometry(0.13, 0.02, 0.045), M.steelDark, machete, 0, 0.02, 0);               // metal crossguard
+      apeMesh(new THREE.CylinderGeometry(0.026, 0.026, 0.03, 6), M.steelDark, machete, 0, 0.045, 0);     // pommel-ish collar
+      // the blade: a long pitted, rust-stained steel machete with a clipped point
+      const blade = new THREE.Shape();
+      blade.moveTo(-0.035, 0);
+      blade.lineTo(0.045, 0);
+      blade.quadraticCurveTo(0.06, 0.28, 0.04, 0.52);
+      blade.lineTo(0.005, 0.63);                                     // the point
+      blade.quadraticCurveTo(-0.03, 0.56, -0.035, 0.3);
+      blade.closePath();
+      const bladeGeo = new THREE.ExtrudeGeometry(blade, { depth: 0.012, bevelEnabled: false, curveSegments: 5 });
+      bladeGeo.rotateX(-Math.PI / 2);                                // lay the blade along +Y (out of the fist)
+      bladeGeo.rotateZ(Math.PI);                                     // point it away from the hand
+      const bladeMesh = apeMesh(bladeGeo, M.steel, machete, 0, 0.03, 0);
+      bladeMesh.rotation.y = Math.PI / 2;
+      apeMesh(new THREE.BoxGeometry(0.016, 0.62, 0.006), M.blood, machete, 0.0, 0.34, 0.012);            // a smear of old blood
+    }
+    ape.root.scale.setScalar(APE_SCALE);
+
+    // ---------- the ape's state machine ----------
+    const catcher = {
+      active: false,                        // the takedown is running: the player is locked and the camera is ours
+      phase: 'wind',                        // 'wind' (lock + camera swing) → 'swing' (machete overhead) → 'impact' → 'after'
+      t: 0,
+      armed: true,                          // false between the reset and the player moving away again
+    };
+    const apeState = {
+      mode: 'patrol',                       // 'patrol' | 'stalk' | 'hunt'
+      pos: apeV3(0, 0, 0), heading: 0, speed: 0,
+      wp: 3, waypoint: apeV3(-15, 0, -11.4), repathT: 0, stuckT: 0,
+      phase: 0, bound: 0, boundT: 0, stepT: 0, stepSide: 1, sway: Math.random() * 10,
+      seeT: 0, loseT: 0, stalkT: 0, stareT: 0, coverT: 0, cover: null, attackT: 0,
+      stepIdx: 0, playerSeen: false,
+      footfall: 0, lastStepLoud: 0, rustleT: 2, growlT: 0,
+      swing: 0, swingArm: 0, raise: 0, crouch: 0, lunge: 0, bodyPitch: 0,
+    };
+    apeState.pos.set(-8.5, 0, -3.5);         // it starts across the camp from the spawn, out of the firelight
+    apeState.heading = Math.atan2(0 - apeState.pos.x, 0 - apeState.pos.z);
+
+    // The player's world position the ape reacts to (desktop: the survivor standing at the camp spawn)
+    function apePlayerPos(out) {
+      if (renderer.xr.isPresenting && locomotionReady && !titleActive) headWorld(out);
+      else out.set(0, SPAWN_HEAD_HEIGHT, 0);
+      return out;
+    }
+    // Is the headlamp on and shining at `p`?
+    function apeLampOnIt(p) {
+      if (!renderer.xr.isPresenting || titleActive) return false;
+      const beam = camera.children.find((c) => c.isSpotLight && c.visible && c.intensity > 0);
+      if (!beam) return false;
+      const origin = new THREE.Vector3(); camera.getWorldPosition(origin);
+      const dir = new THREE.Vector3(); camera.getWorldDirection(dir);
+      const to = new THREE.Vector3().subVectors(p, origin);
+      const d = to.length();
+      if (d > APE_LAMP_DIST) return false;
+      return dir.dot(to.normalize()) > Math.cos(APE_LAMP_HALF);
+    }
+    function apeAngleTo(p) {
+      const dx = p.x - apeState.pos.x, dz = p.z - apeState.pos.z;
+      const want = Math.atan2(-dx, -dz);                    // heading convention: yaw with -Z forward
+      let d = want - apeState.heading;
+      return Math.atan2(Math.sin(d), Math.cos(d));
+    }
+    function apeDistTo(p) { return Math.hypot(p.x - apeState.pos.x, p.z - apeState.pos.z); }
+    // Does it have a clear look at the player? (cone + roughly line of sight through the trunks)
+    function apeCanSeePlayer(p) {
+      const d = apeDistTo(p);
+      if (d > APE_VIEW_DIST) return false;
+      if (Math.abs(apeAngleTo(p)) > APE_VIEW_HALF) return false;
+      return apeLineClear(apeState.pos.x, apeState.pos.z, p.x, p.z) || d < 2.5;
+    }
+    // "Loud noise": swimming, sprinting past close by, or a hunt already underway
+    function apeHearsPlayer(p) {
+      const d = apeDistTo(p);
+      if (d < APE_HEAR_DIST) return true;
+      if (swimming && d < APE_HEAR_DIST * 1.6) return true;
+      return false;
+    }
+    function apeSetMode(mode) {
+      if (apeState.mode === mode) return;
+      apeState.mode = mode;
+      if (mode === 'stalk') {
+        apeState.stalkT = 0; apeState.coverT = 0; apeState.cover = null;
+        apeAudio.growl(1);
+      } else if (mode === 'hunt') {
+        apeState.loseT = 0;
+        apeAudio.growl(1.4);
+      } else {
+        apeState.seeT = 0;
+      }
+    }
+    // Pick the next patrol waypoint: near-ish, not across the lake, and a change from the last one
+    function apeNextWaypoint() {
+      let best = -1, bestScore = Infinity;
+      for (let i = 0; i < apeWaypoints.length; i++) {
+        if (i === apeState.wp) continue;
+        const w = apeWaypoints[i];
+        const d = Math.hypot(w.x - apeState.pos.x, w.z - apeState.pos.z);
+        if (d < 3 || !apeLineClear(apeState.pos.x, apeState.pos.z, w.x, w.z)) continue;
+        const score = d + Math.random() * 12;
+        if (score < bestScore) { bestScore = score; best = i; }
+      }
+      if (best < 0) best = (apeState.wp + 1) % apeWaypoints.length;
+      apeState.wp = best;
+      apeState.waypoint.copy(apeWaypoints[best]);
+    }
+    // Walk towards a point with the slow, deliberate turn of a heavy animal
+    function apeMoveTowards(tx, tz, speed, dt) {
+      const dx = tx - apeState.pos.x, dz = tz - apeState.pos.z;
+      const d = Math.hypot(dx, dz);
+      if (d < 0.02) return d;
+      const want = Math.atan2(-dx, -dz);
+      let turn = want - apeState.heading;
+      turn = Math.atan2(Math.sin(turn), Math.cos(turn));
+      const rate = apeState.mode === 'hunt' ? 4.5 : 2.2;
+      apeState.heading += THREE.MathUtils.clamp(turn, -rate * dt, rate * dt);
+      const step = Math.min(d, speed * dt);
+      const nx = apeState.pos.x + Math.sin(-apeState.heading) * step;
+      const nz = apeState.pos.z + Math.cos(-apeState.heading) * step;
+      // don't wade into the lake or onto the ridge: slide along instead
+      if (!apeBlocked(nx, nz)) { apeState.pos.x = nx; apeState.pos.z = nz; }
+      else apeState.heading += 1.2 * dt * (Math.random() < 0.5 ? 1 : -1);
+      apeState.speed = step / Math.max(1e-4, dt);
+      return d - step;
+    }
+
+    // ---------- the stalking cover: the tree or cabin it slinks behind ----------
+    function apePickCover(p, hideFrom) {
+      let best = null, bestScore = -Infinity;
+      for (const c of apeCover) {
+        const dc = Math.hypot(c.x - apeState.pos.x, c.z - apeState.pos.z);
+        if (dc > 18 || dc < 1.2) continue;
+        const dp = Math.hypot(c.x - p.x, c.z - p.z);
+        if (dp < 2.2 || dp > 13) continue;
+        if (apeBlocked(c.x, c.z)) continue;
+        // stand on the far side of the cover from the player (between you and it, or just off to one side)
+        const ang = Math.atan2(apeState.pos.z - p.z, apeState.pos.x - p.x);
+        const stand = { x: c.x + Math.cos(ang) * (c.r + 0.5), z: c.z + Math.sin(ang) * (c.r + 0.5) };
+        if (apeBlocked(stand.x, stand.z)) continue;
+        const score = (hideFrom ? dp * 0.8 : -dp) + Math.random() * 3 - dc * 0.15;
+        if (score > bestScore) { bestScore = score; best = { ...c, stand }; }
+      }
+      return best;
+    }
+
+    let catchGrabDelay = 0;                  // seconds before the ape may grab you again after a reset
+    // ---------- the takedown: lock, third-person camera, machete swing, blood, reset ----------
+    const catchCam = { pos: new THREE.Vector3(), look: new THREE.Vector3(), restore: new THREE.Vector3() };
+    const bloodBurst = (() => {
+      const N = 220;
+      const geo = new THREE.BufferGeometry();
+      const pos = new Float32Array(N * 3), vel = new Float32Array(N * 3);
+      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      const mat = new THREE.PointsMaterial({ color: 0x8a0606, size: 0.055, transparent: true, opacity: 0.95, depthWrite: false, fog: false });
+      const pts = new THREE.Points(geo, mat);
+      pts.frustumCulled = false;
+      pts.visible = false;
+      scene.add(pts);
+      return { pts, pos, vel, geo, mat, life: 0, N };
+    })();
+    // A crimson splatter layer that goes over the screen (and, on desktop, over the third-person shot)
+    const splatTex = (() => {
+      const c = document.createElement('canvas'); c.width = c.height = 512;
+      const g = c.getContext('2d');
+      g.clearRect(0, 0, 512, 512);
+      const blob = (x, y, r, a) => {
+        g.fillStyle = `rgba(${120 + Math.random() * 60 | 0},0,0,${a})`;
+        g.beginPath();
+        for (let k = 0; k < 12; k++) {
+          const ang = (k / 12) * Math.PI * 2, rad = r * (0.55 + Math.random() * 0.9);
+          const px = x + Math.cos(ang) * rad, py = y + Math.sin(ang) * rad;
+          if (k === 0) g.moveTo(px, py); else g.lineTo(px, py);
+        }
+        g.closePath(); g.fill();
+      };
+      for (let i = 0; i < 34; i++) blob(Math.random() * 512, Math.random() * 512, 12 + Math.random() * 55, 0.5 + Math.random() * 0.5);
+      for (let i = 0; i < 90; i++) {                   // flung droplets
+        g.fillStyle = `rgba(${110 + Math.random() * 70 | 0},0,0,${0.4 + Math.random() * 0.6})`;
+        g.beginPath(); g.ellipse(Math.random() * 512, Math.random() * 512, 2 + Math.random() * 7, 2 + Math.random() * 9, Math.random() * 3, 0, Math.PI * 2); g.fill();
+      }
+      const t = new THREE.CanvasTexture(c);
+      t.colorSpace = THREE.SRGBColorSpace;
+      return t;
+    })();
+    const splatMat = new THREE.MeshBasicMaterial({ map: splatTex, color: 0xffffff, transparent: true, opacity: 0, depthTest: false, depthWrite: false, fog: false });
+    const splat = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 1.6), splatMat);
+    splat.position.z = -0.2;
+    splat.renderOrder = 9993;
+    splat.visible = false;
+    camera.add(splat);
+    // The legless survivor body that the ape takes down (hidden otherwise: you already have your own avatar)
+    const victim = new THREE.Group();
+    victim.visible = false;
+    scene.add(victim);
+    {
+      const skin = new THREE.MeshStandardMaterial({ color: 0xc89a7c, roughness: 0.7 });
+      const shirt = new THREE.MeshStandardMaterial({ color: 0x405670, map: grimeTex, roughness: 0.9 });
+      const jeans = new THREE.MeshStandardMaterial({ color: 0x2c3c4f, roughness: 0.9 });
+      apeMesh(new THREE.CylinderGeometry(0.26, 0.3, 0.72, 8), shirt, victim, 0, 1.14, 0);       // torso
+      apeMesh(new THREE.SphereGeometry(0.16, 8, 6), shirt, victim, 0.27, 1.4, 0, 0, 0, 0, 1, 0.8, 0.9);
+      apeMesh(new THREE.SphereGeometry(0.16, 8, 6), shirt, victim, -0.27, 1.4, 0, 0, 0, 0, 1, 0.8, 0.9);
+      apeMesh(new THREE.CylinderGeometry(0.26, 0.2, 0.2, 8), jeans, victim, 0, 0.72, 0);        // cut off at the waist
+      apeMesh(new THREE.SphereGeometry(0.19, 10, 8), skin, victim, 0, 1.68, 0, 0, 0, 0, 0.92, 1.08, 0.98);   // head
+      apeMesh(new THREE.SphereGeometry(0.2, 10, 6), new THREE.MeshStandardMaterial({ color: 0x2a1c12, roughness: 0.9 }), victim, 0, 1.72, 0.01, 0, 0, 0, 0.95, 0.85, 1);
+      apeMesh(new THREE.CylinderGeometry(0.075, 0.065, 0.55, 6), shirt, victim, 0.36, 1.15, 0, 0, 0, 0.25);
+      apeMesh(new THREE.CylinderGeometry(0.075, 0.065, 0.55, 6), shirt, victim, -0.36, 1.15, 0, 0, 0, -0.25);
+    }
+
+    function apeStartCatch() {
+      if (catcher.active || !catcher.armed) return;
+      catcher.active = true;
+      catcher.phase = 'wind';
+      catcher.t = 0;
+      apeState.mode = 'catch';
+      apeAudio.swipe();
+      apeAudio.heartbeatOff();
+      for (const p of parts) if (p.held >= 0) releasePart(p);
+      boat.holding = -1;
+      for (const g of generators) if (g.holding >= 0) releaseHandle(g);
+      for (const d of doors) d.grabbed = -1;
+      controllers.forEach((c) => pulse(c, 1, 500));
+      // where the two of them stand for the shot: the ape planted in front of the survivor
+      const p = apePlayerPos(new THREE.Vector3());
+      apeState.pos.set(p.x - Math.sin(-apeState.heading) * APE_CATCH_DIST * 0.9, 0, p.z - Math.cos(-apeState.heading) * APE_CATCH_DIST * 0.9);
+      apeState.pos.y = apeGroundY(apeState.pos.x, apeState.pos.z);
+      // the legless survivor body stands a couple of metres in front of your eyes in the headset (where the
+      // third-person shot puts them on the desktop), facing the ape; on desktop it stands where you are.
+      const view = new THREE.Vector3(); camera.getWorldDirection(view);
+      const away = renderer.xr.isPresenting ? 2.1 : 0;
+      const vx = p.x + view.x * away, vz = p.z + view.z * away;
+      victim.position.set(vx, apeGroundY(vx, vz), vz);
+      victim.rotation.set(0, Math.atan2(-(apeState.pos.x - vx), -(apeState.pos.z - vz)) + Math.PI, 0);
+      victim.visible = true;
+      splat.visible = true;
+      splatMat.opacity = 0;
+      bloodBurst.pts.visible = false;
+      if (!renderer.xr.isPresenting) catchCam.restore.copy(camera.position);
+    }
+    function apeResetRun() {
+      // clean reset: no catch, full health, back at the camp spawn, and the ape sent away to its patrol
+      catcher.active = false;
+      catcher.phase = 'wind';
+      catcher.t = 0;
+      victim.visible = false;
+      splat.visible = false;
+      splatMat.opacity = 0;
+      bloodBurst.pts.visible = false;
+      survival.hp = HP_MAX;
+      survival.under = 0;
+      survival.burning = survival.drowning = false;
+      survival.sinceHurt = 99;
+      survival.flash = 0;
+      survival.dead = false;
+      survival.respawned = false;
+      blackout.visible = deathCard.visible = false;
+      vignette.visible = false;
+      if (renderer.xr.isPresenting) resetLocomotion();
+      else {
+        if (camera.parent !== playerRig) playerRig.attach(camera);   // back on the rig after the takedown shot
+        camera.position.set(0, 1.6, 3);
+        camera.fov = 70; camera.updateProjectionMatrix();
+        orbit.target.set(0, 0.4, -2.5);
+        orbit.enabled = true;
+        orbit.update();
+      }
+      catchCam.restore.set(0, 0, 0);
+      apeState.mode = 'patrol';
+      apeState.pos.set(-8.5, 0, -3.5);
+      apeState.pos.y = 0;
+      apeState.heading = Math.atan2(0 - apeState.pos.x, 0 - apeState.pos.z);
+      apeState.wp = 3; apeState.waypoint.copy(apeWaypoints[3]);
+      apeState.seeT = apeState.loseT = apeState.stalkT = apeState.stareT = apeState.coverT = 0;
+      apeState.cover = null; apeState.attackT = 0;
+      apeAudio.heartbeatOff();
+      if (catchGrabDelay > 0) catchGrabDelay = Math.max(catchGrabDelay, 1.5);
+      else catchGrabDelay = 1.5;           // can't grab you again on the very next frame
+    }
+
+    // ---------- the per-frame update ----------
+    const _apeP = new THREE.Vector3(), _apeHead = new THREE.Vector3(), _apeLook = new THREE.Vector3(), _apeCamW = new THREE.Vector3();
+    let apeClock = 0;
+    function updateSlasher(dt) {
+      apeClock += dt;
+      const playing = !titleActive;
+      ape.root.visible = playing;
+      if (!playing) {
+        apeAudio.heartbeatOff();
+        splat.visible = false;
+        victim.visible = false;
+        if (catcher.active) apeResetRun();
+        return;
+      }
+      apePlayerPos(_apeP);
+      _apeHead.copy(_apeP);
+      const dist = apeDistTo(_apeP);
+
+      // ---- re-arm the catch once you've moved away again ----
+      if (!catcher.armed && !catcher.active && dist > 2.2) catcher.armed = true;
+
+      if (catcher.active) { apeUpdateCatch(dt, _apeP, dist); return; }
+
+      // ---- perception ----
+      const seen = apeCanSeePlayer(_apeP) || apeLampOnIt(_apeHead);
+      apeState.playerSeen = seen;
+      if (seen) { apeState.seeT += dt; apeState.loseT = 0; } else { apeState.seeT = Math.max(0, apeState.seeT - dt * 0.6); apeState.loseT += dt; }
+      const heard = apeHearsPlayer(_apeP);
+      const staring = dist < APE_STARE_DIST && (seen || heard) &&
+                      renderer.xr.isPresenting && (() => {          // "staring": your gaze is on it too
+                        const dir = new THREE.Vector3(); camera.getWorldDirection(dir);
+                        const to = new THREE.Vector3().subVectors(ape.root.position, camera.getWorldPosition(new THREE.Vector3())).setY(0).normalize();
+                        return dir.setY(0).normalize().dot(to) > 0.86;
+                      })();
+      if (staring) apeState.stareT += dt; else apeState.stareT = Math.max(0, apeState.stareT - dt * 0.7);
+
+      // ---- mode changes ----
+      if (apeState.mode === 'patrol') {
+        if ((seen && apeState.seeT > 0.35) || heard) apeSetMode('stalk');
+      } else if (apeState.mode === 'stalk') {
+        if (dist < APE_STARE_DIST * 0.6 || apeState.stareT > APE_STARE_TIME || (seen && dist < 3.6)) apeSetMode('hunt');
+        else if (apeState.loseT > 12 && !heard) apeSetMode('patrol');
+      } else if (apeState.mode === 'hunt') {
+        if (apeState.loseT > APE_LOSE_TIME && !heard) apeSetMode('stalk');
+      }
+
+      // ---- movement, per mode ----
+      let moving = 0;
+      if (apeState.mode === 'patrol') {
+        apeState.speed = APE_PATROL_SPEED;
+        moving = apeMoveTowards(apeState.waypoint.x, apeState.waypoint.z, APE_PATROL_SPEED, dt);
+        if (moving < 0.4) apeNextWaypoint();
+        if ((apeState.rustleT -= dt) <= 0) { apeState.rustleT = 3 + Math.random() * 5; apeAudio.rustle(0.5); }
+      } else if (apeState.mode === 'stalk') {
+        apeState.stalkT += dt;
+        // slink from cover to cover, staying out of the survivor's way
+        apeState.coverT -= dt;
+        if (!apeState.cover || apeState.coverT <= 0) {
+          apeState.cover = apePickCover(_apeP, true) || apePickCover(_apeP, false);
+          apeState.coverT = 4 + Math.random() * 3;
+        }
+        if (apeState.cover) {
+          const st = apeState.cover.stand;
+          const left = apeMoveTowards(st.x, st.z, APE_STALK_SPEED, dt);
+          // at the cover, turn and watch you
+          if (left < 0.5) {
+            const want = apeAngleTo(_apeP);
+            apeState.heading += THREE.MathUtils.clamp(want, -1.4 * dt, 1.4 * dt);
+            apeState.speed *= 0.2;
+            if ((apeState.rustleT -= dt) <= 0) { apeState.rustleT = 1.6 + Math.random() * 2; apeAudio.rustle(0.8); }
+          }
+        }
+        // close enough for the final creep
+        if (dist < 3.2) apeMoveTowards(_apeP.x, _apeP.z, APE_STALK_SPEED * 1.1, dt);
+      } else if (apeState.mode === 'hunt') {
+        // the gorilla-arm sprint: straight at you, arm over arm
+        apeState.speed = APE_HUNT_SPEED;
+        apeMoveTowards(_apeP.x, _apeP.z, APE_HUNT_SPEED, dt);
+        if ((apeState.growlT -= dt) <= 0) { apeState.growlT = 2.2 + Math.random() * 1.6; apeAudio.growl(1.2); }
+        // the terror heartbeat: louder and faster the closer it gets
+        const lvl = THREE.MathUtils.clamp(1 - dist / 16, 0.08, 1);
+        apeAudio.heartbeat(lvl, 62 + lvl * 78);
+      } else {
+        apeAudio.heartbeatOff();
+      }
+      if (apeState.mode !== 'hunt') apeAudio.heartbeatOff();
+
+      // ---- it's on you ----
+      if (catchGrabDelay > 0) catchGrabDelay = Math.max(0, catchGrabDelay - dt);
+      if (dist < APE_CATCH_DIST && catcher.armed && catchGrabDelay <= 0) apeStartCatch();
+
+      // ---- pose & animate ----
+      ape.root.position.set(apeState.pos.x, apeGroundY(apeState.pos.x, apeState.pos.z), apeState.pos.z);
+      ape.root.rotation.y = apeState.heading;
+      apeAnimate(dt, _apeP, dist);
+    }
+
+    // The bounds: alternating Gorilla arm-swinging strides, with a heavy bound every few steps.
+    function apeAnimate(dt, playerPos, dist) {
+      const s = apeState;
+      const hunting = s.mode === 'hunt';
+      const moving = s.speed > 0.08;
+      const cadence = hunting ? 3.4 : s.mode === 'stalk' ? 1.5 : 1.1;   // strides per second
+      if (moving) s.phase += dt * cadence * (hunting ? 1.2 : 1);
+      else s.phase += dt * 0.6;                                          // a slow idle sway
+      // bounds: every 4th step is a two-handed bound (both arms swing together, the body pitches and rolls)
+      const stepIdx = Math.floor(s.phase);
+      if (moving && stepIdx !== s.stepIdx) {
+        s.stepIdx = stepIdx;
+        s.bound = (stepIdx % 4 === 3) ? 1 : 0;
+        s.stepSide = (stepIdx % 2 === 0) ? 1 : -1;
+        // a knuckle thump on the ground, loud when it's near you (and heavier in a hunt)
+        const level = THREE.MathUtils.clamp(1 - dist / 20, 0.05, 1) * (hunting ? 1 : 0.45);
+        apeAudio.step(level);
+        s.lastStepLoud = level;
+      }
+      const swing = Math.sin(s.phase * Math.PI * 2);
+      const swing2 = Math.cos(s.phase * Math.PI * 2);
+      const boundK = s.bound ? 1 : 0;
+      // arm swing: alternating strides swing the arms opposite; a bound throws both forward
+      const armAmp = hunting ? 1.15 : moving ? 0.55 : 0.12;
+      const L = s.bound ? swing * 0.6 : swing * s.stepSide;
+      const R = s.bound ? swing * 0.6 : -swing * s.stepSide;
+      ape.shoulderL.rotation.x = L * armAmp + 0.1 + (hunting ? -0.35 : 0);
+      ape.shoulderR.rotation.x = R * armAmp + 0.1 + (hunting ? -0.35 : 0);
+      ape.shoulderL.rotation.z = 0.16 + Math.abs(L) * 0.12;
+      ape.shoulderR.rotation.z = -0.16 - Math.abs(R) * 0.12;
+      // elbows fold up as the arm comes forward (knuckles near the ground, like a knuckle-walker)
+      ape.armL.elbow.rotation.x = -0.35 - Math.max(0, -L) * 0.5 - (hunting ? 0.5 : 0.15);
+      ape.armR.elbow.rotation.x = -0.35 - Math.max(0, -R) * 0.5 - (hunting ? 0.5 : 0.15);
+      ape.armL.elbow.rotation.z = 0.1;
+      ape.armR.elbow.rotation.z = -0.1;
+      // fingers flex as it swings
+      const flex = 0.25 + Math.abs(swing) * 0.25;
+      for (const fg of ape.armL.fingers) fg.rotation.x = -0.35 - flex;
+      for (const fg of ape.armR.fingers) fg.rotation.x = -0.35 - flex;
+      // the body: pitches forward into the stride, rolls side to side, and bobs with the bound
+      const pitch = (moving ? (hunting ? 0.42 : 0.22) : 0.06) + Math.abs(swing) * 0.06 + boundK * 0.12;
+      const roll = swing2 * (hunting ? 0.16 : 0.08);
+      s.bodyPitch += (pitch - s.bodyPitch) * Math.min(1, dt * 6);
+      ape.body.rotation.set(s.bodyPitch, 0, roll);
+      ape.body.position.y = Math.abs(swing) * (hunting ? 0.09 : 0.04) + boundK * Math.abs(swing2) * 0.08;
+      // the torso twists a little against the arms
+      ape.torso.rotation.y = swing * 0.08 * (hunting ? 1.6 : 1);
+      // the head tracks the survivor while it stalks and hunts, and lolls in a patrol
+      const wantYaw = (s.mode === 'patrol') ? Math.sin(apeClock * 0.7) * 0.35 : THREE.MathUtils.clamp(apeAngleTo(playerPos), -0.9, 0.9);
+      ape.head.rotation.y += (wantYaw - ape.head.rotation.y) * Math.min(1, dt * 4);
+      ape.head.rotation.x = (s.mode === 'patrol' ? 0.08 : -0.12) + Math.sin(apeClock * 1.3) * 0.03;
+      // the machete hangs, and lifts a little when it's hunting
+      ape.machetePivot.rotation.z += ((hunting ? -0.5 : -0.15) - ape.machetePivot.rotation.z) * Math.min(1, dt * 4);
+      ape.machetePivot.rotation.x += ((hunting ? -0.7 : -0.25) - ape.machetePivot.rotation.x) * Math.min(1, dt * 4);
+      // the dangling chain swings
+      for (let i = 0; i < ape.chains.length; i++) {
+        const l = ape.chains[i];
+        l.rotation.x = Math.sin(apeClock * 3 + i * 0.6) * 0.25 * (moving ? 1 : 0.3);
+      }
+    }
+
+    // ---------- the takedown, frame by frame ----------
+    function apeUpdateCatch(dt, playerPos, dist) {
+      catcher.t += dt;
+      const t = catcher.t;
+      apeAudio.heartbeat(0.9, 110);
+
+      // ---- the camera: a dramatic third-person angle on both of them ----
+      const ap = ape.root.position;
+      const vp = victim.position;
+      const mid = new THREE.Vector3((ap.x + vp.x) / 2, (ap.y + vp.y) / 2 + 0.5, (ap.z + vp.z) / 2);
+      const across = new THREE.Vector3().subVectors(vp, ap).normalize();
+      const side = new THREE.Vector3().crossVectors(across, new THREE.Vector3(0, 1, 0));
+      if (side.lengthSq() < 0.01) side.set(1, 0, 0);
+      side.normalize();
+      if (renderer.xr.isPresenting) {
+        // in the headset the camera belongs to your head, so the shot is framed by turning the ape to face you
+        // and leaning it in close: you watch the blade come down from the survivor's own eyes.
+        const dir = new THREE.Vector3(); camera.getWorldDirection(dir);
+        const yaw = Math.atan2(dir.x, dir.z);
+        ape.root.rotation.y += Math.atan2(Math.sin(yaw - ape.root.rotation.y), Math.cos(yaw - ape.root.rotation.y)) * Math.min(1, dt * 6);
+      } else {
+        // desktop: detach from the rig for a moment and fly to a low three-quarter angle beside the two of them
+        if (catchCam.restore.lengthSq() === 0) catchCam.restore.copy(camera.position);
+        if (camera.parent !== scene) scene.attach(camera);
+        const camTarget = mid.clone().addScaledVector(side, 1.9).addScaledVector(across, -0.35).add(new THREE.Vector3(0, 0.55, 0));
+        const ease = Math.min(1, t / 0.55), easeK = ease * ease * (3 - 2 * ease);
+        camera.position.lerp(camTarget, Math.min(1, dt * (2 + 8 * easeK)));
+        camera.lookAt(mid.clone().add(new THREE.Vector3(0, 0.05, 0)));
+        orbit.enabled = false;
+        orbit.target.copy(mid);
+      }
+      // ---- the ape: raise the machete high overhead, then slam it down ----
+      const windT = APE_CATCH_LOCK * 0.5, swingT = APE_SWING_TIME * 0.45;
+      let raise = 0;
+      if (catcher.phase === 'wind') {
+        raise = Math.min(1, t / windT);
+        if (t >= windT) { catcher.phase = 'swing'; apeAudio.swipe(); }
+      } else {
+        raise = 1;
+      }
+      // right arm overhead (shoulder rotation.x negative = forward and up), wrist cocked back
+      ape.shoulderR.rotation.x = -2.4 * raise - 0.1;
+      ape.shoulderR.rotation.z = -0.25 * raise - 0.16;
+      ape.armR.elbow.rotation.x = -0.9 * raise - 0.2;
+      ape.machetePivot.rotation.x = -1.5 * raise;
+      ape.machetePivot.rotation.z = -0.15;
+      // left arm reaches out and pins the survivor
+      ape.shoulderL.rotation.x = -1.5 * raise;
+      ape.armL.elbow.rotation.x = -0.5 - 0.4 * raise;
+      // the body rears up, then lunges forward with the blow
+      const rear = Math.sin(Math.min(1, t / (windT + swingT)) * Math.PI) * 0.25;
+      ape.body.rotation.set(-0.18 * raise + rear, 0, 0.05 * raise);
+      ape.body.position.y = 0.06 * raise;
+      ape.head.rotation.x = -0.25 * raise;
+
+      if (catcher.phase === 'swing') {
+        const st = t - windT;
+        const slam = THREE.MathUtils.clamp(st / swingT, 0, 1);
+        const slamEase = slam * slam;
+        ape.shoulderR.rotation.x = -2.4 + slamEase * 3.6;          // the blade arcs down and through
+        ape.armR.elbow.rotation.x = -1.1 + slamEase * 1.1;
+        ape.machetePivot.rotation.x = -1.5 + slamEase * 1.9;
+        ape.body.rotation.x = -0.18 + slamEase * 0.95;             // it throws its whole body into it
+        ape.body.position.y = 0.06 - slamEase * 0.18;
+        ape.shoulderL.rotation.x = -1.5 + slamEase * 0.6;
+        // the survivor collapses backwards under the blow
+        const fall = THREE.MathUtils.clamp((st - swingT * 0.55) / (swingT * 0.45), 0, 1);
+        victim.rotation.x = fall * fall * 1.45;                    // onto their back
+        victim.position.y = apeGroundY(victim.position.x, victim.position.z) + fall * 0.05;
+        if (st >= swingT) { catcher.phase = 'impact'; catcher.t = 0; apeImpact(); }
+      } else if (catcher.phase === 'impact' || catcher.phase === 'after') {
+        // hold the follow-through while the blood rains down
+        victim.rotation.x = Math.min(1.45, victim.rotation.x + dt * 3);
+        const k = THREE.MathUtils.clamp(catcher.t / 0.12, 0, 1);
+        splatMat.opacity = Math.max(splatMat.opacity * (1 - dt * 0.6), 0.55 * k);
+        blackMat.opacity = Math.min(1, catcher.t / 0.35) * (catcher.t > 1.4 ? Math.max(0, 1 - (catcher.t - 1.4) / 0.9) : 1);
+        blackout.visible = blackMat.opacity > 0.002;
+        if (catcher.t > APE_RESET_AFTER) apeResetRun();
+      }
+      // blood particles fly on impact and fall under gravity
+      if (bloodBurst.pts.visible) {
+        bloodBurst.life += dt;
+        const p = bloodBurst.pos, v = bloodBurst.vel;
+        for (let i = 0; i < bloodBurst.N; i++) {
+          v[i * 3 + 1] -= 9.8 * dt;
+          p[i * 3] += v[i * 3] * dt;
+          p[i * 3 + 1] += v[i * 3 + 1] * dt;
+          p[i * 3 + 2] += v[i * 3 + 2] * dt;
+          if (p[i * 3 + 1] < 0.02) { p[i * 3 + 1] = 0.02; v[i * 3] *= 0.6; v[i * 3 + 1] = 0; v[i * 3 + 2] *= 0.6; }
+        }
+        bloodBurst.geo.attributes.position.needsUpdate = true;
+        bloodBurst.mat.opacity = Math.max(0, 0.95 - bloodBurst.life * 0.35);
+      }
+    }
+    function apeImpact() {
+      catcher.phase = 'after';
+      catcher.t = 0;
+      apeAudio.impact();
+      apeAudio.sting();
+      controllers.forEach((c) => pulse(c, 1, 600));
+      // a burst of crimson from the survivor's head and shoulders
+      const origin = victim.position.clone().add(new THREE.Vector3(0, 1.1, 0));
+      const p = bloodBurst.pos, v = bloodBurst.vel;
+      for (let i = 0; i < bloodBurst.N; i++) {
+        p[i * 3] = origin.x; p[i * 3 + 1] = origin.y; p[i * 3 + 2] = origin.z;
+        const a = Math.random() * Math.PI * 2, up = Math.random() * 1.1 + 0.2, sp = 0.7 + Math.random() * 2.4;
+        v[i * 3] = Math.cos(a) * sp;
+        v[i * 3 + 1] = up * 2.4;
+        v[i * 3 + 2] = Math.sin(a) * sp;
+      }
+      bloodBurst.geo.attributes.position.needsUpdate = true;
+      bloodBurst.mat.opacity = 0.95;
+      bloodBurst.life = 0;
+      bloodBurst.pts.visible = true;
+      splatMat.opacity = 0.0;
+      splat.visible = true;
+      survival.flash = 1;
+      survival.flashColor = 0x8a0606;
+    }
+
+    // ---------- Slasher ape extras: a desktop 'G' brings it to you for the takedown, and its audio unlocks on
+    //  the same gestures as everything else (no new UI, no change to the lobby or the game's own controls) ----------
+    window.addEventListener('keydown', (e) => {
+      if (e.key !== 'g' && e.key !== 'G') return;
+      if (renderer.xr.isPresenting || titleActive || catcher.active || !ape.root.visible) return;
+      // bring it in from the south of the camp spawn, hunting, so the takedown plays straight away
+      apeState.pos.set(0, 0, 2.6);
+      apeState.pos.y = 0;
+      apeState.heading = Math.atan2(-(0 - apeState.pos.x), -(0 - apeState.pos.z));   // facing the survivor
+      apeSetMode('hunt');
+    });
+    // The ape's audio shares the survival kit's AudioContext (it resumes on the same gestures), so this only
+    // needs to make sure that kit exists: one click on the page and every ape sound works.
+    const apeAudioUnlock = () => { try { fxAudio.unlock(); apeAudio.unlock(); } catch (e) { /* audio is optional */ } };
+    vrButton.addEventListener('click', apeAudioUnlock);
+    window.addEventListener('pointerdown', apeAudioUnlock);
+    renderer.xr.addEventListener('sessionstart', () => apeAudioUnlock());
+
     // ---------- XR session hooks ----------
     renderer.xr.addEventListener('sessionstart', () => {
       if (!titleActive) horrorAudio.start(); // backup in case the click handler didn't get to run (on the title screen PLAY starts it)
@@ -7114,6 +8175,7 @@
         updateGenerator(dt);
         horrorAudio.setGeneratorDistance(nearestRunningGeneratorDistance(_camWorld)); // engine sound from the nearest running generator
         updateCampExtras(dt); // cabin and boat lanterns flicker
+        updateSlasher(dt); // the chained slasher ape: patrol, stalk, hunt, and the machete takedown
         controllers.forEach(updatePointer);
       } catch (err) {
         if (!loopErrorReported) {
