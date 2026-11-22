@@ -65,6 +65,7 @@
     Right thumbstick left/right: 45° snap turn.<br />
     Desktop: drag to orbit, <b>F</b> toggles the flashlight (no locomotion).<br />
     Generator: hold Trigger or Grip on its yellow handle, then hit each skill check with the other Trigger (or A / X). Beat 5 to power the floodlights.<br />
+    Four generators are spread round the bigger campground (camp, cabin row, deep woods, lakeside ridge): power all 4 to light the whole camp.<br />
     Lake (east of camp): swim by sweeping your hands through the water. Find the 3 glowing boat parts, carry them with Grip and drop them at the boat's motor; then grab the wheel and use Trigger or the thumbstick to drive.<br />
     Ambient horror music starts when you press ENTER VR (headphones recommended).
   </div>
@@ -150,6 +151,7 @@
     import { VRButton } from 'three/addons/webxr/VRButton.js';
     import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
     window.__appStarted = true; // imports succeeded
 
     // ---------- Locomotion settings (names match Player.cs) ----------
@@ -255,11 +257,11 @@
     colliders.push({ box: new THREE.Box3(new THREE.Vector3(-50, -10, -50), new THREE.Vector3(50, 0, 50)) });
 
     // Invisible walls just inside the dense tree line, so you can never leave the forest
-    const WORLD_HALF = 19.3;
-    addBoxCollider(0, -1, -WORLD_HALF - 0.5, 60, 41, 1);
-    addBoxCollider(0, -1,  WORLD_HALF + 0.5, 60, 41, 1);
-    addBoxCollider(-WORLD_HALF - 0.5, -1, 0, 1, 41, 60);
-    addBoxCollider( WORLD_HALF + 0.5, -1, 0, 1, 41, 60);
+    const WORLD_HALF = 32;   // expanded campground (was 19.3)
+    addBoxCollider(0, -1, -WORLD_HALF - 0.5, 2 * WORLD_HALF + 4, 41, 1);
+    addBoxCollider(0, -1,  WORLD_HALF + 0.5, 2 * WORLD_HALF + 4, 41, 1);
+    addBoxCollider(-WORLD_HALF - 0.5, -1, 0, 1, 41, 2 * WORLD_HALF + 4);
+    addBoxCollider( WORLD_HALF + 0.5, -1, 0, 1, 41, 2 * WORLD_HALF + 4);
 
     // Seeded random so the forest is the same every visit
     function mulberry32(a) {
@@ -306,7 +308,7 @@
         const x = rr(0, s), y = rr(0, s);
         g.beginPath(); g.moveTo(x, y); g.lineTo(x + rr(-2, 2), y - rr(3, 7)); g.stroke();
       }
-    }, 14);
+    }, 26);   // ground texture tiling (was 14, for the bigger ground)
 
     const woodTex = canvasTexture(256, (g, s) => {
       g.fillStyle = '#3b2d21'; g.fillRect(0, 0, s, s);
@@ -353,8 +355,159 @@
     const roofMat   = new THREE.MeshStandardMaterial({ color: 0x1c1714, roughness: 1 });
     const plankMat  = new THREE.MeshStandardMaterial({ color: 0x4a3626, roughness: 0.9 });
 
+    // ---------- Shared helpers for the detailed props (cabins, generators, rocks, boat) ----------
+    // Batching: lots of small procedural parts are merged into one mesh per material, so the extra
+    // detail costs only a handful of draw calls in the headset.
+    const UNIT_BOX = new THREE.BoxGeometry(1, 1, 1);
+    const IDENTITY = new THREE.Matrix4();
+    const _bM = new THREE.Matrix4(), _bQ = new THREE.Quaternion(), _bE = new THREE.Euler(), _bP = new THREE.Vector3(), _bS = new THREE.Vector3();
+    function makeBatch() {
+      const lists = new Map();
+      return {
+        // add a geometry at a position, with an XYZ Euler rotation and a scale
+        add(geo, mat, x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0, sx = 1, sy = 1, sz = 1) {
+          _bM.compose(_bP.set(x, y, z), _bQ.setFromEuler(_bE.set(rx, ry, rz)), _bS.set(sx, sy, sz));
+          return this.addMatrix(geo, mat, _bM);
+        },
+        addMatrix(geo, mat, matrix) {
+          const g = geo.index ? geo.toNonIndexed() : geo.clone();
+          g.applyMatrix4(matrix);
+          for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal' && k !== 'uv') g.deleteAttribute(k);
+          if (!g.attributes.normal) g.computeVertexNormals();
+          if (!g.attributes.uv) g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2));
+          g.clearGroups();
+          if (!lists.has(mat)) lists.set(mat, []);
+          lists.get(mat).push(g);
+          return g;
+        },
+        build(parent, { castShadow = true, receiveShadow = true, rayTarget = false } = {}) {
+          const meshes = [];
+          for (const [mat, geos] of lists) {
+            const merged = mergeGeometries(geos, false);
+            for (const g of geos) g.dispose();
+            if (!merged) continue;
+            merged.computeBoundingSphere();
+            merged.computeBoundingBox();
+            const mesh = new THREE.Mesh(merged, mat);
+            mesh.castShadow = castShadow;
+            mesh.receiveShadow = receiveShadow;
+            parent.add(mesh);
+            if (rayTarget) rayTargets.push(mesh);
+            meshes.push(mesh);
+          }
+          lists.clear();
+          return meshes;
+        },
+      };
+    }
+
+    // Detail textures use their own seed, so they don't change the forest layout
+    const prng = mulberry32(90210), pr = (a, b) => a + prng() * (b - a);
+
+    // Worn metal: scratches, grime and rust streaks (used as colour map and roughness map)
+    const grimeTex = canvasTexture(128, (g, s) => {
+      g.fillStyle = '#d6d6d6'; g.fillRect(0, 0, s, s);
+      for (let i = 0; i < 1800; i++) {
+        const v = pr(110, 235) | 0;
+        g.fillStyle = `rgba(${v},${v},${v},${pr(0.2, 0.6).toFixed(2)})`;
+        g.fillRect(pr(0, s), pr(0, s), pr(1, 4), pr(1, 4));
+      }
+      for (let i = 0; i < 26; i++) {
+        g.fillStyle = `rgba(${pr(80, 120) | 0},${pr(50, 75) | 0},${pr(30, 45) | 0},${pr(0.2, 0.45).toFixed(2)})`;
+        g.fillRect(pr(0, s), pr(0, s * 0.6), pr(1, 3), pr(12, 60));
+      }
+      g.strokeStyle = 'rgba(250,250,250,0.35)';
+      for (let i = 0; i < 40; i++) { const x = pr(0, s), y = pr(0, s); g.beginPath(); g.moveTo(x, y); g.lineTo(x + pr(-12, 12), y + pr(-4, 4)); g.stroke(); }
+    });
+
+    // Lap siding: horizontal boards, lighter at the top, a dark groove under each one, knots and weathering
+    const sidingTex = canvasTexture(256, (g, s) => {
+      const rows = 8, ph = s / rows;
+      for (let r = 0; r < rows; r++) {
+        const v = pr(-10, 10) | 0;
+        const grd = g.createLinearGradient(0, r * ph, 0, (r + 1) * ph);
+        grd.addColorStop(0, `rgb(${78 + v},${59 + v},${42 + v})`); grd.addColorStop(1, `rgb(${46 + v},${34 + v},${24 + v})`);
+        g.fillStyle = grd; g.fillRect(0, r * ph, s, ph);
+        for (let k = 0; k < 14; k++) {
+          g.strokeStyle = `rgba(25,16,10,${pr(0.12, 0.35).toFixed(2)})`;
+          const y = r * ph + pr(2, ph - 4);
+          g.beginPath(); g.moveTo(0, y); g.bezierCurveTo(s * 0.3, y + pr(-2, 2), s * 0.6, y + pr(-2, 2), s, y); g.stroke();
+        }
+        for (let k = 0; k < 2; k++) { g.fillStyle = 'rgba(20,12,8,0.6)'; g.beginPath(); g.ellipse(pr(0, s), r * ph + ph / 2, pr(3, 6), pr(2, 3), 0, 0, Math.PI * 2); g.fill(); }
+        g.fillStyle = '#130c07'; g.fillRect(0, r * ph + ph - 3, s, 3);   // groove under the board
+        g.fillRect(pr(0, s) | 0, r * ph, 2, ph);                          // butt joint
+      }
+      for (let k = 0; k < 30; k++) { g.fillStyle = `rgba(0,0,0,${pr(0.04, 0.14).toFixed(2)})`; g.fillRect(pr(0, s), 0, pr(1, 4), s); }
+    });
+    sidingTex.repeat.set(1, 2);
+    const sidingBump = canvasTexture(256, (g, s) => {
+      const rows = 8, ph = s / rows;
+      for (let r = 0; r < rows; r++) {
+        const grd = g.createLinearGradient(0, r * ph, 0, (r + 1) * ph);
+        grd.addColorStop(0, '#ffffff'); grd.addColorStop(0.85, '#9a9a9a'); grd.addColorStop(1, '#000000');
+        g.fillStyle = grd; g.fillRect(0, r * ph, s, ph);
+      }
+    });
+    sidingBump.repeat.set(1, 2);
+
+    // Staggered roof shingles with dark gaps and a little moss
+    const shingleTex = canvasTexture(256, (g, s) => {
+      g.fillStyle = '#100d0b'; g.fillRect(0, 0, s, s);
+      const rows = 8, rh = s / rows, cols = 6, cw = s / cols;
+      for (let r = 0; r < rows; r++) {
+        const off = (r % 2) * cw / 2;
+        for (let c = -1; c <= cols; c++) {
+          const v = pr(-9, 9) | 0, x = c * cw + off + pr(-2, 2);
+          g.fillStyle = `rgb(${50 + v},${44 + v},${40 + v})`;
+          g.fillRect(x + 2, r * rh + 1, cw - 4, rh - 2);
+          const grd = g.createLinearGradient(0, r * rh + rh * 0.6, 0, r * rh + rh);
+          grd.addColorStop(0, 'rgba(0,0,0,0)'); grd.addColorStop(1, 'rgba(0,0,0,0.55)');
+          g.fillStyle = grd; g.fillRect(x + 2, r * rh + 1, cw - 4, rh - 2);
+          if (prng() < 0.2) { g.fillStyle = 'rgba(50,70,30,0.5)'; g.fillRect(x + pr(4, cw - 10), r * rh + pr(2, rh - 6), pr(3, 8), pr(2, 4)); }
+        }
+      }
+    });
+    shingleTex.repeat.set(3, 2);
+
+    // A fern frond on a transparent background (alpha-tested, so it costs no blending)
+    const fernTex = (() => {
+      const c = document.createElement('canvas');
+      c.width = 64; c.height = 128;
+      const g = c.getContext('2d');
+      g.strokeStyle = '#2c3f1c'; g.lineWidth = 2;
+      g.beginPath(); g.moveTo(32, 128); g.lineTo(32, 4); g.stroke();
+      for (let y = 120; y > 6; y -= 6) {
+        const t = 1 - y / 128, len = 26 * Math.sin(Math.PI * Math.min(1, t * 1.15)) + 3;
+        for (const s of [-1, 1]) {
+          g.fillStyle = `rgb(${(38 + t * 20) | 0},${(70 + t * 30) | 0},${(28 + t * 10) | 0})`;
+          g.beginPath(); g.ellipse(32 + s * len / 2, y - 2, len / 2, 2.6, s * -0.35, 0, Math.PI * 2); g.fill();
+        }
+      }
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    })();
+
+    // Detail materials
+    const sidingMat   = new THREE.MeshStandardMaterial({ map: sidingTex, bumpMap: sidingBump, bumpScale: 2, roughness: 0.92 });
+    const shingleMat  = new THREE.MeshStandardMaterial({ map: shingleTex, bumpMap: shingleTex, bumpScale: 1.5, roughness: 0.95 });
+    const trimMat     = new THREE.MeshStandardMaterial({ color: 0x2e2118, roughness: 0.85 });
+    const stoneMat    = new THREE.MeshStandardMaterial({ color: 0x45433f, roughness: 0.95, flatShading: true });
+    const clothMat    = new THREE.MeshStandardMaterial({ color: 0x23301f, roughness: 1 });
+    const ironMat     = new THREE.MeshStandardMaterial({ color: 0x26282a, map: grimeTex, roughness: 0.6, metalness: 0.7 });
+    const mossTopMat  = new THREE.MeshStandardMaterial({ color: 0x34502a, roughness: 1, flatShading: true });
+    const fernMat     = new THREE.MeshStandardMaterial({ map: fernTex, alphaTest: 0.5, side: THREE.DoubleSide, roughness: 0.9 });
+    const genPaintMat = new THREE.MeshStandardMaterial({ color: 0x5c6a2c, map: grimeTex, roughnessMap: grimeTex, roughness: 0.85, metalness: 0.35 });
+    const genSteelMat = new THREE.MeshStandardMaterial({ color: 0x3a3e42, map: grimeTex, roughnessMap: grimeTex, roughness: 0.7, metalness: 0.75 });
+    const genEngineMat = new THREE.MeshStandardMaterial({ color: 0x222325, map: grimeTex, roughness: 0.6, metalness: 0.7 });
+    const genTankMat  = new THREE.MeshStandardMaterial({ color: 0x8a2618, map: grimeTex, roughnessMap: grimeTex, roughness: 0.55, metalness: 0.45 });
+    const genRustMat  = new THREE.MeshStandardMaterial({ color: 0x6b3f26, map: grimeTex, roughness: 0.9, metalness: 0.5 });
+    const genYellowMat = new THREE.MeshStandardMaterial({ color: 0xe0b020, emissive: 0x3a2800, roughness: 0.5 });
+    const cableMat    = new THREE.MeshStandardMaterial({ color: 0x121212, roughness: 0.55 });
+    const brassMat    = new THREE.MeshStandardMaterial({ color: 0x9a7a3a, roughness: 0.4, metalness: 0.8 });
+
     // ---------- Ground: dark dirt + grass ----------
-    const ground = new THREE.Mesh(new THREE.PlaneGeometry(60, 60),
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(110, 110),
       new THREE.MeshStandardMaterial({ map: groundTex, roughness: 1 }));
     ground.rotation.x = -Math.PI / 2;
     ground.receiveShadow = true;
@@ -372,6 +525,26 @@
     const WATER_LEVEL = 0.6;                                         // water surface height (m)
     const DOCK = { x0: 3.5, x1: 7.4, z0: 0.4, z1: 1.6 };            // wooden dock reaching into the lake
     const REPAIR_SPOTS = { gas: [1.9, -6.2], prop: [-3.6, -4.9], plug: [-3.25, 0.25] }; // boat parts: cabin, tents, generator
+    // Expanded campground landmarks (cabins face their doors towards: S = +z, N = -z, E = +x, W = -x)
+    const CABINS = [
+      { x: -15, z: -15, face: 'S' },   // cabin row, north-west
+      { x: 16,  z: -17, face: 'S' },   // north-east, past the lake
+      { x: -21, z: 9,   face: 'E' },   // west woods
+      { x: 18,  z: 18,  face: 'W' },   // south-east
+    ];
+    const RIDGE = { x: 19.6, z: 1.5, w: 4, d: 6.5, h: 0.35 };       // raised lakeside ridge east of the lake
+    const WOODS_CLEARING = { x: -4, z: 21, r: 2.6 };                  // deep woods clearing in the south
+    const TITLE_CLEARING = { x: 0, z: 47, r: 5.5 };                   // the title screen's start area, past the southern tree line
+    // The four generators: the original camp one plus three more. aim = where the floodlights point.
+    const GEN_SITES = [
+      { name: 'CAMP',           pos: GEN_POS, rot: 0, floods: FLOOD_POS, aim: [FIRE.x, FIRE.z], realLights: 3 },
+      { name: 'CABIN ROW',      pos: new THREE.Vector3(-11, 0, -10.5), rot: 0, floods: [[-13, -9.4], [-9.4, -12.6]], aim: [-13.5, -12.2], realLights: 1 },
+      { name: 'DEEP WOODS',     pos: new THREE.Vector3(WOODS_CLEARING.x, 0, WOODS_CLEARING.z), rot: Math.PI / 2,
+        floods: [[-6.4, 19.2], [-1.6, 22.8]], aim: [WOODS_CLEARING.x, WOODS_CLEARING.z], realLights: 1 },
+      { name: 'LAKESIDE RIDGE', pos: new THREE.Vector3(RIDGE.x, RIDGE.h, RIDGE.z), rot: Math.PI,
+        floods: [[18.3, -1.2], [18.3, 4.2]], aim: [16.2, 1.5], realLights: 1, floodBase: RIDGE.h },
+    ];
+    const nearCabin = (x, z, r) => CABINS.some((c) => Math.hypot(x - c.x, z - c.z) < r);
 
     // Bare trampled dirt around the fire
     const clearing = new THREE.Mesh(new THREE.CircleGeometry(5.5 * S, 48),
@@ -392,6 +565,11 @@
       { x: (LAKE.x0 + LAKE.x1) / 2, z: (LAKE.z0 + LAKE.z1) / 2, r: 7.2 }, // lake + banks: keep trees/rocks/logs out
       { x: (DOCK.x0 + DOCK.x1) / 2 - 1, z: (DOCK.z0 + DOCK.z1) / 2, r: 1.6 }, // dock steps
       ...Object.values(REPAIR_SPOTS).map(([x, z]) => ({ x, z, r: 0.5 })), // boat repair parts
+      ...CABINS.map((c) => ({ x: c.x, z: c.z, r: 3.3 })),                         // the four new cabins (with porches)
+      ...GEN_SITES.slice(1).map((s) => ({ x: s.pos.x, z: s.pos.z, r: 1.0 })),     // the three new generators
+      ...GEN_SITES.slice(1).flatMap((s) => s.floods.map(([x, z]) => ({ x, z, r: 0.5 }))), // their floodlight poles
+      { x: RIDGE.x, z: RIDGE.z, r: 4.0 },                                          // lakeside ridge
+      { x: WOODS_CLEARING.x, z: WOODS_CLEARING.z, r: WOODS_CLEARING.r + 0.6 },      // deep woods clearing
     ];
     function findSpot(radius, range = WORLD_HALF - 1.5, tries = 60) {
       for (let i = 0; i < tries; i++) {
@@ -406,15 +584,16 @@
 
     // ---------- Pine trees (instanced: one draw call for all trunks, one for all needles) ----------
     const trees = [];
-    for (let i = 0; i < 30; i++) { // climbable pines scattered through the woods
+    for (let i = 0; i < 80; i++) { // climbable pines scattered through the woods (was 30)
       const r = rr(0.22, 0.38);
       const spot = findSpot(1.2);
       if (spot) trees.push({ ...spot, h: rr(8, 13), r, solid: true });
     }
     let perimeterCount = 0;
-    while (perimeterCount < 190) { // dense tree line around the edge
-      const x = rr(-26, 26), z = rr(-26, 26);
+    while (perimeterCount < 460) { // dense tree line around the edge (was 190)
+      const x = rr(-44, 44), z = rr(-44, 44);
       if (Math.max(Math.abs(x), Math.abs(z)) < WORLD_HALF + 0.4) continue;
+      if (Math.hypot(x - TITLE_CLEARING.x, z - TITLE_CLEARING.z) < TITLE_CLEARING.r) continue; // keep the title screen's clearing open
       trees.push({ x, z, h: rr(9, 16), r: rr(0.25, 0.45), solid: false });
       perimeterCount++;
     }
@@ -452,7 +631,7 @@
     // ---------- Grass tufts (instanced, no collision) ----------
     {
       const tuftGeo = new THREE.ConeGeometry(0.035, 0.28, 4); tuftGeo.translate(0, 0.14, 0);
-      const tufts = new THREE.InstancedMesh(tuftGeo, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1 }), 2200);
+      const tufts = new THREE.InstancedMesh(tuftGeo, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1 }), 6000);
       const m = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), s = new THREE.Vector3();
       const e = new THREE.Euler(), col = new THREE.Color();
       let n = 0;
@@ -461,6 +640,7 @@
         if (Math.hypot(x - FIRE.x, z - FIRE.z) < 5.8 * S) continue;
         if (Math.abs(x - CABIN.x) < CABIN.w / 2 + 0.3 && Math.abs(z - CABIN.z) < CABIN.d / 2 + 0.3) continue;
         if (x > LAKE.x0 - 0.8 && x < LAKE.x1 + 0.8 && z > LAKE.z0 - 0.8 && z < LAKE.z1 + 0.8) continue; // no grass in the lake
+        if (nearCabin(x, z, 2.7)) continue;                                // no grass through the new cabins' floors
         const sc = rr(0.6, 1.6);
         q.setFromEuler(e.set(rr(-0.25, 0.25), rr(0, 6.3), rr(-0.25, 0.25)));
         m.compose(p.set(x, 0, z), q, s.set(sc, sc, sc));
@@ -474,30 +654,133 @@
       scene.add(tufts);
     }
 
-    // ---------- Boulders ----------
-    for (let i = 0; i < 14; i++) {
-      const sx = rr(0.5, 1.4) * S, sy = rr(0.4, 1.1) * S, sz = rr(0.5, 1.3) * S;
-      const spot = findSpot(Math.max(sx, sz) + 0.3);
-      if (!spot) continue;
-      const geo = new THREE.DodecahedronGeometry(1, 1);
-      const pos = geo.attributes.position;
-      for (let v = 0; v < pos.count; v++) { // lumpy rock
-        const k = 1 + rr(-0.12, 0.12);
-        pos.setXYZ(v, pos.getX(v) * k, pos.getY(v) * k, pos.getZ(v) * k);
+    // ---------- Rock clusters: jagged faceted boulders with layered moss on top, pebbles and ferns around them ----------
+    // A dodecahedron pushed out of shape: big smooth lumps plus a random jag per corner. The same corner always gets
+    // the same push, so the faces stay closed; flat normals keep it faceted.
+    function jaggedRock(detail, sx, sy, sz, ry, seed) {
+      const geo = new THREE.DodecahedronGeometry(1, detail);
+      const pos = geo.attributes.position, v = new THREE.Vector3();
+      const hash = (x, y, z) => { const h = Math.sin(x * 127.1 + y * 311.7 + z * 74.7 + seed * 19.3) * 43758.5453; return h - Math.floor(h); };
+      for (let i = 0; i < pos.count; i++) {
+        v.fromBufferAttribute(pos, i);
+        const kx = Math.round(v.x * 1000) / 1000, ky = Math.round(v.y * 1000) / 1000, kz = Math.round(v.z * 1000) / 1000;
+        const lump = 1 + 0.18 * Math.sin(kx * 2.1 + seed * 1.7) * Math.sin(ky * 2.7 + seed * 2.3) + 0.12 * Math.sin(kz * 3.3 + seed * 3.1);
+        v.set(kx, ky, kz).multiplyScalar(lump * (1 + (hash(kx, ky, kz) - 0.5) * 0.3));
+        if (v.y < -0.35) v.y = -0.35 + (v.y + 0.35) * 0.2;   // flattened base, sunk into the dirt
+        pos.setXYZ(i, v.x, v.y, v.z);
       }
+      geo.scale(sx, sy, sz);
+      geo.rotateY(ry);
       geo.computeVertexNormals();
-      const rock = new THREE.Mesh(geo, rockMat);
-      rock.scale.set(sx, sy, sz);
-      rock.position.set(spot.x, sy * 0.35, spot.z); // partly buried
-      rock.rotation.y = rr(0, Math.PI * 2);
-      rock.castShadow = rock.receiveShadow = true;
-      scene.add(rock);
-      rayTargets.push(rock);
-      rock.updateMatrixWorld();
-      // collider: the rock's bounding box shrunk a little so hands meet roughly the rock surface
-      const bb = new THREE.Box3().setFromObject(rock);
-      const c = bb.getCenter(new THREE.Vector3()), size = bb.getSize(new THREE.Vector3());
-      addBoxCollider(c.x, 0, c.z, size.x * 0.8, bb.max.y * 0.92, size.z * 0.8);
+      return geo;
+    }
+    // Moss: the upward-facing faces of a rock, lifted a little off the surface, in patches. Two layers for thickness.
+    function mossCap(rockGeo, seed, minUp, lift) {
+      const src = rockGeo.attributes.position, out = [];
+      const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), n = new THREE.Vector3(), e = new THREE.Vector3();
+      for (let i = 0; i + 2 < src.count; i += 3) {
+        a.fromBufferAttribute(src, i); b.fromBufferAttribute(src, i + 1); c.fromBufferAttribute(src, i + 2);
+        n.subVectors(b, a).cross(e.subVectors(c, a)).normalize();
+        const cx = (a.x + b.x + c.x) / 3, cz = (a.z + b.z + c.z) / 3;
+        if (n.y < minUp || Math.sin(cx * 7 + seed) * Math.sin(cz * 6.1 + seed * 2) < -0.3) continue;
+        for (const p of [a, b, c]) out.push(p.x + n.x * lift, p.y + n.y * lift, p.z + n.z * lift);
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(out, 3));
+      g.computeVertexNormals();
+      return g;
+    }
+    // One fern: seven bent fronds round a centre (instanced below)
+    const fernGeo = (() => {
+      const parts = [];
+      for (let k = 0; k < 7; k++) {
+        const f = new THREE.PlaneGeometry(0.09, 0.32, 1, 5);
+        const p = f.attributes.position;
+        for (let i = 0; i < p.count; i++) {
+          const t = (p.getY(i) + 0.16) / 0.32;              // 0 at the base, 1 at the tip
+          p.setXYZ(i, p.getX(i) * (1 - t * 0.5), t * 0.32, t * t * 0.14);
+        }
+        f.rotateX(-0.75 - (k % 2) * 0.25);
+        f.rotateY((k / 7) * Math.PI * 2);
+        parts.push(f.toNonIndexed());
+      }
+      const g = mergeGeometries(parts, false);
+      g.computeVertexNormals();
+      return g;
+    })();
+    const rockRayProxies = new THREE.MeshBasicMaterial();
+    {
+      const rockBatch = makeBatch();
+      const pebbleM = [], fernM = [];
+      const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), p = new THREE.Vector3(), s = new THREE.Vector3();
+      const box = new THREE.Box3(), cen = new THREE.Vector3(), size = new THREE.Vector3();
+      const addRock = (x, z, sx, sy, sz, detail, solid) => {
+        const seed = rr(0, 100);
+        const geo = jaggedRock(detail, sx, sy, sz, rr(0, Math.PI * 2), seed);
+        geo.translate(x, sy * 0.35, z);                     // partly buried
+        rockBatch.addMatrix(geo, rockMat, IDENTITY);
+        rockBatch.addMatrix(mossCap(geo, seed, 0.45, 0.012), mossTopMat, IDENTITY);
+        rockBatch.addMatrix(mossCap(geo, seed + 3, 0.75, 0.026), mossTopMat, IDENTITY);
+        if (!solid) return;
+        geo.computeBoundingBox();
+        box.copy(geo.boundingBox); box.getCenter(cen); box.getSize(size);
+        // collider: the rock's bounding box shrunk a little so hands meet roughly the rock surface
+        addBoxCollider(cen.x, 0, cen.z, size.x * 0.8, box.max.y * 0.92, size.z * 0.8);
+        // invisible box so the pointer rays stop at the rock (the visible rocks are all one merged mesh)
+        const proxy = new THREE.Mesh(UNIT_BOX, rockRayProxies);
+        proxy.visible = false;
+        proxy.scale.set(size.x * 0.8, box.max.y * 0.92, size.z * 0.8);
+        proxy.position.set(cen.x, box.max.y * 0.46, cen.z);
+        scene.add(proxy);
+        rayTargets.push(proxy);
+      };
+      const addFern = (x, z, sc) => {
+        m4.compose(p.set(x, 0, z), q.setFromEuler(e.set(0, rr(0, 6.3), 0)), s.set(sc, sc * rr(0.8, 1.2), sc));
+        fernM.push(m4.clone());
+      };
+      for (let i = 0; i < 30; i++) {
+        const sx = rr(0.5, 1.4) * S, sy = rr(0.4, 1.1) * S, sz = rr(0.5, 1.3) * S;
+        const spot = findSpot(Math.max(sx, sz) + 0.5);
+        if (!spot) continue;
+        const R = Math.max(sx, sz);
+        addRock(spot.x, spot.z, sx, sy, sz, 1, true);
+        const sat = 1 + Math.floor(rng() * 3);                // smaller rocks huddled round the big one
+        for (let k = 0; k < sat; k++) {
+          const a = rr(0, Math.PI * 2), d = R * rr(0.95, 1.35), f = rr(0.25, 0.5);
+          addRock(spot.x + Math.cos(a) * d, spot.z + Math.sin(a) * d, sx * f, sy * f, sz * f, rng() < 0.5 ? 0 : 1, R * f > 0.15);
+        }
+        const peb = 6 + Math.floor(rng() * 6);                 // loose pebbles
+        for (let k = 0; k < peb; k++) {
+          const a = rr(0, Math.PI * 2), d = R * rr(0.8, 1.9), sc = rr(0.02, 0.06);
+          m4.compose(p.set(spot.x + Math.cos(a) * d, sc * 0.4, spot.z + Math.sin(a) * d),
+                     q.setFromEuler(e.set(rr(0, 3), rr(0, 3), rr(0, 3))), s.set(sc, sc * rr(0.5, 0.9), sc));
+          pebbleM.push(m4.clone());
+        }
+        const fe = 1 + Math.floor(rng() * 3);                  // ferns at the foot of the rocks
+        for (let k = 0; k < fe; k++) {
+          const a = rr(0, Math.PI * 2), d = R * rr(0.9, 1.5);
+          addFern(spot.x + Math.cos(a) * d, spot.z + Math.sin(a) * d, rr(0.6, 1.1));
+        }
+      }
+      // more ferns round the bases of the climbable trees
+      for (const t of trees) {
+        if (!t.solid || rng() < 0.35) continue;
+        const a = rr(0, Math.PI * 2), d = t.r * 1.7 + rr(0.15, 0.5);
+        addFern(t.x + Math.cos(a) * d, t.z + Math.sin(a) * d, rr(0.5, 1.0));
+      }
+      rockBatch.build(scene);                                  // every rock and moss patch: 2 draw calls in total
+      const pebbles = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(1, 0), rockMat, pebbleM.length);
+      pebbleM.forEach((m, i) => pebbles.setMatrixAt(i, m));
+      pebbles.instanceMatrix.needsUpdate = true;
+      pebbles.computeBoundingSphere();
+      pebbles.receiveShadow = true;
+      scene.add(pebbles);
+      const ferns = new THREE.InstancedMesh(fernGeo, fernMat, fernM.length);
+      fernM.forEach((m, i) => ferns.setMatrixAt(i, m));
+      ferns.instanceMatrix.needsUpdate = true;
+      ferns.computeBoundingSphere();
+      ferns.receiveShadow = true;
+      scene.add(ferns);
     }
 
     // ---------- Fallen logs (lying along x or z so their box collider fits) & stumps ----------
@@ -511,7 +794,7 @@
       addBoxCollider(x, 0, z, alongX ? len : r * 2, r * 2, alongX ? r * 2 : len, slipPercentage);
       return log;
     }
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 16; i++) {   // (was 8)
       const len = rr(2.5, 5) * S, r = rr(0.2, 0.35) * S;
       const spot = findSpot(len / 2 + 0.3);
       if (spot) addLog(spot.x, spot.z, len, r, rng() < 0.5);
@@ -520,7 +803,7 @@
       const spot = findSpot(2.4 * S);
       if (spot) addLog(spot.x, spot.z, 4 * S, 0.3 * S, true, mossMat, 0.7);
     }
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 12; i++) {   // (was 6)
       const spot = findSpot(0.7);
       if (!spot) continue;
       const r = rr(0.25, 0.45) * S, h = rr(0.3, 0.7) * S;
@@ -639,6 +922,154 @@
       cabinLanternMesh = lantern;
     }
 
+    // =====================================================================
+    //  Four more cabins around the expanded campground: lap-siding walls, shingled gable roof, front porch
+    //  with posts, railings and a step, framed windows lit from inside, a flickering lantern, a chimney.
+    //  Every solid part has a box collider, so you can climb in through the door, onto the porch and up the roof.
+    //  Each cabin is built from small parts merged into one mesh per material (a few draw calls per cabin).
+    // =====================================================================
+    const CABIN_FACE = { S: 0, E: Math.PI / 2, N: Math.PI, W: -Math.PI / 2 };
+    const cabinLights = [];   // flickering lantern glow per cabin (updated in updateCampExtras)
+    function buildCabin({ x: cx, z: cz, face }) {
+      const ry = CABIN_FACE[face], cs = Math.cos(ry), sn = Math.sin(ry), swap = face === 'E' || face === 'W';
+      const group = new THREE.Group();
+      group.position.set(cx, 0, cz);
+      group.rotation.y = ry;
+      scene.add(group);
+      const batch = makeBatch();
+      const glowMat = new THREE.MeshStandardMaterial({ color: 0x2a1a08, emissive: 0xffa040, emissiveIntensity: 0.7, roughness: 0.4 });
+      // collider from cabin-local coordinates (door faces local +z); rotations are 90° steps so boxes stay axis-aligned
+      const col = (lx, y0, lz, w, h, d) =>
+        addBoxCollider(cx + lx * cs + lz * sn, y0, cz - lx * sn + lz * cs, swap ? d : w, h, swap ? w : d);
+      const box = (mat, lx, y0, lz, w, h, d, solid = true) => {
+        batch.add(UNIT_BOX, mat, lx, y0 + h / 2, lz, 0, 0, 0, w, h, d);
+        if (solid) col(lx, y0, lz, w, h, d);
+      };
+
+      const W = 3.0, D = 2.5, T = 0.1, FL = 0.12, H = 1.62;       // footprint, wall thickness, floor height, wall top
+      const DOOR_W = 0.85, DOOR_H = FL + 1.25;                      // doorway (you fit through standing up)
+      const RISE = 0.75, OVER = 0.22, DROP = RISE * OVER / (D / 2); // roof pitch, eave overhang, eave drop below the wall top
+      const PD = 0.9, PW = W + 0.1, PH = 1.35;                      // porch depth, width, porch-roof eave height
+
+      // stone foundation, floor (solid) and floorboards
+      box(stoneMat, 0, 0, 0, W + 0.08, FL - 0.015, D + 0.08, false);
+      col(0, 0, 0, W, FL, D);
+      box(woodMat, 0, FL - 0.012, 0, W - 2 * T, 0.012, D - 2 * T, false);
+
+      // walls (lap siding) with an open doorway in the front
+      box(sidingMat, 0, 0, -D / 2 + T / 2, W, H, T);                        // back
+      box(sidingMat, -W / 2 + T / 2, 0, 0, T, H, D - 2 * T);                // left
+      box(sidingMat, W / 2 - T / 2, 0, 0, T, H, D - 2 * T);                 // right
+      const seg = (W - DOOR_W) / 2;
+      box(sidingMat, -W / 2 + seg / 2, 0, D / 2 - T / 2, seg, H, T);        // front, left of the door
+      box(sidingMat, W / 2 - seg / 2, 0, D / 2 - T / 2, seg, H, T);         // front, right of the door
+      box(sidingMat, 0, DOOR_H, D / 2 - T / 2, DOOR_W, H - DOOR_H, T);      // lintel
+      // corner boards and door frame trim
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) box(trimMat, sx * (W / 2 - 0.02), 0, sz * (D / 2 - 0.02), 0.13, H, 0.13, false);
+      for (const sx of [-1, 1]) box(trimMat, sx * (DOOR_W / 2 + 0.04), FL, D / 2 + 0.01, 0.08, DOOR_H - FL + 0.08, 0.04, false);
+      box(trimMat, 0, DOOR_H, D / 2 + 0.01, DOOR_W + 0.16, 0.08, 0.04, false);
+      box(trimMat, 0, FL, D / 2 - 0.05, DOOR_W, 0.02, T + 0.1, false);         // threshold
+
+      // pitched, shingled main roof (ridge runs along the cabin's width), ridge cap and gable ends
+      const slopeLen = Math.hypot(D / 2 + OVER, RISE + DROP), ang = Math.atan2(RISE + DROP, D / 2 + OVER);
+      for (const side of [1, -1]) {
+        batch.add(UNIT_BOX, shingleMat, 0, H - DROP + (RISE + DROP) / 2, side * (D / 2 + OVER) / 2, side * ang, 0, 0, W + 0.4, 0.07, slopeLen);
+        batch.add(UNIT_BOX, trimMat, 0, H - DROP - 0.02, side * (D / 2 + OVER - 0.02), 0, 0, 0, W + 0.42, 0.06, 0.05); // fascia board
+      }
+      batch.add(UNIT_BOX, trimMat, 0, H + RISE + 0.02, 0, 0, 0, 0, W + 0.45, 0.07, 0.14);
+      const gable = new THREE.Shape();
+      gable.moveTo(-D / 2, 0); gable.lineTo(D / 2, 0); gable.lineTo(0, RISE); gable.closePath();
+      const gableGeo = new THREE.ExtrudeGeometry(gable, { depth: T, bevelEnabled: false });
+      gableGeo.rotateY(Math.PI / 2);
+      for (const lx of [W / 2 - T, -W / 2]) batch.add(gableGeo, sidingMat, lx, H, 0);
+      // roof colliders: stepped boxes up to the ridge, so you can climb onto the roof
+      const step = RISE / 4;
+      [1, 0.66, 0.4, 0.15].forEach((f, k) => col(0, H + k * step, 0, W + 0.2, step, (D + 2 * OVER) * f));
+
+      // stone chimney behind the back wall
+      box(stoneMat, W / 2 - 0.55, 0, -D / 2 - 0.2, 0.4, H + RISE * 0.7 + 0.35, 0.38);
+      box(stoneMat, W / 2 - 0.55, H + RISE * 0.7 + 0.35, -D / 2 - 0.2, 0.46, 0.06, 0.44, false);
+
+      // front porch: deck, step, posts, railings with balusters (gap at the steps), and its own shingled roof
+      const pz0 = D / 2, pz1 = D / 2 + PD, pzc = (pz0 + pz1) / 2;
+      box(woodMat, 0, 0, pzc, PW, FL, PD);
+      box(woodMat, 0, 0, pz1 + 0.14, 1.0, FL * 0.5, 0.28);
+      for (const sx of [-1, 1]) box(trimMat, sx * (PW / 2 - 0.05), FL, pz1 - 0.05, 0.08, PH - FL, 0.08);
+      const RH = 0.42, GAP = 0.55;
+      for (const sx of [-1, 1]) {
+        // front rail, from the step gap to the corner post
+        const xa = GAP, xb = PW / 2 - 0.05, w = xb - xa, xm = sx * (xa + w / 2);
+        box(trimMat, xm, FL + RH, pz1 - 0.05, w, 0.05, 0.06, false);
+        box(trimMat, xm, FL + 0.08, pz1 - 0.05, w, 0.04, 0.04, false);
+        for (let k = 1; k < 8; k++) box(trimMat, sx * (xa + (w * k) / 8), FL + 0.08, pz1 - 0.05, 0.025, RH - 0.08, 0.025, false);
+        col(xm, FL, pz1 - 0.05, w, RH + 0.05, 0.07);
+        // side rail, from the wall to the corner post
+        const zl = PD - 0.1, zm = pz0 + zl / 2, xs = sx * (PW / 2 - 0.05);
+        box(trimMat, xs, FL + RH, zm, 0.06, 0.05, zl, false);
+        box(trimMat, xs, FL + 0.08, zm, 0.04, 0.04, zl, false);
+        for (let k = 1; k < 6; k++) box(trimMat, xs, FL + 0.08, pz0 + (zl * k) / 6, 0.025, RH - 0.08, 0.025, false);
+        col(xs, FL, zm, 0.07, RH + 0.05, zl);
+      }
+      const pTop = H - 0.16, pLen = Math.hypot(PD + 0.15, pTop - PH), pAng = Math.atan2(pTop - PH, PD + 0.15);
+      batch.add(UNIT_BOX, shingleMat, 0, (pTop + PH) / 2 + 0.035, pz0 + (PD + 0.15) / 2, pAng, 0, 0, PW + 0.2, 0.06, pLen);
+      batch.add(UNIT_BOX, trimMat, 0, PH - 0.03, pz1 - 0.05, 0, 0, 0, PW + 0.05, 0.08, 0.08);  // porch beam on the posts
+      col(0, PH, pzc + 0.07, PW + 0.2, 0.12, PD + 0.15);
+
+      // framed windows on both sides and the back: glass glows from the lantern inside
+      const win = (lx, lz, nx, nz) => {
+        const ry2 = Math.atan2(nx, nz), wy = 0.95, ww = 0.5, wh = 0.42;
+        const ax = nz, az = -nx;                              // along the wall
+        const glass = new THREE.PlaneGeometry(ww, wh);
+        batch.add(glass, glowMat, lx + nx * 0.004, wy, lz + nz * 0.004, 0, ry2, 0);                       // outside pane
+        batch.add(glass, glowMat, lx - nx * (T + 0.004), wy, lz - nz * (T + 0.004), 0, ry2 + Math.PI, 0); // inside pane
+        const ox = lx + nx * 0.02, oz = lz + nz * 0.02;
+        batch.add(UNIT_BOX, trimMat, ox, wy + wh / 2 + 0.03, oz, 0, ry2, 0, ww + 0.12, 0.06, 0.04);         // head
+        batch.add(UNIT_BOX, trimMat, ox + nx * 0.02, wy - wh / 2 - 0.03, oz + nz * 0.02, 0, ry2, 0, ww + 0.16, 0.05, 0.08); // sill
+        for (const s of [-1, 1]) batch.add(UNIT_BOX, trimMat, ox + ax * s * (ww / 2 + 0.03), wy, oz + az * s * (ww / 2 + 0.03), 0, ry2, 0, 0.06, wh + 0.12, 0.04);
+        batch.add(UNIT_BOX, trimMat, ox, wy, oz, 0, ry2, 0, ww, 0.025, 0.03);   // mullions
+        batch.add(UNIT_BOX, trimMat, ox, wy, oz, 0, ry2, 0, 0.025, wh, 0.03);
+      };
+      win(W / 2, 0, 1, 0);
+      win(-W / 2, 0, -1, 0);
+      win(-0.6, -D / 2, 0, -1);
+
+      // inside: a table with a lantern, a cot with a blanket, a crate
+      const tx = 0.75, tz = -0.55;
+      box(trimMat, tx, FL + 0.42, tz, 0.62, 0.04, 0.46, false);
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) box(trimMat, tx + sx * 0.26, FL, tz + sz * 0.18, 0.04, 0.42, 0.04, false);
+      col(tx, FL, tz, 0.62, 0.46, 0.46);
+      box(trimMat, -0.85, FL, -0.35, 0.72, 0.26, 1.45);
+      box(clothMat, -0.85, FL + 0.26, -0.3, 0.68, 0.06, 1.3, false);
+      box(woodMat, 1.0, FL, 0.55, 0.34, 0.34, 0.34);
+      const lantern = (lx, ly, lz) => {
+        batch.add(new THREE.CylinderGeometry(0.05, 0.055, 0.025, 10), ironMat, lx, ly + 0.012, lz);
+        batch.add(new THREE.CylinderGeometry(0.035, 0.035, 0.1, 10), glowMat, lx, ly + 0.075, lz);
+        for (let k = 0; k < 4; k++) {
+          const a = (k / 4) * Math.PI * 2 + 0.4;
+          batch.add(new THREE.CylinderGeometry(0.004, 0.004, 0.11, 4), ironMat, lx + Math.cos(a) * 0.04, ly + 0.075, lz + Math.sin(a) * 0.04);
+        }
+        batch.add(new THREE.ConeGeometry(0.05, 0.04, 10), ironMat, lx, ly + 0.145, lz);
+        batch.add(new THREE.TorusGeometry(0.02, 0.003, 4, 10), ironMat, lx, ly + 0.18, lz);
+      };
+      lantern(tx, FL + 0.46, tz);
+      lantern(PW / 2 - 0.2, PH - 0.32, pz1 - 0.05);            // porch lantern hanging from the porch beam
+
+      batch.build(group, { rayTarget: true });
+
+      // lantern glows (sprites, no real lights: keeps the headset frame rate up)
+      group.updateMatrixWorld(true);
+      const sprites = [[tx, FL + 0.54, tz, 0.9], [PW / 2 - 0.2, PH - 0.24, pz1 - 0.05, 0.6]].map(([lx, ly, lz, sc]) => {
+        const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xffa040, transparent: true, opacity: 0.5,
+          blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+        s.scale.set(sc, sc, 1);
+        s.position.copy(group.localToWorld(new THREE.Vector3(lx, ly, lz)));
+        scene.add(s);
+        return s;
+      });
+      cabinLights.push({ mat: glowMat, sprites, phase: Math.random() * 10, dip: 1 });
+    }
+    CABINS.forEach(buildCabin);
+
     // ---------- Campfire: stones, burning logs, flames, glow, flickering light and embers ----------
     const fire = new THREE.Group();
     fire.position.copy(FIRE);
@@ -748,264 +1179,499 @@
 
 
     // =====================================================================
-    //  Old metal generator: grab the handle, beat 3 skill checks, power the floodlights
+    //  Old metal generators: grab the yellow handle, beat 5 skill checks, power that generator's floodlights.
+    //  The camp generator plus three more around the expanded campground (4 in total). Every one runs the
+    //  same escalating 5-step minigame with its own progress, dial, status light and floodlights; a shared
+    //  counter ("Generators Powered: n/4") is shown on each generator's sign and as a pop-up in the headset.
     // =====================================================================
     const GEN_CHECKS_NEEDED = 5;
     // Per check (1st..5th): each one is narrower and faster than the last
     const NEEDLE_TURN_TIMES = [1.3, 1.15, 1.0, 0.9, 0.8];   // seconds for the needle to sweep the full dial once
     const SUCCESS_ZONES     = [44, 37, 31, 26, 22].map((d) => THREE.MathUtils.degToRad(d)); // success arc width
     const SUCCESS_ZONE      = SUCCESS_ZONES[0];
-    let zoneSize = SUCCESS_ZONES[0], needleTurnTime = NEEDLE_TURN_TIMES[0]; // values for the check in progress
     const GRAB_RADIUS       = 0.17;                      // how close (m) your hand must be to the handle to grab it
-
-    const genGroup = new THREE.Group();
-    genGroup.position.copy(GEN_POS);
-    scene.add(genGroup);
-    {
-      const rust  = new THREE.MeshStandardMaterial({ color: 0x5b3a2a, roughness: 0.65, metalness: 0.55 });
-      const dark  = new THREE.MeshStandardMaterial({ color: 0x1d1d1f, roughness: 0.6, metalness: 0.7 });
-      const tankM = new THREE.MeshStandardMaterial({ color: 0x6b2a1e, roughness: 0.5, metalness: 0.5 });
-      const add = (mesh, x, y, z) => { mesh.position.set(x, y, z); mesh.castShadow = mesh.receiveShadow = true; genGroup.add(mesh); rayTargets.push(mesh); return mesh; };
-      add(new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.26, 0.3), rust), 0, 0.2, 0);                 // engine block
-      for (const z of [-0.16, 0.16]) for (const y of [0.04, 0.4]) {                                    // tube frame
-        const rail = add(new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.54, 8), dark), 0, y, z);
-        rail.rotation.z = Math.PI / 2;
-      }
-      for (const x of [-0.26, 0.26]) for (const z of [-0.16, 0.16])
-        add(new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.38, 8), dark), x, 0.22, z);
-      const tank = add(new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.36, 14), tankM), -0.02, 0.4, 0); // fuel tank
-      tank.rotation.z = Math.PI / 2;
-      const muffler = add(new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.16, 10), dark), -0.18, 0.2, 0.19);
-      muffler.rotation.z = Math.PI / 2;
-      add(new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.14, 0.2), dark), 0.24, 0.22, 0);             // control panel
-    }
-    addBoxCollider(GEN_POS.x, 0, GEN_POS.z, 0.56, 0.5, 0.36); // solid: you can push off or climb it
-
-    // Red/green status light (emissive bulb + a glow sprite so it reads through the fog)
-    const genBulbMat = new THREE.MeshStandardMaterial({ color: 0x220000, emissive: 0xff1a10, emissiveIntensity: 1 });
-    const genBulb = new THREE.Mesh(new THREE.SphereGeometry(0.022, 12, 8), genBulbMat);
-    genBulb.position.set(0.25, 0.33, 0.06);
-    genGroup.add(genBulb);
-    const genGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xff2a1a, transparent: true,
-      blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
-    genGlow.scale.set(0.22, 0.22, 1);
-    genGlow.position.copy(genBulb.position);
-    genGroup.add(genGlow);
-
-    // Progress pips on the panel (amber when a skill check is done)
-    const genPips = [-0.07, -0.035, 0, 0.035, 0.07].map((z) => {
-      const pip = new THREE.Mesh(new THREE.SphereGeometry(0.011, 8, 6),
-        new THREE.MeshStandardMaterial({ color: 0x111111, emissive: 0x000000 }));
-      pip.position.set(0.252, 0.26, z - 0.03);
-      genGroup.add(pip);
-      return pip;
-    });
-
-    // Prominent grab handle: a bright yellow T-grip sticking out of the side that faces the camp
-    const HANDLE_LOCAL = new THREE.Vector3(0.34, 0.24, -0.04);
-    {
-      const yellow = new THREE.MeshStandardMaterial({ color: 0xe0b020, emissive: 0x3a2800, roughness: 0.5 });
-      const cord = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.09, 6), new THREE.MeshStandardMaterial({ color: 0x111111 }));
-      cord.rotation.z = Math.PI / 2;
-      cord.position.set(0.29, 0.24, -0.04);
-      genGroup.add(cord);
-      const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.13, 10), yellow);
-      grip.rotation.x = Math.PI / 2;
-      grip.position.copy(HANDLE_LOCAL);
-      grip.castShadow = true;
-      genGroup.add(grip);
-    }
-    const HANDLE_WORLD = HANDLE_LOCAL.clone().add(GEN_POS);
-
-    // Spark flash for failed checks
-    const sparkFlash = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xfff0a0, transparent: true,
-      opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
-    sparkFlash.position.copy(HANDLE_LOCAL);
-    genGroup.add(sparkFlash);
-
-    // ---------- Floating skill-check dial ----------
+    const HANDLE_LOCAL = new THREE.Vector3(0.34, 0.24, -0.04); // yellow T-handle, on the generator's local +x side
     const DIAL_R = 0.13;
-    const checkGroup = new THREE.Group();
-    checkGroup.position.set(GEN_POS.x + 0.15, 0.68, GEN_POS.z);
-    checkGroup.visible = false;
-    scene.add(checkGroup);
     const dialMat = (color, opacity = 1) => new THREE.MeshBasicMaterial({ color, transparent: true, opacity, side: THREE.DoubleSide, fog: false, depthWrite: false });
-    const dialBase = new THREE.Mesh(new THREE.RingGeometry(DIAL_R * 0.84, DIAL_R, 64), dialMat(0x2a2a2a, 0.85));
-    checkGroup.add(dialBase);
-    const dialBack = new THREE.Mesh(new THREE.CircleGeometry(DIAL_R * 0.84, 48), dialMat(0x000000, 0.45));
-    checkGroup.add(dialBack);
-    // success zone: green band with a bright white outer edge; built from theta 0 and rotated into place
-    const zone = new THREE.Group();
-    zone.add(new THREE.Mesh(new THREE.RingGeometry(DIAL_R * 0.84, DIAL_R, 24, 1, 0, SUCCESS_ZONE), dialMat(0x3cff6e, 0.9)));
-    zone.add(new THREE.Mesh(new THREE.RingGeometry(DIAL_R, DIAL_R * 1.08, 24, 1, 0, SUCCESS_ZONE), dialMat(0xffffff, 1)));
-    zone.position.z = 0.001;
-    checkGroup.add(zone);
-    const needleGeo = new THREE.BoxGeometry(0.007, DIAL_R * 1.05, 0.002);
-    needleGeo.translate(0, DIAL_R * 0.52, 0);
-    const needle = new THREE.Mesh(needleGeo, dialMat(0xff3322, 1));
-    needle.position.z = 0.002;
-    checkGroup.add(needle);
-    checkGroup.add(new THREE.Mesh(new THREE.CircleGeometry(0.012, 16), dialMat(0xdddddd, 1)));
-    const dialPips = [-2, -1, 0, 1, 2].map((k) => {
-      const pip = new THREE.Mesh(new THREE.CircleGeometry(0.012, 16), dialMat(0x444444, 1));
-      pip.position.set(k * 0.035, -DIAL_R - 0.035, 0);
-      checkGroup.add(pip);
-      return pip;
-    });
-
-    // ---------- Floodlights (off until the generator runs) ----------
-    const floodLights = FLOOD_POS.map(([x, z]) => {
-      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.035, 2.0, 8), new THREE.MeshStandardMaterial({ color: 0x2a2a2a, metalness: 0.6, roughness: 0.6 }));
-      pole.position.set(x, 1.0, z);
-      pole.castShadow = true;
-      scene.add(pole);
-      rayTargets.push(pole);
-      addBoxCollider(x, 0, z, 0.07, 2.0, 0.07); // climbable pole
-      const lensMat = new THREE.MeshStandardMaterial({ color: 0x111111, emissive: 0xeef4ff, emissiveIntensity: 0 });
-      const head = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.13, 0.08), lensMat);
-      head.position.set(x, 2.02, z);
-      head.lookAt(FIRE.x, 0, FIRE.z);
-      scene.add(head);
-      // SpotLights stay in the scene at intensity 0 while off (turning lights on/off by visibility recompiles shaders)
-      const spot = new THREE.SpotLight(0xdfe8ff, 0, 16, 0.6, 0.5, 2);
-      spot.position.set(x, 2.0, z);
-      spot.target.position.set(FIRE.x, 0, FIRE.z);
-      scene.add(spot, spot.target);
-      return { spot, lensMat };
-    });
-
-    // ---------- Generator logic ----------
-    const gen = { progress: 0, running: false, holding: -1, active: false, angle: 0, zoneStart: 0, cooldown: 0, powerT: 0, sparkT: 0, flashT: 0 };
+    const btn = (c, idx) => !!c.userData.inputSource?.gamepad?.buttons[idx]?.pressed;
     let genTime = 0;
     let prevBtn = [[false, false, false], [false, false, false]]; // [trigger, squeeze, A/X] per controller
     const _genCam = new THREE.Vector3();
+    let generatorsPowered = 0;
 
-    const btn = (c, idx) => !!c.userData.inputSource?.gamepad?.buttons[idx]?.pressed;
-    function isNearHandle(hand) {
-      return !gen.running && hand.tracked && hand.last.distanceTo(HANDLE_WORLD) < GRAB_RADIUS;
+    // local (generator) -> world offset for a yaw of `rot` (same convention as Object3D.rotation.y)
+    const rotXZ = (x, z, rot) => [x * Math.cos(rot) + z * Math.sin(rot), -x * Math.sin(rot) + z * Math.cos(rot)];
+
+    const gaugeTex = canvasTexture(128, (g, s) => {
+      g.fillStyle = '#e8e2d0'; g.beginPath(); g.arc(s / 2, s / 2, s / 2 - 2, 0, Math.PI * 2); g.fill();
+      g.lineWidth = 6; g.strokeStyle = '#1a1a1a'; g.stroke();
+      g.lineWidth = 10; g.strokeStyle = '#c0281c';
+      g.beginPath(); g.arc(s / 2, s / 2, s / 2 - 16, -0.2, 0.75); g.stroke();             // red zone
+      g.lineWidth = 3; g.strokeStyle = '#1a1a1a';
+      for (let k = 0; k <= 10; k++) {
+        const a = Math.PI * 0.75 + (k / 10) * Math.PI * 1.5, r0 = s / 2 - 10, r1 = s / 2 - (k % 5 ? 20 : 28);
+        g.beginPath(); g.moveTo(s / 2 + Math.cos(a) * r0, s / 2 + Math.sin(a) * r0); g.lineTo(s / 2 + Math.cos(a) * r1, s / 2 + Math.sin(a) * r1); g.stroke();
+      }
+      g.fillStyle = '#1a1a1a'; g.font = 'bold 16px sans-serif'; g.textAlign = 'center'; g.fillText('PSI', s / 2, s * 0.72);
+    });
+    gaugeTex.wrapS = gaugeTex.wrapT = THREE.ClampToEdgeWrapping;
+    const smokeTex = canvasTexture(64, (g, s) => {
+      for (let k = 0; k < 6; k++) {
+        const x = s / 2 + pr(-8, 8), y = s / 2 + pr(-8, 8), r = pr(12, 22);
+        const grd = g.createRadialGradient(x, y, 0, x, y, r);
+        grd.addColorStop(0, 'rgba(190,190,190,0.5)'); grd.addColorStop(1, 'rgba(190,190,190,0)');
+        g.fillStyle = grd; g.fillRect(0, 0, s, s);
+      }
+    });
+    smokeTex.wrapS = smokeTex.wrapT = THREE.ClampToEdgeWrapping;
+
+    // Lakeside ridge (raised earth bank with steps) and the deep-woods clearing, for generators 4 and 3
+    {
+      const earthMat = new THREE.MeshStandardMaterial({ color: 0x2c2117, map: grimeTex, roughness: 1 });
+      solidBox(RIDGE.x, 0, RIDGE.z, RIDGE.w, RIDGE.h, RIDGE.d, earthMat);
+      solidBox(RIDGE.x - RIDGE.w / 2 - 0.2, 0, RIDGE.z, 0.4, RIDGE.h * 0.5, 1.4, earthMat);   // step up from the lake side
+      const rb = makeBatch();
+      for (let k = 0; k < 9; k++) {
+        const side = k % 2 ? 1 : -1, z = RIDGE.z - RIDGE.d / 2 + 0.3 + (k / 8) * (RIDGE.d - 0.6);
+        const geo = jaggedRock(1, pr(0.12, 0.22), pr(0.1, 0.18), pr(0.12, 0.2), pr(0, 6), pr(0, 99));
+        geo.translate(RIDGE.x + side * (RIDGE.w / 2 + 0.08), 0.06, z);
+        rb.addMatrix(geo, rockMat, IDENTITY);
+      }
+      rb.build(scene);
+      const woods = new THREE.Mesh(new THREE.CircleGeometry(WOODS_CLEARING.r, 40),
+        new THREE.MeshStandardMaterial({ map: clearingTex, transparent: true, depthWrite: false, roughness: 1, polygonOffset: true, polygonOffsetFactor: -1 }));
+      woods.rotation.x = -Math.PI / 2;
+      woods.position.set(WOODS_CLEARING.x, 0.004, WOODS_CLEARING.z);
+      woods.receiveShadow = true;
+      scene.add(woods);
     }
 
-    function newCheck() {
-      const step = Math.min(gen.progress, GEN_CHECKS_NEEDED - 1);
-      zoneSize = SUCCESS_ZONES[step];
-      needleTurnTime = NEEDLE_TURN_TIMES[step];
+    const cableBatch = makeBatch();   // every generator's cables, in world space (one draw call)
+    const _dummy = new THREE.Object3D();
+
+    function buildGenerator(site, index) {
+      const g = {
+        site, index, pos: site.pos, rot: site.rot,
+        progress: 0, running: false, holding: -1, active: false, angle: 0, zoneStart: 0, cooldown: 0, powerT: 0, sparkT: 0, flashT: 0,
+        zoneSize: SUCCESS_ZONES[0], needleTurnTime: NEEDLE_TURN_TIMES[0], smokeT: 0,
+      };
+      const group = new THREE.Group();
+      group.position.copy(site.pos);
+      group.rotation.y = site.rot;
+      scene.add(group);
+      g.group = group;
+
+      // ---------- multi-part industrial generator (local +x = handle / control-panel side) ----------
+      const b = makeBatch();
+      // steel frame cage: skids, uprights, top rails and cross bars, lifting eye
+      for (const z of [-0.16, 0.16]) {
+        b.add(UNIT_BOX, genSteelMat, 0, 0.018, z, 0, 0, 0, 0.6, 0.035, 0.045);
+        b.add(UNIT_BOX, genSteelMat, 0, 0.46, z, 0, 0, 0, 0.56, 0.03, 0.03);
+      }
+      for (const x of [-0.26, 0.26]) {
+        for (const z of [-0.16, 0.16]) b.add(UNIT_BOX, genSteelMat, x, 0.245, z, 0, 0, 0, 0.03, 0.43, 0.03);
+        b.add(UNIT_BOX, genSteelMat, x, 0.46, 0, 0, 0, 0, 0.03, 0.03, 0.35);
+        b.add(UNIT_BOX, genSteelMat, x, 0.045, 0, 0, 0, 0, 0.03, 0.03, 0.35);
+      }
+      b.add(UNIT_BOX, genSteelMat, 0, 0.46, 0, 0, 0, 0, 0.03, 0.03, 0.35);
+      b.add(new THREE.TorusGeometry(0.03, 0.007, 6, 14), genSteelMat, 0, 0.5, 0);
+      // engine block with cooling fins, air filter
+      b.add(UNIT_BOX, genEngineMat, -0.07, 0.15, 0, 0, 0, 0, 0.22, 0.2, 0.22);
+      for (let k = 0; k < 6; k++) b.add(UNIT_BOX, genEngineMat, -0.07, 0.255 + k * 0.009, 0, 0, 0, 0, 0.2, 0.004, 0.24);
+      b.add(new THREE.CylinderGeometry(0.05, 0.05, 0.05, 14), genPaintMat, -0.04, 0.2, -0.125, Math.PI / 2, 0, 0);
+      // alternator housing (painted), with end-cap vents
+      b.add(new THREE.CylinderGeometry(0.085, 0.085, 0.15, 16), genPaintMat, 0.11, 0.15, 0, 0, 0, Math.PI / 2);
+      for (let k = 0; k < 5; k++) b.add(UNIT_BOX, genEngineMat, 0.186, 0.12 + k * 0.015, 0, 0, 0, 0, 0.004, 0.006, 0.09);
+      // recoil starter housing that the yellow pull cord comes out of
+      b.add(new THREE.CylinderGeometry(0.06, 0.06, 0.04, 16), genPaintMat, 0.225, HANDLE_LOCAL.y, HANDLE_LOCAL.z, 0, 0, Math.PI / 2);
+      // fuel tank on top (red, rounded) with filler cap and a little sight gauge
+      b.add(new THREE.CapsuleGeometry(0.075, 0.28, 6, 14), genTankMat, 0, 0.365, 0, 0, 0, Math.PI / 2);
+      b.add(new THREE.CylinderGeometry(0.022, 0.022, 0.03, 12), genEngineMat, -0.09, 0.445, 0);
+      b.add(new THREE.CylinderGeometry(0.012, 0.012, 0.02, 10), brassMat, 0.07, 0.44, 0.03);
+      // muffler + exhaust stack with a rain cap
+      b.add(new THREE.CylinderGeometry(0.04, 0.04, 0.18, 14), genRustMat, -0.12, 0.1, -0.12, 0, 0, Math.PI / 2);
+      b.add(new THREE.TorusGeometry(0.03, 0.017, 8, 12, Math.PI / 2), genRustMat, -0.21, 0.13, -0.12, 0, 0, Math.PI);
+      b.add(new THREE.CylinderGeometry(0.017, 0.017, 0.48, 10), genRustMat, -0.24, 0.37, -0.12);
+      b.add(new THREE.CylinderGeometry(0.03, 0.03, 0.006, 12), genRustMat, -0.24, 0.63, -0.12, 0, 0, 0.35);
+      // control panel (status light, two pressure gauges, progress LEDs) and the cable outlet box
+      b.add(UNIT_BOX, genEngineMat, 0.268, 0.27, 0.1, 0, 0, 0, 0.02, 0.3, 0.11);
+      b.add(UNIT_BOX, genSteelMat, 0.2, 0.07, 0.15, 0, 0, 0, 0.09, 0.07, 0.06);
+      for (const z of [-0.02, 0.02]) b.add(new THREE.CylinderGeometry(0.012, 0.012, 0.01, 10), genYellowMat, 0.2 + z, 0.075, 0.183, Math.PI / 2, 0, 0);
+      // yellow T-handle on its pull cord
+      b.add(new THREE.CylinderGeometry(0.006, 0.006, 0.09, 6), cableMat, 0.29, HANDLE_LOCAL.y, HANDLE_LOCAL.z, 0, 0, Math.PI / 2);
+      b.add(new THREE.CylinderGeometry(0.018, 0.018, 0.13, 10), genYellowMat, HANDLE_LOCAL.x, HANDLE_LOCAL.y, HANDLE_LOCAL.z, Math.PI / 2, 0, 0);
+      b.build(group, { rayTarget: true });
+      // solid: you can push off or climb it (rotations are 90° steps, so the box stays axis-aligned)
+      const swap = Math.abs(Math.sin(site.rot)) > 0.5;
+      addBoxCollider(site.pos.x, site.pos.y, site.pos.z, swap ? 0.36 : 0.56, 0.5, swap ? 0.56 : 0.36);
+
+      // red/green status light (emissive bulb + a glow sprite so it reads through the fog)
+      g.bulbMat = new THREE.MeshStandardMaterial({ color: 0x220000, emissive: 0xff1a10, emissiveIntensity: 1 });
+      const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.016, 12, 8), g.bulbMat);
+      bulb.position.set(0.282, 0.395, 0.1);
+      group.add(bulb);
+      g.glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xff2a1a, transparent: true,
+        blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+      g.glow.scale.set(0.22, 0.22, 1);
+      g.glow.position.copy(bulb.position);
+      group.add(g.glow);
+      // progress LEDs (amber when a skill check is done)
+      g.pips = [0, 1, 2, 3, 4].map((k) => {
+        const pip = new THREE.Mesh(new THREE.SphereGeometry(0.008, 8, 6), new THREE.MeshStandardMaterial({ color: 0x111111, emissive: 0x000000 }));
+        pip.position.set(0.28, 0.165, 0.064 + k * 0.018);
+        group.add(pip);
+        return pip;
+      });
+      // two pressure gauges with moving needles
+      g.gaugeNeedles = [0.32, 0.245].map((y) => {
+        const pivot = new THREE.Group();
+        pivot.position.set(0.279, y, 0.1);
+        pivot.rotation.y = Math.PI / 2;
+        group.add(pivot);
+        pivot.add(new THREE.Mesh(new THREE.CircleGeometry(0.026, 24), new THREE.MeshBasicMaterial({ map: gaugeTex, color: 0x8a8a8a })));
+        const ng = new THREE.BoxGeometry(0.0025, 0.021, 0.002); ng.translate(0, 0.009, 0.002);
+        const n = new THREE.Mesh(ng, new THREE.MeshBasicMaterial({ color: 0xb01010 }));
+        n.rotation.z = 2.2;
+        pivot.add(n);
+        return n;
+      });
+      // spark flash for failed checks
+      g.spark = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xfff0a0, transparent: true,
+        opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+      g.spark.position.copy(HANDLE_LOCAL);
+      group.add(g.spark);
+      // exhaust smoke (only while running)
+      const [ex, ez] = rotXZ(-0.24, -0.12, site.rot);
+      g.smokeOrigin = new THREE.Vector3(site.pos.x + ex, site.pos.y + 0.64, site.pos.z + ez);
+      g.smoke = Array.from({ length: 7 }, () => {
+        const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: smokeTex, color: 0x8a8a8a, transparent: true, opacity: 0, depthWrite: false }));
+        s.visible = false;
+        scene.add(s);
+        return { s, age: 0, life: 0, vx: 0, vz: 0 };
+      });
+
+      // handle position in the world (the generator itself never moves; the running shake is cosmetic)
+      const [hx, hz] = rotXZ(HANDLE_LOCAL.x, HANDLE_LOCAL.z, site.rot);
+      g.handleWorld = new THREE.Vector3(site.pos.x + hx, site.pos.y + HANDLE_LOCAL.y, site.pos.z + hz);
+
+      // ---------- floating skill-check dial ----------
+      const [dx, dz] = rotXZ(0.15, 0, site.rot);
+      const checkGroup = new THREE.Group();
+      checkGroup.position.set(site.pos.x + dx, site.pos.y + 0.68, site.pos.z + dz);
+      checkGroup.visible = false;
+      scene.add(checkGroup);
+      const dialBase = new THREE.Mesh(new THREE.RingGeometry(DIAL_R * 0.84, DIAL_R, 64), dialMat(0x2a2a2a, 0.85));
+      checkGroup.add(dialBase);
+      checkGroup.add(new THREE.Mesh(new THREE.CircleGeometry(DIAL_R * 0.84, 48), dialMat(0x000000, 0.45)));
+      // success zone: green band with a bright white outer edge; built from theta 0 and rotated into place
+      const zone = new THREE.Group();
+      zone.add(new THREE.Mesh(new THREE.RingGeometry(DIAL_R * 0.84, DIAL_R, 24, 1, 0, SUCCESS_ZONE), dialMat(0x3cff6e, 0.9)));
+      zone.add(new THREE.Mesh(new THREE.RingGeometry(DIAL_R, DIAL_R * 1.08, 24, 1, 0, SUCCESS_ZONE), dialMat(0xffffff, 1)));
+      zone.position.z = 0.001;
+      checkGroup.add(zone);
+      const needleGeo = new THREE.BoxGeometry(0.007, DIAL_R * 1.05, 0.002);
+      needleGeo.translate(0, DIAL_R * 0.52, 0);
+      const needle = new THREE.Mesh(needleGeo, dialMat(0xff3322, 1));
+      needle.position.z = 0.002;
+      checkGroup.add(needle);
+      checkGroup.add(new THREE.Mesh(new THREE.CircleGeometry(0.012, 16), dialMat(0xdddddd, 1)));
+      const dialPips = [-2, -1, 0, 1, 2].map((k) => {
+        const pip = new THREE.Mesh(new THREE.CircleGeometry(0.012, 16), dialMat(0x444444, 1));
+        pip.position.set(k * 0.035, -DIAL_R - 0.035, 0);
+        checkGroup.add(pip);
+        return pip;
+      });
+      g.check = { group: checkGroup, base: dialBase, zone, needle, pips: dialPips };
+
+      // ---------- floodlights (off until this generator runs), with heavy cables running to the poles ----------
+      g.floods = [];
+      g.lensMat = new THREE.MeshStandardMaterial({ color: 0x111111, emissive: 0xeef4ff, emissiveIntensity: 0 });
+      g.coneMat = new THREE.MeshBasicMaterial({ color: 0xdfe8ff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending,
+        depthWrite: false, side: THREE.DoubleSide });
+      g.poolMat = new THREE.MeshBasicMaterial({ map: glowTex, color: 0xdfe8ff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending,
+        depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4 });
+      const poleBatch = makeBatch(), lensBatch = makeBatch(), coneBatch = makeBatch(), poolBatch = makeBatch();
+      const by = site.floodBase ?? 0, [ax, az] = site.aim;
+      const [ox, oz] = rotXZ(0.2, 0.2, site.rot);
+      const outlet = new THREE.Vector3(site.pos.x + ox, site.pos.y + 0.06, site.pos.z + oz);
+      const target = new THREE.Vector3(), head = new THREE.Vector3();
+      site.floods.forEach(([x, z], k) => {
+        poleBatch.add(new THREE.CylinderGeometry(0.03, 0.035, 2.0, 8), genSteelMat, x, by + 1.0, z);
+        poleBatch.add(UNIT_BOX, genEngineMat, x, by + 0.4, z, 0, Math.atan2(outlet.x - x, outlet.z - z), 0, 0.1, 0.14, 0.08); // junction box
+        addBoxCollider(x, by, z, 0.07, 2.0, 0.07); // climbable pole
+        head.set(x, by + 2.02, z);
+        target.set(ax, 0, az);
+        _dummy.position.copy(head);
+        _dummy.lookAt(target);
+        _dummy.updateMatrix();
+        const m = _dummy.matrix;
+        poleBatch.addMatrix(new THREE.BoxGeometry(0.2, 0.13, 0.08), genEngineMat, m);                           // lamp housing
+        poleBatch.addMatrix(new THREE.BoxGeometry(0.06, 0.03, 0.12).translate(0, -0.08, -0.04), genSteelMat, m); // yoke
+        for (let f = 0; f < 4; f++) poleBatch.addMatrix(new THREE.BoxGeometry(0.004, 0.1, 0.04).translate(-0.075 + f * 0.05, 0, -0.06), genEngineMat, m); // cooling fins
+        lensBatch.addMatrix(new THREE.PlaneGeometry(0.17, 0.1).translate(0, 0, 0.041), g.lensMat, m);
+        // soft light cone and a pool of light on the ground (fake light: no per-pixel cost)
+        const len = head.distanceTo(target);
+        const cone = new THREE.ConeGeometry(len * Math.tan(0.45), len, 20, 1, true);
+        cone.translate(0, -len / 2, 0);
+        cone.rotateX(-Math.PI / 2);
+        coneBatch.addMatrix(cone, g.coneMat, m);
+        poolBatch.add(new THREE.CircleGeometry(2.4, 24), g.poolMat, ax + (x - ax) * 0.15, 0.03, az + (z - az) * 0.15, -Math.PI / 2, 0, 0);
+        if (k < site.realLights) {                         // real spot lights stay in the scene at intensity 0 while off
+          const spot = new THREE.SpotLight(0xdfe8ff, 0, 16, 0.6, 0.5, 2);
+          spot.position.set(x, by + 2.0, z);
+          spot.target.position.set(ax, 0, az);
+          scene.add(spot, spot.target);
+          g.floods.push(spot);
+        }
+        // heavy cable from the generator's outlet box, along the ground with a little slack, up into the junction box
+        const gy = site.pos.y + 0.015, fy = by + 0.015;
+        const pts = [outlet.clone(), new THREE.Vector3(outlet.x + (x - outlet.x) * 0.04, gy, outlet.z + (z - outlet.z) * 0.04)];
+        const dist = Math.hypot(x - outlet.x, z - outlet.z), nxp = -(z - outlet.z) / dist, nzp = (x - outlet.x) / dist;
+        for (let t = 1; t <= 5; t++) {
+          const f = t / 6, wob = Math.sin(t * 2.3 + index * 1.7 + k) * 0.18;
+          pts.push(new THREE.Vector3(outlet.x + (x - outlet.x) * f + nxp * wob, f < 0.5 ? gy : fy, outlet.z + (z - outlet.z) * f + nzp * wob));
+        }
+        const back = Math.hypot(x - outlet.x, z - outlet.z);
+        pts.push(new THREE.Vector3(x - (x - outlet.x) / back * 0.06, fy, z - (z - outlet.z) / back * 0.06));
+        pts.push(new THREE.Vector3(x - (x - outlet.x) / back * 0.05, by + 0.33, z - (z - outlet.z) / back * 0.05));
+        cableBatch.add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 48, 0.014, 6, false), cableMat);
+      });
+      poleBatch.build(scene, { rayTarget: true });
+      lensBatch.build(scene, { castShadow: false });
+      [g.coneMesh] = coneBatch.build(scene, { castShadow: false, receiveShadow: false });
+      [g.poolMesh] = poolBatch.build(scene, { castShadow: false, receiveShadow: false });
+      g.coneMesh.visible = g.poolMesh.visible = false;
+      g.coneMesh.renderOrder = g.poolMesh.renderOrder = 2;
+
+      // status sign above the generator
+      g.signCanvas = document.createElement('canvas');
+      g.signCanvas.width = 512; g.signCanvas.height = 176;
+      g.signTex = new THREE.CanvasTexture(g.signCanvas);
+      g.signTex.colorSpace = THREE.SRGBColorSpace;
+      const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: g.signTex, transparent: true, depthWrite: false }));
+      sign.scale.set(0.6, 0.206, 1);
+      sign.position.set(site.pos.x, site.pos.y + 1.0, site.pos.z);
+      scene.add(sign);
+      return g;
+    }
+
+    const generators = GEN_SITES.map(buildGenerator);
+    cableBatch.build(scene, { castShadow: false });
+
+    function drawGenSign(g) {
+      const c = g.signCanvas.getContext('2d'), W = g.signCanvas.width, H = g.signCanvas.height;
+      c.clearRect(0, 0, W, H);
+      c.fillStyle = 'rgba(0,0,0,0.6)'; c.fillRect(6, 6, W - 12, H - 12);
+      c.strokeStyle = g.running ? '#3cff6e' : '#ff3a2a'; c.lineWidth = 4; c.strokeRect(8, 8, W - 16, H - 16);
+      c.textAlign = 'center'; c.textBaseline = 'middle';
+      c.fillStyle = '#cfd8dc'; c.font = 'bold 30px system-ui, sans-serif';
+      c.fillText(`GENERATOR ${g.index + 1} · ${g.site.name}`, W / 2, 42);
+      c.fillStyle = g.running ? '#6dff8a' : '#ff6a5a'; c.font = 'bold 34px system-ui, sans-serif';
+      c.fillText(g.running ? 'ONLINE' : `OFFLINE · ${g.progress}/${GEN_CHECKS_NEEDED}`, W / 2, 92);
+      c.fillStyle = '#ffcf5a'; c.font = '28px system-ui, sans-serif';
+      c.fillText(`Generators Powered: ${generatorsPowered}/${generators.length}`, W / 2, 140);
+      g.signTex.needsUpdate = true;
+    }
+    const drawAllGenSigns = () => generators.forEach(drawGenSign);
+    drawAllGenSigns();
+
+    // Pop-up in front of your eyes when a generator comes online
+    const toastCanvas = document.createElement('canvas');
+    toastCanvas.width = 1024; toastCanvas.height = 192;
+    const toastTex = new THREE.CanvasTexture(toastCanvas);
+    toastTex.colorSpace = THREE.SRGBColorSpace;
+    const toast = new THREE.Mesh(new THREE.PlaneGeometry(0.4, 0.075), new THREE.MeshBasicMaterial({
+      map: toastTex, transparent: true, opacity: 0, depthTest: false, depthWrite: false, fog: false }));
+    toast.position.set(0, -0.07, -0.55);
+    toast.renderOrder = 9000;
+    toast.visible = false;
+    camera.add(toast);
+    let toastT = 0;
+    function showToast(line1, line2) {
+      const c = toastCanvas.getContext('2d');
+      c.clearRect(0, 0, 1024, 192);
+      c.fillStyle = 'rgba(0,0,0,0.7)'; c.fillRect(0, 0, 1024, 192);
+      c.strokeStyle = '#3cff6e'; c.lineWidth = 6; c.strokeRect(3, 3, 1018, 186);
+      c.textAlign = 'center'; c.textBaseline = 'middle';
+      c.fillStyle = '#6dff8a'; c.font = 'bold 64px system-ui, sans-serif'; c.fillText(line1, 512, 70);
+      c.fillStyle = '#e8eef0'; c.font = '44px system-ui, sans-serif'; c.fillText(line2, 512, 146);
+      toastTex.needsUpdate = true;
+      toastT = 4;
+    }
+
+    function nearHandle(g, hand) {
+      return !g.running && hand.tracked && hand.last.distanceTo(g.handleWorld) < GRAB_RADIUS;
+    }
+    // Used by the grip handler: squeezing any generator's handle grabs it instead of moving the flashlight
+    function isNearHandle(hand) {
+      return generators.some((g) => nearHandle(g, hand));
+    }
+    // `gen.holding` is >= 0 while any generator's handle is held (the A button then hits checks instead of the flashlight)
+    const gen = { get holding() { const g = generators.find((x) => x.holding >= 0); return g ? g.holding : -1; } };
+    // Distance to the nearest running generator (for the engine sound)
+    function nearestRunningGeneratorDistance(p) {
+      let best = Infinity;
+      for (const g of generators) if (g.running) best = Math.min(best, p.distanceTo(g.pos));
+      return best === Infinity ? 1e4 : best;
+    }
+
+    function newCheck(g) {
+      const step = Math.min(g.progress, GEN_CHECKS_NEEDED - 1);
+      g.zoneSize = SUCCESS_ZONES[step];
+      g.needleTurnTime = NEEDLE_TURN_TIMES[step];
+      const zone = g.check.zone;
       zone.children[0].geometry.dispose();
-      zone.children[0].geometry = new THREE.RingGeometry(DIAL_R * 0.84, DIAL_R, 24, 1, 0, zoneSize);
+      zone.children[0].geometry = new THREE.RingGeometry(DIAL_R * 0.84, DIAL_R, 24, 1, 0, g.zoneSize);
       zone.children[1].geometry.dispose();
-      zone.children[1].geometry = new THREE.RingGeometry(DIAL_R, DIAL_R * 1.08, 24, 1, 0, zoneSize);
-      gen.zoneStart = THREE.MathUtils.randFloat(0.35 * Math.PI, 2 * Math.PI - zoneSize - 0.15);
+      zone.children[1].geometry = new THREE.RingGeometry(DIAL_R, DIAL_R * 1.08, 24, 1, 0, g.zoneSize);
+      g.zoneStart = THREE.MathUtils.randFloat(0.35 * Math.PI, 2 * Math.PI - g.zoneSize - 0.15);
       // dial angles are measured clockwise from the top; RingGeometry measures counter-clockwise from +x
-      zone.rotation.z = Math.PI / 2 - gen.zoneStart - zoneSize;
+      zone.rotation.z = Math.PI / 2 - g.zoneStart - g.zoneSize;
       zone.visible = true;
-      gen.angle = 0;
-      needle.rotation.z = 0;
-      gen.active = true;
+      g.angle = 0;
+      g.check.needle.rotation.z = 0;
+      g.active = true;
       horrorAudio.checkStart();
     }
-    function releaseHandle() {
-      gen.holding = -1;
-      gen.active = false;
-      checkGroup.visible = false;
+    function releaseHandle(g) {
+      g.holding = -1;
+      g.active = false;
+      g.check.group.visible = false;
     }
-    function updatePips() {
-      genPips.forEach((p, i) => p.material.emissive.setHex(i < gen.progress ? 0xffa020 : 0x000000));
-      dialPips.forEach((p, i) => p.material.color.setHex(i < gen.progress ? 0xffffff : 0x444444));
+    function updatePips(g) {
+      g.pips.forEach((p, i) => p.material.emissive.setHex(i < g.progress ? 0xffa020 : 0x000000));
+      g.check.pips.forEach((p, i) => p.material.color.setHex(i < g.progress ? 0xffffff : 0x444444));
     }
-    function hitCheck() {
-      const inZone = gen.angle >= gen.zoneStart && gen.angle <= gen.zoneStart + zoneSize;
-      gen.active = false;
+    function hitCheck(g) {
+      const inZone = g.angle >= g.zoneStart && g.angle <= g.zoneStart + g.zoneSize;
+      g.active = false;
       if (inZone) {
-        gen.progress++;
-        updatePips();
+        g.progress++;
+        updatePips(g);
+        drawGenSign(g);
         horrorAudio.clank();
         controllers.forEach((c) => pulse(c, 0.5, 50));
-        if (gen.progress >= GEN_CHECKS_NEEDED) return powerUp();
-        gen.cooldown = 0.9;
-        zone.visible = false;
-      } else missCheck();
+        if (g.progress >= GEN_CHECKS_NEEDED) return powerUp(g);
+        g.cooldown = 0.9;
+        g.check.zone.visible = false;
+      } else missCheck(g);
     }
-    function missCheck() {
-      gen.active = false;
+    function missCheck(g) {
+      g.active = false;
       horrorAudio.spark();
       controllers.forEach((c) => pulse(c, 1.0, 250));
-      gen.sparkT = 0.3;
-      gen.flashT = 0.5;
-      gen.cooldown = 1.3; // this check resets; earlier successes are kept
-      zone.visible = false;
+      g.sparkT = 0.3;
+      g.flashT = 0.5;
+      g.cooldown = 1.3; // this check resets; earlier successes are kept
+      g.check.zone.visible = false;
     }
-    function powerUp() {
-      gen.running = true;
-      releaseHandle();
-      genBulbMat.color.setHex(0x002200);
-      genBulbMat.emissive.setHex(0x30ff50);
-      genGlow.material.color.setHex(0x40ff60);
+    function powerUp(g) {
+      g.running = true;
+      releaseHandle(g);
+      g.bulbMat.color.setHex(0x002200);
+      g.bulbMat.emissive.setHex(0x30ff50);
+      g.glow.material.color.setHex(0x40ff60);
       horrorAudio.engineOn();
+      generatorsPowered++;
+      drawAllGenSigns();
+      showToast(`Generators Powered: ${generatorsPowered}/${generators.length}`,
+        generatorsPowered >= generators.length ? 'Every floodlight in the camp is on' : `${g.site.name} floodlights are on`);
     }
 
-    function updateGenerator(dt) {
-      genTime += dt;
-      const now = controllers.map((c) => [btn(c, 0), btn(c, 1), btn(c, 4)]);
-      const pressedNow = (i, k) => now[i][k] && !prevBtn[i][k];
-
-      if (gen.running) {
+    function updateOneGenerator(g, dt, now, pressedNow) {
+      if (g.running) {
         // engine shake + floodlights flicker to life, then stay on
-        genGroup.position.set(GEN_POS.x + (Math.random() - 0.5) * 0.006, Math.random() * 0.004, GEN_POS.z + (Math.random() - 0.5) * 0.006);
-        gen.powerT += dt;
-        const on = gen.powerT > 1.6 || Math.random() < gen.powerT / 1.6;
-        for (const f of floodLights) {
-          f.spot.intensity = on ? 28 : 0;
-          f.lensMat.emissiveIntensity = on ? 2 : 0;
+        g.group.position.set(g.pos.x + (Math.random() - 0.5) * 0.006, g.pos.y + Math.random() * 0.004, g.pos.z + (Math.random() - 0.5) * 0.006);
+        g.powerT += dt;
+        const on = g.powerT > 1.6 || Math.random() < g.powerT / 1.6;
+        for (const s of g.floods) s.intensity = on ? 28 : 0;
+        g.lensMat.emissiveIntensity = on ? 2 : 0;
+        g.coneMat.opacity = on ? 0.045 : 0;
+        g.poolMat.opacity = on ? 0.2 : 0;
+        g.coneMesh.visible = g.poolMesh.visible = on;
+        g.glow.material.opacity = 0.9;
+        g.gaugeNeedles.forEach((n, k) => { n.rotation.z = -1.0 - k * 0.4 + (Math.random() - 0.5) * 0.12; });
+        // exhaust smoke puffs, drifting up and spreading out
+        if ((g.smokeT -= dt) <= 0) {
+          g.smokeT = 0.22;
+          const p = g.smoke.find((q) => q.age >= q.life);
+          if (p) {
+            p.age = 0; p.life = 1.6 + Math.random() * 0.8;
+            p.vx = (Math.random() - 0.5) * 0.12; p.vz = (Math.random() - 0.5) * 0.12;
+            p.s.position.copy(g.smokeOrigin);
+            p.s.visible = true;
+          }
         }
-        genGlow.material.opacity = 0.9;
+        for (const p of g.smoke) {
+          if (p.age >= p.life) { p.s.visible = false; continue; }
+          p.age += dt;
+          const t = p.age / p.life;
+          p.s.position.x += p.vx * dt; p.s.position.z += p.vz * dt; p.s.position.y += (0.35 - t * 0.15) * dt;
+          p.s.scale.setScalar(0.08 + t * 0.4);
+          p.s.material.opacity = 0.3 * Math.sin(Math.PI * t);
+        }
       } else {
-        // idle: the red light blinks slowly
+        // idle: the red light blinks slowly, the gauges rest near zero
         const blink = 0.55 + 0.45 * Math.sin(genTime * 3);
-        genBulbMat.emissiveIntensity = blink;
-        genGlow.material.opacity = 0.35 + 0.5 * blink;
+        g.bulbMat.emissiveIntensity = blink;
+        g.glow.material.opacity = 0.35 + 0.5 * blink;
+        g.gaugeNeedles.forEach((n, k) => { n.rotation.z = 2.2 - g.progress * 0.25 - k * 0.1 + Math.sin(genTime * 2 + k) * 0.02; });
 
-        if (gen.holding < 0) {
+        if (g.holding < 0) {
           for (let i = 0; i < hands.length; i++) {
-            if ((pressedNow(i, 0) || pressedNow(i, 1)) && isNearHandle(hands[i])) {
-              gen.holding = i;
-              gen.active = false;
-              gen.cooldown = 0.5;   // short pause before the first check appears
-              zone.visible = false;
-              checkGroup.visible = true;
+            if ((pressedNow(i, 0) || pressedNow(i, 1)) && nearHandle(g, hands[i]) && !generators.some((o) => o.holding === i)) {
+              g.holding = i;
+              g.active = false;
+              g.cooldown = 0.5;   // short pause before the first check appears
+              g.check.zone.visible = false;
+              g.check.group.visible = true;
               pulse(controllers[i], 0.5, 40);
               break;
             }
           }
         } else {
-          const i = gen.holding, o = 1 - i;
-          const stillHolding = (now[i][0] || now[i][1]) && hands[i].tracked && hands[i].last.distanceTo(HANDLE_WORLD) < 0.4;
+          const i = g.holding, o = 1 - i;
+          const stillHolding = (now[i][0] || now[i][1]) && hands[i].tracked && hands[i].last.distanceTo(g.handleWorld) < 0.4;
           if (!stillHolding) {
-            releaseHandle();
+            releaseHandle(g);
           } else {
             const hitPressed = pressedNow(o, 0) || pressedNow(0, 2) || pressedNow(1, 2); // other trigger, or A / X
-            if (gen.active) {
-              gen.angle += (Math.PI * 2 / needleTurnTime) * dt;
-              needle.rotation.z = -gen.angle;
-              if (hitPressed) hitCheck();
-              else if (gen.angle >= Math.PI * 2) missCheck(); // the needle went all the way round
-            } else if ((gen.cooldown -= dt) <= 0) {
-              newCheck();
+            if (g.active) {
+              g.angle += (Math.PI * 2 / g.needleTurnTime) * dt;
+              g.check.needle.rotation.z = -g.angle;
+              if (hitPressed) hitCheck(g);
+              else if (g.angle >= Math.PI * 2) missCheck(g); // the needle went all the way round
+            } else if ((g.cooldown -= dt) <= 0) {
+              newCheck(g);
             }
           }
         }
       }
 
       // dial faces you; flashes red after a miss
-      if (checkGroup.visible) {
+      if (g.check.group.visible) {
         camera.getWorldPosition(_genCam);
-        checkGroup.lookAt(_genCam);
+        g.check.group.lookAt(_genCam);
       }
-      gen.flashT = Math.max(0, gen.flashT - dt);
-      dialBase.material.color.setHex(gen.flashT > 0 && Math.floor(gen.flashT * 12) % 2 === 0 ? 0xff2010 : 0x2a2a2a);
-      gen.sparkT = Math.max(0, gen.sparkT - dt);
-      sparkFlash.material.opacity = gen.sparkT > 0 ? Math.random() : 0;
-      sparkFlash.scale.setScalar(0.15 + Math.random() * 0.25);
+      g.flashT = Math.max(0, g.flashT - dt);
+      g.check.base.material.color.setHex(g.flashT > 0 && Math.floor(g.flashT * 12) % 2 === 0 ? 0xff2010 : 0x2a2a2a);
+      g.sparkT = Math.max(0, g.sparkT - dt);
+      g.spark.material.opacity = g.sparkT > 0 ? Math.random() : 0;
+      g.spark.scale.setScalar(0.15 + Math.random() * 0.25);
+    }
 
+    function updateGenerator(dt) {
+      genTime += dt;
+      const now = controllers.map((c) => [btn(c, 0), btn(c, 1), btn(c, 4)]);
+      const pressedNow = (i, k) => now[i][k] && !prevBtn[i][k];
+      for (const g of generators) updateOneGenerator(g, dt, now, pressedNow);
       prevBtn = now;
+      // generator pop-up fades out after a few seconds
+      if (toastT > 0) {
+        toastT -= dt;
+        toast.visible = toastT > 0;
+        toast.material.opacity = Math.min(1, toastT / 0.8);
+      }
     }
 
     // ---------- Flashlight ----------
@@ -2214,6 +2880,125 @@
       tiller.rotation.z = Math.PI / 2; tiller.position.set(0.2, 0.36, 0); motorGroup.add(tiller);
       propSlot = new THREE.Group(); propSlot.position.set(-0.07, -0.2, 0); motorGroup.add(propSlot);
     }
+    // ---------- Boat detail (added onto the model above; the boat's logic, colliders and install points are unchanged) ----------
+    // Hull ribs and planking seams, a planked bow deck, bench-seat supports, gunwale trim and rub rails, a detailed
+    // outboard (cowling, midsection, clamp bracket, anti-cavitation plate, gearcase and the shaft the propeller snaps onto),
+    // a fuel line with a primer bulb running to where the gas can connects, a bow lantern, and a spoked wheel with handles.
+    let bowLantern = null;
+    {
+      const L2 = BOAT_L / 2, W2 = BOAT_W / 2, T = 0.05;
+      const seamMat = new THREE.MeshStandardMaterial({ color: 0x24180f, roughness: 0.9 });
+      const cowlMat = new THREE.MeshStandardMaterial({ color: 0x3b444b, map: grimeTex, roughnessMap: grimeTex, roughness: 0.45, metalness: 0.5 });
+      const rubberMat = new THREE.MeshStandardMaterial({ color: 0x0e0e0e, roughness: 0.7 });
+      const bb = makeBatch();
+      const bowX0 = L2 * 0.35, bowLen = L2 - bowX0, bowAng = Math.atan2(W2, bowLen), bowEdge = Math.hypot(W2, bowLen);
+      // curved-looking ribs: frames up the inside of the straight sides, and along the angled bow
+      for (let x = -L2 + 0.18; x < bowX0; x += 0.24) for (const s of [-1, 1]) {
+        bb.add(UNIT_BOX, plankMat, x, 0.245, s * (W2 - T - 0.016), 0, 0, 0, 0.035, 0.33, 0.03);
+        bb.add(UNIT_BOX, plankMat, x, 0.1, s * (W2 - T - 0.05), s * 0.6, 0, 0, 0.035, 0.03, 0.09);   // knee where the rib meets the floor
+      }
+      for (const t of [0.22, 0.48, 0.72]) for (const s of [-1, 1]) {
+        const x = bowX0 + t * (L2 - T * 2.5 - bowX0), z = s * ((W2 - T) * (1 - t) - 0.02);
+        bb.add(UNIT_BOX, plankMat, x, 0.245, z, 0, s * bowAng, 0, 0.03, 0.33, 0.035);
+      }
+      // planking seams on the outside of the hull (straight sides, bow and transom)
+      for (const y of [-0.09, 0.03, 0.15, 0.27]) {
+        for (const s of [-1, 1]) {
+          bb.add(UNIT_BOX, seamMat, (-L2 + bowX0) / 2, y, s * (W2 + 0.003), 0, 0, 0, L2 + bowX0, 0.007, 0.006);
+          const nx = W2 / bowEdge, nz = bowLen / bowEdge;
+          bb.add(UNIT_BOX, seamMat, bowX0 + bowLen / 2 + nx * 0.004, y, s * (W2 / 2 + nz * 0.004), 0, s * bowAng, 0, bowEdge, 0.007, 0.006);
+        }
+        bb.add(UNIT_BOX, seamMat, -L2 - 0.003, y, 0, 0, 0, 0, 0.006, 0.007, BOAT_W);
+      }
+      // gunwale trim: caps along the bow edges and transom, rub rails along the outside
+      for (const s of [-1, 1]) {
+        bb.add(UNIT_BOX, plankMat, bowX0 + bowLen / 2, 0.405, s * W2 / 2, 0, s * bowAng, 0, bowEdge, 0.03, 0.06);
+        bb.add(UNIT_BOX, trimMat, (-L2 + bowX0) / 2, 0.3, s * (W2 + 0.012), 0, 0, 0, L2 + bowX0, 0.04, 0.025);
+        bb.add(UNIT_BOX, trimMat, bowX0 + bowLen / 2 + 0.01, 0.3, s * (W2 / 2 + 0.012), 0, s * bowAng, 0, bowEdge, 0.04, 0.025);
+      }
+      bb.add(UNIT_BOX, plankMat, -L2 + 0.03, 0.405, 0, 0, 0, 0, 0.06, 0.03, BOAT_W);
+      bb.add(UNIT_BOX, trimMat, -L2 + 0.02, 0.33, 0, 0, 0, 0, 0.1, 0.12, 0.26);              // transom pad where the motor clamps on
+      // planked bow deck with an edge trim
+      const deckX0 = 0.78, deckTip = L2 - T * 2.5, deckHalf = (W2 - T) * (deckTip - deckX0) / (deckTip - bowX0);
+      const deck = new THREE.Shape();
+      deck.moveTo(deckX0, -deckHalf); deck.lineTo(deckTip, 0); deck.lineTo(deckX0, deckHalf); deck.closePath();
+      const deckGeo = new THREE.ExtrudeGeometry(deck, { depth: 0.025, bevelEnabled: false });
+      deckGeo.rotateX(-Math.PI / 2);
+      bb.add(deckGeo, woodMat, 0, 0.355, 0);
+      bb.add(UNIT_BOX, trimMat, deckX0, 0.37, 0, 0, 0, 0, 0.03, 0.035, deckHalf * 2);
+      // bench seats: supports underneath and edge trim
+      for (const x of [-0.55, 0.12]) {
+        for (const z of [-0.3, 0.3]) bb.add(UNIT_BOX, plankMat, x, BOAT_FLOOR + 0.11, z, 0, 0, 0, 0.18, 0.22, 0.03);
+        for (const dx of [-0.125, 0.125]) bb.add(UNIT_BOX, trimMat, x + dx, BOAT_FLOOR + 0.235, 0, 0, 0, 0, 0.02, 0.035, BOAT_W - 0.12);
+      }
+      // floor slats
+      for (let z = -0.36; z <= 0.37; z += 0.12) bb.add(UNIT_BOX, plankMat, -0.35, BOAT_FLOOR + 0.006, z, 0, 0, 0, 1.4, 0.012, 0.07);
+      // fuel line: from the motor's fuel fitting over the transom, along the floor, through the primer bulb, to the gas can's spot
+      const fuel = new THREE.CatmullRomCurve3([
+        new THREE.Vector3(-L2 - 0.07, 0.3, 0.12), new THREE.Vector3(-L2 - 0.01, 0.45, 0.15), new THREE.Vector3(-L2 + 0.07, 0.3, 0.2),
+        new THREE.Vector3(-L2 + 0.12, BOAT_FLOOR + 0.03, 0.24), new THREE.Vector3(-L2 + 0.17, BOAT_FLOOR + 0.03, 0.27),
+        new THREE.Vector3(-L2 + 0.215, BOAT_FLOOR + 0.12, 0.3),
+      ]);
+      bb.add(new THREE.TubeGeometry(fuel, 40, 0.008, 6, false), rubberMat);
+      bb.add(new THREE.SphereGeometry(1, 12, 8), rubberMat, -L2 + 0.145, BOAT_FLOOR + 0.035, 0.255, 0, -0.6, 0, 0.028, 0.019, 0.019);
+      bb.add(new THREE.CylinderGeometry(0.011, 0.011, 0.025, 10), brassMat, -L2 + 0.22, BOAT_FLOOR + 0.12, 0.3, 0, 0, Math.PI / 2);
+      // bow lantern on a short post
+      const lx = deckTip - 0.1;
+      bb.add(new THREE.CylinderGeometry(0.012, 0.015, 0.16, 8), ironMat, lx, 0.46, 0);
+      bb.add(new THREE.CylinderGeometry(0.035, 0.04, 0.02, 10), ironMat, lx, 0.55, 0);
+      for (let k = 0; k < 4; k++) {
+        const a = (k / 4) * Math.PI * 2 + 0.4;
+        bb.add(new THREE.CylinderGeometry(0.004, 0.004, 0.09, 4), ironMat, lx + Math.cos(a) * 0.03, 0.605, Math.sin(a) * 0.03);
+      }
+      bb.add(new THREE.ConeGeometry(0.042, 0.035, 10), ironMat, lx, 0.668, 0);
+      bb.add(new THREE.TorusGeometry(0.016, 0.003, 4, 10), ironMat, lx, 0.7, 0, Math.PI / 2, 0, 0);
+      bb.build(boatGroup);
+      const lanternMat = new THREE.MeshStandardMaterial({ color: 0x2a1a08, emissive: 0xffa040, emissiveIntensity: 0.8, roughness: 0.4 });
+      const lanternGlass = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.026, 0.08, 10), lanternMat);
+      lanternGlass.position.set(lx, 0.605, 0);
+      boatGroup.add(lanternGlass);
+      const lanternGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xffa040, transparent: true, opacity: 0.5,
+        blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+      lanternGlow.scale.set(0.5, 0.5, 1);
+      lanternGlow.position.set(lx, 0.61, 0);
+      boatGroup.add(lanternGlow);
+      bowLantern = { mat: lanternMat, sprite: lanternGlow, dip: 1 };
+
+      // outboard motor assembly (in the motor's own frame: the motor sits behind the transom at local x = 0)
+      const mb = makeBatch();
+      mb.add(new THREE.SphereGeometry(1, 18, 12), cowlMat, 0, 0.35, 0, 0, 0, 0, 0.135, 0.12, 0.112);            // cowling
+      mb.add(UNIT_BOX, motorMat, 0, 0.27, 0, 0, 0, 0, 0.24, 0.03, 0.2);                                      // lower cowl band
+      mb.add(UNIT_BOX, seamMat, -0.002, 0.35, 0, 0, 0, 0, 0.27, 0.012, 0.226);                                // cowl seam
+      mb.add(new THREE.CylinderGeometry(0.012, 0.012, 0.03, 8), brassMat, 0.0, 0.3, 0.11, Math.PI / 2, 0, 0);  // fuel fitting
+      mb.add(UNIT_BOX, motorMat, 0.005, 0.12, 0, 0, 0, 0, 0.09, 0.2, 0.075);                                  // midsection
+      mb.add(UNIT_BOX, darkMetal, -0.02, -0.15, 0, 0, 0, 0, 0.16, 0.008, 0.11);                               // anti-cavitation plate
+      mb.add(new THREE.CapsuleGeometry(0.028, 0.1, 6, 12), motorMat, -0.015, -0.2, 0, 0, 0, Math.PI / 2);     // gearcase torpedo
+      mb.add(new THREE.CylinderGeometry(0.006, 0.006, 0.045, 8), darkMetal, -0.075, -0.2, 0, 0, 0, Math.PI / 2); // prop shaft (the propeller snaps on here)
+      mb.add(new THREE.CylinderGeometry(0.011, 0.011, 0.012, 6), brassMat, -0.098, -0.2, 0, 0, 0, Math.PI / 2);  // prop nut
+      for (const s of [-1, 1]) {
+        mb.add(UNIT_BOX, darkMetal, 0.065, 0.37, s * 0.055, 0, 0, 0, 0.05, 0.15, 0.025);                      // clamp bracket
+        mb.add(new THREE.CylinderGeometry(0.006, 0.006, 0.06, 6), darkMetal, 0.1, 0.33, s * 0.055, 0, 0, Math.PI / 2); // clamp screw
+        mb.add(new THREE.CylinderGeometry(0.01, 0.01, 0.03, 8), rubberMat, 0.13, 0.33, s * 0.055, Math.PI / 2, 0, 0);
+      }
+      mb.add(new THREE.CylinderGeometry(0.012, 0.012, 0.16, 8), darkMetal, 0.05, 0.3, 0, Math.PI / 2, 0, 0);    // tilt tube
+      mb.add(new THREE.CylinderGeometry(0.017, 0.017, 0.09, 10), rubberMat, 0.33, 0.36, 0, 0, 0, Math.PI / 2);  // tiller grip
+      mb.build(motorGroup);
+
+      // steering wheel: handles on the spokes, an inner ring, a brass hub and a steering column into the console
+      const wb = makeBatch();
+      const wheelWood = new THREE.MeshStandardMaterial({ color: 0x6b4423, roughness: 0.6, emissive: 0x1a0d00 });
+      for (let k = 0; k < 6; k++) {
+        const a = Math.PI / 2 + (k * Math.PI) / 3;
+        wb.add(new THREE.CylinderGeometry(0.008, 0.011, 0.045, 8), wheelWood, Math.cos(a) * 0.137, Math.sin(a) * 0.137, 0, 0, 0, a - Math.PI / 2);
+        wb.add(new THREE.SphereGeometry(0.011, 8, 6), wheelWood, Math.cos(a) * 0.16, Math.sin(a) * 0.16, 0);
+      }
+      wb.add(new THREE.TorusGeometry(0.05, 0.006, 6, 24), wheelWood, 0, 0, 0);
+      wb.add(new THREE.CylinderGeometry(0.032, 0.032, 0.036, 14), brassMat, 0, 0, -0.006, Math.PI / 2, 0, 0);
+      wb.build(wheelInner);
+      const cb = makeBatch();
+      cb.add(new THREE.CylinderGeometry(0.014, 0.018, 0.12, 10), darkMetal, 0, 0, 0.065, Math.PI / 2, 0, 0);   // local +z points forward, into the console
+      cb.build(wheelInner.parent);
+    }
     const wheelWorld = new THREE.Vector3();
     const repairZoneLocal = new THREE.Vector3(-BOAT_L / 2 + 0.05, 0.3, 0);
     const repairZoneWorld = new THREE.Vector3();
@@ -2788,7 +3573,7 @@
     //  GRIMAPE title screen (self-contained). Plugs into the loop with titleBeforePhysics()
     //  before locomotion and updateTitle() after it; the desktop overlay is the #title-screen div.
     // =====================================================================
-    const TITLE_POS = new THREE.Vector3(0, 0, 34);        // dark start area behind the southern tree line (out of sight of the camp)
+    const TITLE_POS = new THREE.Vector3(TITLE_CLEARING.x, 0, TITLE_CLEARING.z); // dark start area past the southern tree line (moved out with the bigger map)
     const TITLE_BOARD_W = 1.9;                            // logo board width (m)
     const TITLE_BOARD_DIST = 1.5, TITLE_BOARD_Y = 0.72;   // board distance in front of you and its centre height
     const TITLE_BOARD_TILT = 0.15;                        // the board leans towards you (rad)
@@ -3454,6 +4239,29 @@
       if (pressed) pressPlay(true);
     }
 
+    // =====================================================================
+    //  Flickering cabin and bow lanterns (emissive glass + glow sprites, no real lights)
+    // =====================================================================
+    let campExtrasT = 0;
+    function flickerLantern(l, dt, base) {
+      if (Math.random() < dt * 0.25) l.dip = Math.random() * 0.35;   // now and then it nearly gutters out
+      l.dip += (1 - l.dip) * Math.min(1, dt * 1.6);
+      return l.dip * (0.86 + 0.14 * Math.sin(campExtrasT * 9 + base) * Math.sin(campExtrasT * 3.7 + base * 2));
+    }
+    function updateCampExtras(dt) {
+      campExtrasT += dt;
+      for (const c of cabinLights) {
+        const f = flickerLantern(c, dt, c.phase);
+        c.mat.emissiveIntensity = 0.75 * f;
+        for (const s of c.sprites) s.material.opacity = 0.55 * f;
+      }
+      if (bowLantern) {
+        const f = flickerLantern(bowLantern, dt, 4.2);
+        bowLantern.mat.emissiveIntensity = 0.85 * f;
+        bowLantern.sprite.material.opacity = 0.5 * f;
+      }
+    }
+
     // ---------- XR session hooks ----------
     renderer.xr.addEventListener('sessionstart', () => {
       horrorAudio.start(); // backup in case the click handler didn't get to run
@@ -3503,7 +4311,8 @@
 
         pollAButton();
         updateGenerator(dt);
-        horrorAudio.setGeneratorDistance(_camWorld.distanceTo(_genSound));
+        horrorAudio.setGeneratorDistance(nearestRunningGeneratorDistance(_camWorld)); // engine sound from the nearest running generator
+        updateCampExtras(dt); // cabin and boat lanterns flicker
         controllers.forEach(updatePointer);
       } catch (err) {
         if (!loopErrorReported) {
