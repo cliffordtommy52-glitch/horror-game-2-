@@ -34,6 +34,7 @@
     VR: push off the ground, trees, rocks, tents and the cabin with your hands to move, jump and climb (the mossy log is slippery).<br />
     <b>A</b> (right controller) toggles the flashlight; grip moves it to that hand.<br />
     Desktop: drag to orbit, <b>F</b> toggles the flashlight (no locomotion).<br />
+    Generator: hold Trigger or Grip on its yellow handle, then hit each skill check with the other Trigger (or A / X). Beat 3 to power the floodlights.<br />
     Ambient horror music starts when you press ENTER VR (headphones recommended).
   </div>
   <div id="diag"></div>
@@ -175,7 +176,7 @@
     playerRig.add(camera); // camera must be in the scene graph so its children (flashlight) render
 
     const orbit = new OrbitControls(camera, renderer.domElement);
-    orbit.target.set(0, 0.8, -4.5); // look at the campfire on desktop
+    orbit.target.set(0, 0.4, -2.5); // look at the campfire on desktop
     orbit.update();
 
     // Very faint cold moonlight so the world isn't pitch black
@@ -316,12 +317,17 @@
     ground.receiveShadow = true;
     scene.add(ground);
 
-    // Layout of the camp
-    const FIRE = new THREE.Vector3(0, 0, -4.5);
-    const CABIN = { x: 0, z: -14, w: 5, d: 4, h: 2.6 };
+    // Layout of the camp. CAMP_SCALE shrinks the campsite props to suit the small Gorilla-height player.
+    const CAMP_SCALE = 0.55;
+    const S = CAMP_SCALE;
+    const FIRE = new THREE.Vector3(0, 0, -4.5 * S);
+    // cabin: footprint scaled, walls kept a little taller so the doorway clears your head
+    const CABIN = { x: 0, z: -14 * S, w: 5 * S, d: 4 * S, h: 1.6 };
+    const GEN_POS = new THREE.Vector3(-2.6, 0, -0.6);               // the old generator
+    const FLOOD_POS = [[2.9, -0.9], [-3.6, -2.2], [1.6, -6.2]];     // floodlight poles around the camp
 
     // Bare trampled dirt around the fire
-    const clearing = new THREE.Mesh(new THREE.CircleGeometry(5.5, 48),
+    const clearing = new THREE.Mesh(new THREE.CircleGeometry(5.5 * S, 48),
       new THREE.MeshStandardMaterial({ map: clearingTex, transparent: true, depthWrite: false, roughness: 1,
                                        polygonOffset: true, polygonOffsetFactor: -1 }));
     clearing.rotation.x = -Math.PI / 2;
@@ -331,9 +337,11 @@
 
     // Places already taken, so scattered props don't overlap the camp or each other
     const occupied = [
-      { x: 0, z: 0, r: 2.0 },                    // where you spawn
-      { x: FIRE.x, z: FIRE.z, r: 6.0 },          // campsite clearing
-      { x: CABIN.x, z: CABIN.z, r: 4.2 },        // ranger cabin
+      { x: 0, z: 0, r: 1.6 },                    // where you spawn
+      { x: FIRE.x, z: FIRE.z, r: 6.0 * S },      // campsite clearing
+      { x: CABIN.x, z: CABIN.z, r: 4.2 * S },    // ranger cabin
+      { x: GEN_POS.x, z: GEN_POS.z, r: 0.9 },    // generator
+      ...FLOOD_POS.map(([x, z]) => ({ x, z, r: 0.4 })), // floodlight poles
     ];
     function findSpot(radius, range = WORLD_HALF - 1.5, tries = 60) {
       for (let i = 0; i < tries; i++) {
@@ -400,7 +408,7 @@
       let n = 0;
       while (n < tufts.count) {
         const x = rr(-WORLD_HALF, WORLD_HALF), z = rr(-WORLD_HALF, WORLD_HALF);
-        if (Math.hypot(x - FIRE.x, z - FIRE.z) < 5.8) continue;
+        if (Math.hypot(x - FIRE.x, z - FIRE.z) < 5.8 * S) continue;
         if (Math.abs(x - CABIN.x) < CABIN.w / 2 + 0.3 && Math.abs(z - CABIN.z) < CABIN.d / 2 + 0.3) continue;
         const sc = rr(0.6, 1.6);
         q.setFromEuler(e.set(rr(-0.25, 0.25), rr(0, 6.3), rr(-0.25, 0.25)));
@@ -417,8 +425,8 @@
 
     // ---------- Boulders ----------
     for (let i = 0; i < 14; i++) {
-      const sx = rr(0.5, 1.4), sy = rr(0.4, 1.1), sz = rr(0.5, 1.3);
-      const spot = findSpot(Math.max(sx, sz) + 0.4);
+      const sx = rr(0.5, 1.4) * S, sy = rr(0.4, 1.1) * S, sz = rr(0.5, 1.3) * S;
+      const spot = findSpot(Math.max(sx, sz) + 0.3);
       if (!spot) continue;
       const geo = new THREE.DodecahedronGeometry(1, 1);
       const pos = geo.attributes.position;
@@ -453,18 +461,18 @@
       return log;
     }
     for (let i = 0; i < 8; i++) {
-      const len = rr(2.5, 5), r = rr(0.2, 0.35);
+      const len = rr(2.5, 5) * S, r = rr(0.2, 0.35) * S;
       const spot = findSpot(len / 2 + 0.3);
       if (spot) addLog(spot.x, spot.z, len, r, rng() < 0.5);
     }
     { // one wet, mossy log: slippery like the old blue block (Surface slipPercentage)
-      const spot = findSpot(2.4);
-      if (spot) addLog(spot.x, spot.z, 4, 0.3, true, mossMat, 0.7);
+      const spot = findSpot(2.4 * S);
+      if (spot) addLog(spot.x, spot.z, 4 * S, 0.3 * S, true, mossMat, 0.7);
     }
     for (let i = 0; i < 6; i++) {
       const spot = findSpot(0.7);
       if (!spot) continue;
-      const r = rr(0.25, 0.45), h = rr(0.3, 0.7);
+      const r = rr(0.25, 0.45) * S, h = rr(0.3, 0.7) * S;
       const stump = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.9, r * 1.1, h, 10), barkMat);
       stump.position.set(spot.x, h / 2, spot.z);
       stump.castShadow = stump.receiveShadow = true;
@@ -474,27 +482,27 @@
     }
 
     // ---------- Campsite: log benches + a plank bench around the fire ----------
-    addLog(FIRE.x, FIRE.z + 2.3, 2.2, 0.22, true);
-    addLog(FIRE.x, FIRE.z - 2.3, 2.2, 0.22, true);
-    addLog(FIRE.x + 2.3, FIRE.z, 2.0, 0.2, false);
+    addLog(FIRE.x, FIRE.z + 2.3 * S, 2.2 * S, 0.22 * S, true);
+    addLog(FIRE.x, FIRE.z - 2.3 * S, 2.2 * S, 0.22 * S, true);
+    addLog(FIRE.x + 2.3 * S, FIRE.z, 2.0 * S, 0.2 * S, false);
     { // plank bench on the west side
-      const bx = FIRE.x - 2.4, bz = FIRE.z;
-      const seat = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.07, 1.8), plankMat);
-      seat.position.set(bx, 0.45, bz);
-      for (const dz of [-0.7, 0.7]) {
-        const leg = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.42, 0.08), plankMat);
-        leg.position.set(bx, 0.21, bz + dz);
+      const bx = FIRE.x - 2.4 * S, bz = FIRE.z;
+      const seat = new THREE.Mesh(new THREE.BoxGeometry(0.4 * S, 0.07 * S, 1.8 * S), plankMat);
+      seat.position.set(bx, 0.45 * S, bz);
+      for (const dz of [-0.7 * S, 0.7 * S]) {
+        const leg = new THREE.Mesh(new THREE.BoxGeometry(0.35 * S, 0.42 * S, 0.08 * S), plankMat);
+        leg.position.set(bx, 0.21 * S, bz + dz);
         leg.castShadow = true;
         scene.add(leg);
       }
       seat.castShadow = seat.receiveShadow = true;
       scene.add(seat);
       rayTargets.push(seat);
-      addBoxCollider(bx, 0, bz, 0.4, 0.49, 1.8);
+      addBoxCollider(bx, 0, bz, 0.4 * S, 0.49 * S, 1.8 * S);
     }
 
     // ---------- Pitched A-frame tents (stepped box colliders follow the slope so you can climb them) ----------
-    function addTent(x, z, color, w = 2.2, h = 1.5, len = 2.6) {
+    function addTent(x, z, color, w = 2.2 * S, h = 1.5 * S, len = 2.6 * S) {
       const shape = new THREE.Shape();
       shape.moveTo(-w / 2, 0); shape.lineTo(w / 2, 0); shape.lineTo(0, h); shape.closePath();
       const geo = new THREE.ExtrudeGeometry(shape, { depth: len, bevelEnabled: false });
@@ -522,14 +530,14 @@
         addBoxCollider(x, y0, z, w * (1 - (k + 0.5) / steps), y1 - y0, len);
       }
     }
-    addTent(-4.8, -7.6, 0x3a4a2e);
-    addTent(4.6, -7.3, 0x5a3a1e);
+    addTent(-4.8 * S, -7.6 * S, 0x3a4a2e);
+    addTent(4.6 * S, -7.3 * S, 0x5a3a1e);
 
     // ---------- Abandoned ranger cabin with an open doorway facing the camp ----------
     let cabinLantern, cabinLanternMesh;
     {
       const { x: cx, z: cz, w: W, d: D, h: H } = CABIN;
-      const T = 0.2, DOOR_W = 1.1, DOOR_H = 2.0, RISE = 1.2;
+      const T = 0.12, DOOR_W = 0.9, DOOR_H = 1.35, RISE = 1.2 * S; // doorway: 0.9 m wide, 1.35 m tall (you fit standing up)
       // walls
       solidBox(cx, 0, cz - D / 2 + T / 2, W, H, T, woodMat);                 // back
       solidBox(cx - W / 2 + T / 2, 0, cz, T, H, D, woodMat);                 // left
@@ -538,14 +546,15 @@
       solidBox(cx - W / 2 + segW / 2, 0, cz + D / 2 - T / 2, segW, H, T, woodMat); // front, left of door
       solidBox(cx + W / 2 - segW / 2, 0, cz + D / 2 - T / 2, segW, H, T, woodMat); // front, right of door
       solidBox(cx, DOOR_H, cz + D / 2 - T / 2, DOOR_W, H - DOOR_H, T, woodMat);   // lintel above the door
-      solidBox(cx, 0, cz, W - 2 * T, 0.08, D - 2 * T, plankMat);             // floorboards
+      solidBox(cx, 0, cz, W - 2 * T, 0.05, D - 2 * T, plankMat);             // floorboards
 
       // gable roof (visual) ...
-      const slopeLen = Math.hypot(D / 2 + 0.3, RISE + 0.18);
-      const angle = Math.atan2(RISE + 0.18, D / 2 + 0.3);
+      const OVER = 0.3 * S, DROP = 0.18 * S; // eave overhang
+      const slopeLen = Math.hypot(D / 2 + OVER, RISE + DROP);
+      const angle = Math.atan2(RISE + DROP, D / 2 + OVER);
       for (const side of [1, -1]) {
-        const slab = new THREE.Mesh(new THREE.BoxGeometry(W + 0.5, 0.1, slopeLen), roofMat);
-        slab.position.set(cx, H - 0.18 + (RISE + 0.18) / 2, cz + side * (D / 2 + 0.3) / 2);
+        const slab = new THREE.Mesh(new THREE.BoxGeometry(W + 0.5 * S, 0.1 * S, slopeLen), roofMat);
+        slab.position.set(cx, H - DROP + (RISE + DROP) / 2, cz + side * (D / 2 + OVER) / 2);
         slab.rotation.x = side * angle;
         slab.castShadow = slab.receiveShadow = true;
         scene.add(slab);
@@ -560,20 +569,21 @@
         scene.add(g);
       }
       // ... and its colliders: a ceiling slab plus stepped boxes up to the ridge, so you can climb onto the roof
-      addBoxCollider(cx, H, cz, W, 0.15, D);
-      addBoxCollider(cx, H + 0.15, cz, W, 0.35, D * 0.66);
-      addBoxCollider(cx, H + 0.5, cz, W, 0.35, D * 0.4);
-      addBoxCollider(cx, H + 0.85, cz, W, 0.35, D * 0.15);
+      const step = RISE / 4;
+      addBoxCollider(cx, H, cz, W, step, D);
+      addBoxCollider(cx, H + step, cz, W, step, D * 0.66);
+      addBoxCollider(cx, H + 2 * step, cz, W, step, D * 0.4);
+      addBoxCollider(cx, H + 3 * step, cz, W, step, D * 0.15);
 
       // inside: an old table, a cot, and a dying lantern
-      solidBox(cx + 1.3, 0, cz - 0.9, 1.2, 0.75, 0.7, plankMat);
-      solidBox(cx - 1.5, 0, cz - 0.4, 0.8, 0.4, 1.8, roofMat);
-      const lantern = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.07, 0.18, 8),
+      solidBox(cx + 1.3 * S, 0, cz - 0.9 * S, 1.2 * S, 0.75 * S, 0.7 * S, plankMat);
+      solidBox(cx - 1.5 * S, 0, cz - 0.4 * S, 0.8 * S, 0.4 * S, 1.8 * S, roofMat);
+      const lantern = new THREE.Mesh(new THREE.CylinderGeometry(0.06 * S, 0.07 * S, 0.18 * S, 8),
         new THREE.MeshStandardMaterial({ color: 0x223322, emissive: 0x6f9f5f, emissiveIntensity: 1 }));
-      lantern.position.set(cx + 1.4, 0.84, cz - 0.9);
+      lantern.position.set(cx + 1.4 * S, 0.75 * S + 0.05, cz - 0.9 * S);
       scene.add(lantern);
       cabinLantern = new THREE.PointLight(0x9fdc8a, 2.5, 6, 2);
-      cabinLantern.position.set(cx + 1.4, 1.0, cz - 0.9);
+      cabinLantern.position.set(cx + 1.4 * S, 0.75 * S + 0.2, cz - 0.9 * S);
       scene.add(cabinLantern);
       cabinLanternMesh = lantern;
     }
@@ -581,6 +591,7 @@
     // ---------- Campfire: stones, burning logs, flames, glow, flickering light and embers ----------
     const fire = new THREE.Group();
     fire.position.copy(FIRE);
+    fire.scale.setScalar(S); // stones, logs, flames, glow and embers all shrink with the camp
     scene.add(fire);
     for (let i = 0; i < 11; i++) {
       const a = (i / 11) * Math.PI * 2;
@@ -590,7 +601,7 @@
       stone.castShadow = true;
       fire.add(stone);
     }
-    addBoxCollider(FIRE.x, 0, FIRE.z, 1.3, 0.25, 1.3); // the stone ring is solid
+    addBoxCollider(FIRE.x, 0, FIRE.z, 1.3 * S, 0.25 * S, 1.3 * S); // the stone ring is solid
 
     const charMat = new THREE.MeshStandardMaterial({ color: 0x1a120c, emissive: 0x4a1606, roughness: 1 });
     for (let i = 0; i < 5; i++) { // logs leaning into a teepee
@@ -682,6 +693,258 @@
       lanternFlicker += (1 - lanternFlicker) * dt * 1.5;
       cabinLantern.intensity = 2.5 * lanternFlicker * (0.9 + Math.random() * 0.1);
       cabinLanternMesh.material.emissiveIntensity = lanternFlicker;
+    }
+
+
+    // =====================================================================
+    //  Old metal generator: grab the handle, beat 3 skill checks, power the floodlights
+    // =====================================================================
+    const GEN_CHECKS_NEEDED = 3;
+    const NEEDLE_TURN_TIME  = 1.4;                       // seconds for the needle to sweep the full dial once
+    const SUCCESS_ZONE      = THREE.MathUtils.degToRad(50);
+    const GRAB_RADIUS       = 0.17;                      // how close (m) your hand must be to the handle to grab it
+
+    const genGroup = new THREE.Group();
+    genGroup.position.copy(GEN_POS);
+    scene.add(genGroup);
+    {
+      const rust  = new THREE.MeshStandardMaterial({ color: 0x5b3a2a, roughness: 0.65, metalness: 0.55 });
+      const dark  = new THREE.MeshStandardMaterial({ color: 0x1d1d1f, roughness: 0.6, metalness: 0.7 });
+      const tankM = new THREE.MeshStandardMaterial({ color: 0x6b2a1e, roughness: 0.5, metalness: 0.5 });
+      const add = (mesh, x, y, z) => { mesh.position.set(x, y, z); mesh.castShadow = mesh.receiveShadow = true; genGroup.add(mesh); rayTargets.push(mesh); return mesh; };
+      add(new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.26, 0.3), rust), 0, 0.2, 0);                 // engine block
+      for (const z of [-0.16, 0.16]) for (const y of [0.04, 0.4]) {                                    // tube frame
+        const rail = add(new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.54, 8), dark), 0, y, z);
+        rail.rotation.z = Math.PI / 2;
+      }
+      for (const x of [-0.26, 0.26]) for (const z of [-0.16, 0.16])
+        add(new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.38, 8), dark), x, 0.22, z);
+      const tank = add(new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.36, 14), tankM), -0.02, 0.4, 0); // fuel tank
+      tank.rotation.z = Math.PI / 2;
+      const muffler = add(new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.16, 10), dark), -0.18, 0.2, 0.19);
+      muffler.rotation.z = Math.PI / 2;
+      add(new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.14, 0.2), dark), 0.24, 0.22, 0);             // control panel
+    }
+    addBoxCollider(GEN_POS.x, 0, GEN_POS.z, 0.56, 0.5, 0.36); // solid: you can push off or climb it
+
+    // Red/green status light (emissive bulb + a glow sprite so it reads through the fog)
+    const genBulbMat = new THREE.MeshStandardMaterial({ color: 0x220000, emissive: 0xff1a10, emissiveIntensity: 1 });
+    const genBulb = new THREE.Mesh(new THREE.SphereGeometry(0.022, 12, 8), genBulbMat);
+    genBulb.position.set(0.25, 0.33, 0.06);
+    genGroup.add(genBulb);
+    const genGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xff2a1a, transparent: true,
+      blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+    genGlow.scale.set(0.22, 0.22, 1);
+    genGlow.position.copy(genBulb.position);
+    genGroup.add(genGlow);
+
+    // Progress pips on the panel (amber when a skill check is done)
+    const genPips = [-0.05, 0, 0.05].map((z) => {
+      const pip = new THREE.Mesh(new THREE.SphereGeometry(0.011, 8, 6),
+        new THREE.MeshStandardMaterial({ color: 0x111111, emissive: 0x000000 }));
+      pip.position.set(0.252, 0.26, z - 0.03);
+      genGroup.add(pip);
+      return pip;
+    });
+
+    // Prominent grab handle: a bright yellow T-grip sticking out of the side that faces the camp
+    const HANDLE_LOCAL = new THREE.Vector3(0.34, 0.24, -0.04);
+    {
+      const yellow = new THREE.MeshStandardMaterial({ color: 0xe0b020, emissive: 0x3a2800, roughness: 0.5 });
+      const cord = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.09, 6), new THREE.MeshStandardMaterial({ color: 0x111111 }));
+      cord.rotation.z = Math.PI / 2;
+      cord.position.set(0.29, 0.24, -0.04);
+      genGroup.add(cord);
+      const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.13, 10), yellow);
+      grip.rotation.x = Math.PI / 2;
+      grip.position.copy(HANDLE_LOCAL);
+      grip.castShadow = true;
+      genGroup.add(grip);
+    }
+    const HANDLE_WORLD = HANDLE_LOCAL.clone().add(GEN_POS);
+
+    // Spark flash for failed checks
+    const sparkFlash = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xfff0a0, transparent: true,
+      opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+    sparkFlash.position.copy(HANDLE_LOCAL);
+    genGroup.add(sparkFlash);
+
+    // ---------- Floating skill-check dial ----------
+    const DIAL_R = 0.13;
+    const checkGroup = new THREE.Group();
+    checkGroup.position.set(GEN_POS.x + 0.15, 0.68, GEN_POS.z);
+    checkGroup.visible = false;
+    scene.add(checkGroup);
+    const dialMat = (color, opacity = 1) => new THREE.MeshBasicMaterial({ color, transparent: true, opacity, side: THREE.DoubleSide, fog: false, depthWrite: false });
+    const dialBase = new THREE.Mesh(new THREE.RingGeometry(DIAL_R * 0.84, DIAL_R, 64), dialMat(0x2a2a2a, 0.85));
+    checkGroup.add(dialBase);
+    const dialBack = new THREE.Mesh(new THREE.CircleGeometry(DIAL_R * 0.84, 48), dialMat(0x000000, 0.45));
+    checkGroup.add(dialBack);
+    // success zone: green band with a bright white outer edge; built from theta 0 and rotated into place
+    const zone = new THREE.Group();
+    zone.add(new THREE.Mesh(new THREE.RingGeometry(DIAL_R * 0.84, DIAL_R, 24, 1, 0, SUCCESS_ZONE), dialMat(0x3cff6e, 0.9)));
+    zone.add(new THREE.Mesh(new THREE.RingGeometry(DIAL_R, DIAL_R * 1.08, 24, 1, 0, SUCCESS_ZONE), dialMat(0xffffff, 1)));
+    zone.position.z = 0.001;
+    checkGroup.add(zone);
+    const needleGeo = new THREE.BoxGeometry(0.007, DIAL_R * 1.05, 0.002);
+    needleGeo.translate(0, DIAL_R * 0.52, 0);
+    const needle = new THREE.Mesh(needleGeo, dialMat(0xff3322, 1));
+    needle.position.z = 0.002;
+    checkGroup.add(needle);
+    checkGroup.add(new THREE.Mesh(new THREE.CircleGeometry(0.012, 16), dialMat(0xdddddd, 1)));
+    const dialPips = [-1, 0, 1].map((k) => {
+      const pip = new THREE.Mesh(new THREE.CircleGeometry(0.012, 16), dialMat(0x444444, 1));
+      pip.position.set(k * 0.035, -DIAL_R - 0.035, 0);
+      checkGroup.add(pip);
+      return pip;
+    });
+
+    // ---------- Floodlights (off until the generator runs) ----------
+    const floodLights = FLOOD_POS.map(([x, z]) => {
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.035, 2.0, 8), new THREE.MeshStandardMaterial({ color: 0x2a2a2a, metalness: 0.6, roughness: 0.6 }));
+      pole.position.set(x, 1.0, z);
+      pole.castShadow = true;
+      scene.add(pole);
+      rayTargets.push(pole);
+      addBoxCollider(x, 0, z, 0.07, 2.0, 0.07); // climbable pole
+      const lensMat = new THREE.MeshStandardMaterial({ color: 0x111111, emissive: 0xeef4ff, emissiveIntensity: 0 });
+      const head = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.13, 0.08), lensMat);
+      head.position.set(x, 2.02, z);
+      head.lookAt(FIRE.x, 0, FIRE.z);
+      scene.add(head);
+      // SpotLights stay in the scene at intensity 0 while off (turning lights on/off by visibility recompiles shaders)
+      const spot = new THREE.SpotLight(0xdfe8ff, 0, 16, 0.6, 0.5, 2);
+      spot.position.set(x, 2.0, z);
+      spot.target.position.set(FIRE.x, 0, FIRE.z);
+      scene.add(spot, spot.target);
+      return { spot, lensMat };
+    });
+
+    // ---------- Generator logic ----------
+    const gen = { progress: 0, running: false, holding: -1, active: false, angle: 0, zoneStart: 0, cooldown: 0, powerT: 0, sparkT: 0, flashT: 0 };
+    let genTime = 0;
+    let prevBtn = [[false, false, false], [false, false, false]]; // [trigger, squeeze, A/X] per controller
+    const _genCam = new THREE.Vector3();
+
+    const btn = (c, idx) => !!c.userData.inputSource?.gamepad?.buttons[idx]?.pressed;
+    function isNearHandle(hand) {
+      return !gen.running && hand.tracked && hand.last.distanceTo(HANDLE_WORLD) < GRAB_RADIUS;
+    }
+
+    function newCheck() {
+      gen.zoneStart = THREE.MathUtils.randFloat(0.35 * Math.PI, 2 * Math.PI - SUCCESS_ZONE - 0.15);
+      // dial angles are measured clockwise from the top; RingGeometry measures counter-clockwise from +x
+      zone.rotation.z = Math.PI / 2 - gen.zoneStart - SUCCESS_ZONE;
+      zone.visible = true;
+      gen.angle = 0;
+      needle.rotation.z = 0;
+      gen.active = true;
+      horrorAudio.checkStart();
+    }
+    function releaseHandle() {
+      gen.holding = -1;
+      gen.active = false;
+      checkGroup.visible = false;
+    }
+    function updatePips() {
+      genPips.forEach((p, i) => p.material.emissive.setHex(i < gen.progress ? 0xffa020 : 0x000000));
+      dialPips.forEach((p, i) => p.material.color.setHex(i < gen.progress ? 0xffffff : 0x444444));
+    }
+    function hitCheck() {
+      const inZone = gen.angle >= gen.zoneStart && gen.angle <= gen.zoneStart + SUCCESS_ZONE;
+      gen.active = false;
+      if (inZone) {
+        gen.progress++;
+        updatePips();
+        horrorAudio.clank();
+        controllers.forEach((c) => pulse(c, 0.5, 50));
+        if (gen.progress >= GEN_CHECKS_NEEDED) return powerUp();
+        gen.cooldown = 0.9;
+        zone.visible = false;
+      } else missCheck();
+    }
+    function missCheck() {
+      gen.active = false;
+      horrorAudio.spark();
+      controllers.forEach((c) => pulse(c, 1.0, 250));
+      gen.sparkT = 0.3;
+      gen.flashT = 0.5;
+      gen.cooldown = 1.3; // this check resets; earlier successes are kept
+      zone.visible = false;
+    }
+    function powerUp() {
+      gen.running = true;
+      releaseHandle();
+      genBulbMat.color.setHex(0x002200);
+      genBulbMat.emissive.setHex(0x30ff50);
+      genGlow.material.color.setHex(0x40ff60);
+      horrorAudio.engineOn();
+    }
+
+    function updateGenerator(dt) {
+      genTime += dt;
+      const now = controllers.map((c) => [btn(c, 0), btn(c, 1), btn(c, 4)]);
+      const pressedNow = (i, k) => now[i][k] && !prevBtn[i][k];
+
+      if (gen.running) {
+        // engine shake + floodlights flicker to life, then stay on
+        genGroup.position.set(GEN_POS.x + (Math.random() - 0.5) * 0.006, Math.random() * 0.004, GEN_POS.z + (Math.random() - 0.5) * 0.006);
+        gen.powerT += dt;
+        const on = gen.powerT > 1.6 || Math.random() < gen.powerT / 1.6;
+        for (const f of floodLights) {
+          f.spot.intensity = on ? 28 : 0;
+          f.lensMat.emissiveIntensity = on ? 2 : 0;
+        }
+        genGlow.material.opacity = 0.9;
+      } else {
+        // idle: the red light blinks slowly
+        const blink = 0.55 + 0.45 * Math.sin(genTime * 3);
+        genBulbMat.emissiveIntensity = blink;
+        genGlow.material.opacity = 0.35 + 0.5 * blink;
+
+        if (gen.holding < 0) {
+          for (let i = 0; i < hands.length; i++) {
+            if ((pressedNow(i, 0) || pressedNow(i, 1)) && isNearHandle(hands[i])) {
+              gen.holding = i;
+              gen.active = false;
+              gen.cooldown = 0.5;   // short pause before the first check appears
+              zone.visible = false;
+              checkGroup.visible = true;
+              pulse(controllers[i], 0.5, 40);
+              break;
+            }
+          }
+        } else {
+          const i = gen.holding, o = 1 - i;
+          const stillHolding = (now[i][0] || now[i][1]) && hands[i].tracked && hands[i].last.distanceTo(HANDLE_WORLD) < 0.4;
+          if (!stillHolding) {
+            releaseHandle();
+          } else {
+            const hitPressed = pressedNow(o, 0) || pressedNow(0, 2) || pressedNow(1, 2); // other trigger, or A / X
+            if (gen.active) {
+              gen.angle += (Math.PI * 2 / NEEDLE_TURN_TIME) * dt;
+              needle.rotation.z = -gen.angle;
+              if (hitPressed) hitCheck();
+              else if (gen.angle >= Math.PI * 2) missCheck(); // the needle went all the way round
+            } else if ((gen.cooldown -= dt) <= 0) {
+              newCheck();
+            }
+          }
+        }
+      }
+
+      // dial faces you; flashes red after a miss
+      if (checkGroup.visible) {
+        camera.getWorldPosition(_genCam);
+        checkGroup.lookAt(_genCam);
+      }
+      gen.flashT = Math.max(0, gen.flashT - dt);
+      dialBase.material.color.setHex(gen.flashT > 0 && Math.floor(gen.flashT * 12) % 2 === 0 ? 0xff2010 : 0x2a2a2a);
+      gen.sparkT = Math.max(0, gen.sparkT - dt);
+      sparkFlash.material.opacity = gen.sparkT > 0 ? Math.random() : 0;
+      sparkFlash.scale.setScalar(0.15 + Math.random() * 0.25);
+
+      prevBtn = now;
     }
 
     // ---------- Flashlight ----------
@@ -817,6 +1080,7 @@
 
       // Squeeze (grip button) moves the flashlight to that hand
       controller.addEventListener('squeezestart', () => {
+        if (isNearHandle(hand)) return; // squeezing the generator handle grabs it instead
         attachFlashlight(controller);
         pulse(controller, 0.6, 60);
       });
@@ -838,7 +1102,7 @@
     function pollAButton() {
       const right = controllers.find((c) => c.userData.inputSource?.handedness === 'right');
       const pressed = !!right?.userData.inputSource.gamepad?.buttons[A_BUTTON]?.pressed;
-      if (pressed && !aWasPressed) {
+      if (pressed && !aWasPressed && gen.holding < 0) {
         toggleFlashlight();
         pulse(right, 0.4, 40);
       }
@@ -1304,6 +1568,7 @@
       const MASTER_VOLUME = 0.45; // overall level (0–1). The compressor below also stops sudden peaks.
       let ctx = null, master = null, reverbSend = null, delaySend = null, noise = null, wind = null;
       let fireBus = null; // campfire crackle, volume follows your distance to the fire
+      let sfxBus = null, engineDist = null, engineOn = false; // generator sounds
       let running = false;
       const timers = [];
       const rand = (a, b) => a + Math.random() * (b - a);
@@ -1370,33 +1635,144 @@
         buildDrone();
         buildWind();
         buildFire();
+
+        // one-shot generator sound effects
+        sfxBus = ctx.createGain(); sfxBus.gain.value = 1;
+        sfxBus.connect(master);
+        const sfxVerb = ctx.createGain(); sfxVerb.gain.value = 0.25; sfxBus.connect(sfxVerb); sfxVerb.connect(reverbSend);
+        // engine loop level (follows your distance to the generator)
+        engineDist = ctx.createGain(); engineDist.gain.value = 0;
+        engineDist.connect(master);
       }
 
-      // 5) Campfire: a low rumble plus random crackles and pops, faded by distance to the fire
+      // 5) Campfire: a soft rumble + hiss bed, plus crisp randomized snaps, pops and crackle runs.
+      //    Everything goes through fireBus, whose level follows your distance to the fire.
       function buildFire() {
         fireBus = ctx.createGain(); fireBus.gain.value = 0;
         fireBus.connect(master);
-        const verb = ctx.createGain(); verb.gain.value = 0.2; fireBus.connect(verb); verb.connect(reverbSend);
-        const src = ctx.createBufferSource(); src.buffer = noise; src.loop = true;
-        const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 320;
-        const g = ctx.createGain(); g.gain.value = 0.25;
-        src.connect(lp); lp.connect(g); g.connect(fireBus);
-        src.start();
+        const verb = ctx.createGain(); verb.gain.value = 0.08; fireBus.connect(verb); verb.connect(reverbSend);
+        const src = ctx.createBufferSource(); src.buffer = noise; src.loop = true;       // low roar of the flames
+        const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 260;
+        const g = ctx.createGain(); g.gain.value = 0.18;
+        src.connect(lp); lp.connect(g); g.connect(fireBus); src.start();
+        const hiss = ctx.createBufferSource(); hiss.buffer = noise; hiss.loop = true;    // faint airy hiss
+        hiss.playbackRate.value = 0.9;
+        const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 5000;
+        const hg = ctx.createGain(); hg.gain.value = 0.025;
+        hiss.connect(hp); hp.connect(hg); hg.connect(fireBus); hiss.start();
+      }
+
+      // A short burst of white noise shaped by a BiquadFilter: the building block of every crackle and spark
+      function noiseHit(t, { type = 'bandpass', freq, q = 1, peak, attack = 0.0008, decay, dest = fireBus, pan = 0 }) {
+        const src = ctx.createBufferSource(); src.buffer = noise;
+        const f = ctx.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q;
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.linearRampToValueAtTime(peak, t + attack);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + attack + decay);
+        const p = ctx.createStereoPanner(); p.pan.value = Math.max(-1, Math.min(1, pan));
+        src.connect(f); f.connect(g); g.connect(p); p.connect(dest);
+        src.start(t, Math.random() * 5); src.stop(t + attack + decay + 0.02);
       }
 
       function crackle() {
         if (!running) return;
         const t = ctx.currentTime + 0.01;
-        const pop = Math.random() < 0.08; // occasional louder pop
-        const src = ctx.createBufferSource(); src.buffer = noise;
-        const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = pop ? rand(600, 1200) : rand(1500, 4000);
-        const g = ctx.createGain();
-        const dur = pop ? rand(0.03, 0.07) : rand(0.008, 0.03);
-        g.gain.setValueAtTime(pop ? rand(0.5, 0.8) : rand(0.12, 0.4), t);
-        g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-        src.connect(hp); hp.connect(g); g.connect(fireBus);
-        src.start(t, rand(0, 5)); src.stop(t + dur + 0.02);
-        setTimeout(crackle, rand(30, 220)); // not kept in `timers`: it checks `running` itself
+        const pan = rand(-0.35, 0.35);
+        const r = Math.random();
+        if (r < 0.55) {            // crisp snap: a few milliseconds of bright noise
+          noiseHit(t, { type: 'highpass', freq: rand(3000, 7000), q: 0.7, peak: rand(0.25, 0.6), decay: rand(0.002, 0.008), pan });
+        } else if (r < 0.85) {     // woody pop: a resonant band with a sharp leading edge
+          noiseHit(t, { freq: rand(900, 2600), q: rand(4, 9), peak: rand(0.4, 0.9), decay: rand(0.012, 0.04), pan });
+          noiseHit(t, { type: 'highpass', freq: 4500, q: 0.7, peak: 0.3, decay: 0.003, pan });
+        } else {                   // a quick run of tiny crackles
+          const n = 3 + Math.floor(Math.random() * 5);
+          for (let k = 0, tt = t; k < n; k++, tt += rand(0.008, 0.035)) {
+            noiseHit(tt, { type: 'highpass', freq: rand(2500, 6000), q: 1, peak: rand(0.15, 0.45), decay: rand(0.002, 0.01), pan: pan + rand(-0.1, 0.1) });
+          }
+        }
+        setTimeout(crackle, Math.random() < 0.2 ? rand(15, 50) : rand(60, 260)); // not kept in `timers`: it checks `running` itself
+      }
+
+      // Generator: metallic clank (skill check hit)
+      function clankSfx() {
+        const t = ctx.currentTime + 0.01;
+        const base = rand(300, 380);
+        [1, 2.41, 3.93, 5.62, 8.1].forEach((ratio, i) => {
+          const o = ctx.createOscillator(); o.type = 'sine';
+          o.frequency.value = base * ratio;
+          const g = ctx.createGain();
+          g.gain.setValueAtTime(0, t);
+          g.gain.linearRampToValueAtTime(0.22 / (i + 1), t + 0.002);
+          g.gain.exponentialRampToValueAtTime(0.0001, t + 0.7 / (1 + i * 0.5));
+          o.connect(g); g.connect(sfxBus); o.start(t); o.stop(t + 0.8);
+        });
+        noiseHit(t, { freq: 2500, q: 2, peak: 0.5, decay: 0.03, dest: sfxBus });        // impact
+        const thunk = ctx.createOscillator(); thunk.type = 'sine';
+        thunk.frequency.setValueAtTime(140, t); thunk.frequency.exponentialRampToValueAtTime(60, t + 0.15);
+        const tg = ctx.createGain(); tg.gain.setValueAtTime(0.35, t); tg.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
+        thunk.connect(tg); tg.connect(sfxBus); thunk.start(t); thunk.stop(t + 0.25);
+      }
+
+      // Generator: loud electrical spark + backfire (missed skill check)
+      function sparkSfx() {
+        const t = ctx.currentTime + 0.01;
+        const boom = ctx.createOscillator(); boom.type = 'sine';                       // backfire thump
+        boom.frequency.setValueAtTime(95, t); boom.frequency.exponentialRampToValueAtTime(32, t + 0.35);
+        const bg = ctx.createGain(); bg.gain.setValueAtTime(0.6, t); bg.gain.exponentialRampToValueAtTime(0.0001, t + 0.45);
+        boom.connect(bg); bg.connect(sfxBus); boom.start(t); boom.stop(t + 0.5);
+        noiseHit(t, { type: 'lowpass', freq: 800, q: 0.7, peak: 0.7, decay: 0.25, dest: sfxBus });   // bang
+        for (let k = 0; k < 16; k++) {                                                   // electrical zaps
+          noiseHit(t + rand(0, 0.5), { freq: rand(2500, 6500), q: rand(3, 8), peak: rand(0.25, 0.55),
+                                       decay: rand(0.004, 0.02), dest: sfxBus, pan: rand(-0.3, 0.3) });
+        }
+        const buzz = ctx.createOscillator(); buzz.type = 'square'; buzz.frequency.value = 110; // arc buzz
+        const bf = ctx.createBiquadFilter(); bf.type = 'bandpass'; bf.frequency.value = 1400; bf.Q.value = 2;
+        const zg = ctx.createGain(); zg.gain.setValueAtTime(0.14, t); zg.gain.exponentialRampToValueAtTime(0.0001, t + 0.4);
+        buzz.connect(bf); bf.connect(zg); zg.connect(sfxBus); buzz.start(t); buzz.stop(t + 0.45);
+      }
+
+      // Generator: warning blip when a skill check appears
+      function checkStartSfx() {
+        const t = ctx.currentTime + 0.01;
+        [[1046, 0], [1568, 0.07]].forEach(([f, dt]) => {
+          const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = f;
+          const g = ctx.createGain();
+          g.gain.setValueAtTime(0, t + dt); g.gain.linearRampToValueAtTime(0.1, t + dt + 0.005);
+          g.gain.exponentialRampToValueAtTime(0.0001, t + dt + 0.12);
+          o.connect(g); g.connect(sfxBus); o.start(t + dt); o.stop(t + dt + 0.15);
+        });
+      }
+
+      // Generator: steady chugging engine loop (starts up, then runs forever)
+      function startEngine() {
+        if (engineOn) return;
+        engineOn = true;
+        const t = ctx.currentTime + 0.01;
+        const engine = ctx.createGain(); engine.gain.setValueAtTime(0, t); engine.gain.linearRampToValueAtTime(1, t + 1.5);
+        engine.connect(engineDist);
+        const verb = ctx.createGain(); verb.gain.value = 0.1; engine.connect(verb); verb.connect(reverbSend);
+        const chug = ctx.createGain(); chug.gain.value = 0.5;   // pulsed by the LFO below = "chug-chug-chug"
+        chug.connect(engine);
+        const lfo = ctx.createOscillator(); lfo.type = 'square';
+        lfo.frequency.setValueAtTime(3, t); lfo.frequency.linearRampToValueAtTime(8.5, t + 1.5);
+        const lfoAmt = ctx.createGain(); lfoAmt.gain.value = 0.45;
+        lfo.connect(lfoAmt); lfoAmt.connect(chug.gain); lfo.start(t);
+        const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 380; lp.Q.value = 2;
+        lp.connect(chug);
+        [['sawtooth', 42, 0.5], ['square', 84, 0.18]].forEach(([type, f, gain]) => {
+          const o = ctx.createOscillator(); o.type = type;
+          o.frequency.setValueAtTime(f * 0.45, t); o.frequency.linearRampToValueAtTime(f, t + 1.5); // spin-up
+          const g = ctx.createGain(); g.gain.value = gain;
+          o.connect(g); g.connect(lp); o.start(t);
+        });
+        const mech = ctx.createBufferSource(); mech.buffer = noise; mech.loop = true;              // rattle
+        const mbp = ctx.createBiquadFilter(); mbp.type = 'bandpass'; mbp.frequency.value = 900; mbp.Q.value = 1;
+        const mg = ctx.createGain(); mg.gain.value = 0.12;
+        mech.connect(mbp); mbp.connect(mg); mg.connect(chug); mech.start(t);
+        for (let k = 0; k < 6; k++) {                                                              // starter cranks
+          noiseHit(t + k * 0.18, { type: 'lowpass', freq: 600, q: 1, peak: 0.4, decay: 0.08, dest: sfxBus });
+        }
       }
 
       // 1) Sub-bass drone: E1 with a slightly detuned twin (slow beating), its octave, and a tritone (B♭1)
@@ -1550,8 +1926,16 @@
         },
         setFireDistance(d) {
           if (!fireBus) return;
-          fireBus.gain.setTargetAtTime(0.35 / (1 + (d / 2.5) * (d / 2.5)), ctx.currentTime, 0.2);
+          fireBus.gain.setTargetAtTime(0.5 / (1 + (d / 1.6) * (d / 1.6)), ctx.currentTime, 0.15); // louder up close
         },
+        setGeneratorDistance(d) {
+          if (!engineDist) return;
+          engineDist.gain.setTargetAtTime(0.3 / (1 + (d / 2) * (d / 2)), ctx.currentTime, 0.2);
+        },
+        clank()      { if (ctx && running) clankSfx(); },
+        spark()      { if (ctx && running) sparkSfx(); },
+        checkStart() { if (ctx && running) checkStartSfx(); },
+        engineOn()   { if (ctx) startEngine(); },
         stop() {
           if (!ctx || !running) return;
           running = false;
@@ -1591,7 +1975,8 @@
 
     const clock = new THREE.Clock();
     const _camWorld = new THREE.Vector3();
-    const _fireSound = FIRE.clone().setY(0.3);
+    const _fireSound = FIRE.clone().setY(0.2);
+    const _genSound = GEN_POS.clone().setY(0.25);
     let loopErrorReported = false;
     renderer.setAnimationLoop((time, frame) => {
       const dt = Math.min(clock.getDelta(), 1 / 30); // clamp so a hitch can't fling you through walls
@@ -1608,6 +1993,8 @@
         }
 
         pollAButton();
+        updateGenerator(dt);
+        horrorAudio.setGeneratorDistance(_camWorld.distanceTo(_genSound));
         controllers.forEach(updatePointer);
       } catch (err) {
         if (!loopErrorReported) {
