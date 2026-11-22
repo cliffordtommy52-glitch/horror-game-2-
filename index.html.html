@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WebXR Starter – Flashlight + Gorilla Locomotion</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font-family: system-ui, sans-serif; }
+    #info {
+      position: absolute; top: 12px; left: 12px; color: #9aa; font-size: 13px; line-height: 1.5;
+      background: rgba(0,0,0,.5); padding: 8px 12px; border-radius: 6px; pointer-events: none;
+    }
+    #info b { color: #dfe; }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="info">
+    <b>WebXR Flashlight Starter + Gorilla Locomotion</b><br />
+    VR: push off the floor, walls and blocks with your hands to move and jump (the blue block is slippery).<br />
+    <b>A</b> (right controller) toggles the flashlight; grip moves it to that hand.<br />
+    Desktop: drag to orbit, <b>F</b> toggles the flashlight (no locomotion).
+  </div>
+
+  <script type="module">
+    /*
+     * Arm locomotion below is a JavaScript / Three.js port of Player.cs from
+     * GorillaLocomotion by Another Axiom:
+     *
+     *   MIT License
+     *   Copyright (c) 2021 Another-Axiom
+     *
+     *   Permission is hereby granted, free of charge, to any person obtaining a copy
+     *   of this software and associated documentation files (the "Software"), to deal
+     *   in the Software without restriction, including without limitation the rights
+     *   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+     *   copies of the Software, and to permit persons to whom the Software is
+     *   furnished to do so, subject to the following conditions:
+     *
+     *   The above copyright notice and this permission notice shall be included in all
+     *   copies or substantial portions of the Software.
+     *
+     *   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+     *   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+     *   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+     *   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+     *   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+     *   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+     *   SOFTWARE.
+     */
+    import * as THREE from 'three';
+    import { VRButton } from 'three/addons/webxr/VRButton.js';
+    import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+    // ---------- Locomotion settings (names match Player.cs) ----------
+    // Defaults written in Player.cs:
+    const MAX_ARM_LENGTH        = 1.5;   // maxArmLength
+    const UNSTICK_DISTANCE      = 1.0;   // unStickDistance
+    const MIN_RAYCAST_DISTANCE  = 0.05;  // minimumRaycastDistance (= hand sphere radius)
+    const DEFAULT_SLIDE_FACTOR  = 0.03;  // defaultSlideFactor (two-handed slide)
+    const DEFAULT_PRECISION     = 0.995; // defaultPrecision
+    // Set in the Unity inspector, not in Player.cs (chosen here):
+    const VELOCITY_HISTORY_SIZE = 5;     // velocityHistorySize
+    const VELOCITY_LIMIT        = 0.3;   // velocityLimit: min speed before a push launches you
+    const JUMP_MULTIPLIER       = 1.1;   // jumpMultiplier (try 1.1–1.3)
+    const MAX_JUMP_SPEED        = 6.5;   // maxJumpSpeed (m/s)
+    const LEFT_HAND_OFFSET      = new THREE.Vector3(0, 0, 0); // leftHandOffset (in controller space)
+    const RIGHT_HAND_OFFSET     = new THREE.Vector3(0, 0, 0); // rightHandOffset
+    // Stand-ins for what Unity's Rigidbody + colliders + PhysicMaterial do:
+    const GRAVITY               = 9.8;   // m/s² (Player.cs also hard-codes 9.8 in its hand cast; 12 feels snappier)
+    const BODY_FRICTION         = 0.6;   // Unity's default dynamic friction, used while the body slides on the ground
+    const HEAD_RADIUS           = 0.15;  // headCollider (SphereCollider) radius
+    const BODY_CAPSULE = { top: -0.25, bottom: -0.65, radius: 0.2 }; // bodyCollider: vertical capsule below the head
+    // With your hands lifted you settle with your eyes about 0.85 m off the floor.
+
+    // ---------- Renderer ----------
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.xr.enabled = true;
+    document.body.appendChild(renderer.domElement);
+    document.body.appendChild(VRButton.createButton(renderer)); // "Enter VR" button
+
+    // ---------- Scene, player rig & camera ----------
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x000000);
+    scene.fog = new THREE.Fog(0x000000, 4, 22);
+
+    // playerRig = the GorillaPlayer transform: moving it moves the head and both hands.
+    const playerRig = new THREE.Group();
+    scene.add(playerRig);
+
+    const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 100);
+    camera.position.set(0, 1.6, 3);
+    playerRig.add(camera); // camera must be in the scene graph so its children (flashlight) render
+
+    const orbit = new OrbitControls(camera, renderer.domElement);
+    orbit.target.set(0, 1.2, -1);
+    orbit.update();
+
+    // Very faint ambient so the world isn't pitch black
+    scene.add(new THREE.HemisphereLight(0x223344, 0x000000, 0.15));
+
+    // ---------- Colliders (axis-aligned boxes) ----------
+    // Each collider: { box: THREE.Box3, slipPercentage?: number }  (slipPercentage = Surface.cs)
+    const colliders = [];
+    // The floor is a thick box whose top face sits at y = 0
+    colliders.push({ box: new THREE.Box3(new THREE.Vector3(-50, -10, -50), new THREE.Vector3(50, 0, 50)) });
+
+    // ---------- Dark floor ----------
+    const ROOM_HALF = 10;
+    const floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(ROOM_HALF * 2, ROOM_HALF * 2),
+      new THREE.MeshStandardMaterial({ color: 0x111114, roughness: 0.95, metalness: 0.0 })
+    );
+    floor.rotation.x = -Math.PI / 2;
+    floor.receiveShadow = true;
+    scene.add(floor);
+
+    const grid = new THREE.GridHelper(ROOM_HALF * 2, ROOM_HALF * 2, 0x222833, 0x16191f);
+    grid.position.y = 0.001;
+    scene.add(grid);
+
+    // ---------- Walls & obstacles ----------
+    const wallMat  = new THREE.MeshStandardMaterial({ color: 0x15161a, roughness: 0.9 });
+    const blockMat = new THREE.MeshStandardMaterial({ color: 0x2a2c33, roughness: 0.8, metalness: 0.1 });
+    const iceMat   = new THREE.MeshStandardMaterial({ color: 0x3a5a7a, roughness: 0.15, metalness: 0.2 });
+
+    function addBlock(x, z, w, h, d, mat, slipPercentage) {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+      mesh.position.set(x, h / 2, z);
+      mesh.castShadow = mesh.receiveShadow = true;
+      scene.add(mesh);
+      mesh.updateMatrixWorld();
+      const collider = { box: new THREE.Box3().setFromObject(mesh), slipPercentage };
+      colliders.push(collider);
+      return collider;
+    }
+
+    const WALL_H = 4, WALL_T = 0.4;
+    addBlock(0, -ROOM_HALF, ROOM_HALF * 2, WALL_H, WALL_T, wallMat); // north
+    addBlock(0,  ROOM_HALF, ROOM_HALF * 2, WALL_H, WALL_T, wallMat); // south
+    addBlock(-ROOM_HALF, 0, WALL_T, WALL_H, ROOM_HALF * 2, wallMat); // west
+    addBlock( ROOM_HALF, 0, WALL_T, WALL_H, ROOM_HALF * 2, wallMat); // east
+
+    const obstacleBoxes = [
+      // x,    z,    w,   h,   d
+      [-3,   -3,   0.6, 3.0, 0.6], // pillars
+      [ 3,   -4,   0.6, 3.0, 0.6],
+      [-5,    2.5, 0.6, 3.0, 0.6],
+      [ 5,    3,   0.6, 3.0, 0.6],
+      [-6.5, -6.5, 2.2, 1.8, 2.2], // tall block to climb
+      [ 6,   -2,   1.2, 0.6, 1.2], // step...
+      [ 7.4, -2,   1.2, 1.3, 1.2], // ...up to a higher step
+    ].map(([x, z, w, h, d]) => addBlock(x, z, w, h, d, blockMat).box);
+    // A slippery block (like a Surface component with a high slipPercentage)
+    obstacleBoxes.push(addBlock(0, -6, 1.5, 0.9, 1.5, iceMat, 0.7).box);
+
+    // ---------- Some things to discover with the light ----------
+    const targets = new THREE.Group();
+    scene.add(targets);
+    const geos = [
+      new THREE.BoxGeometry(0.5, 0.5, 0.5),
+      new THREE.SphereGeometry(0.3, 32, 16),
+      new THREE.ConeGeometry(0.3, 0.6, 24),
+      new THREE.TorusKnotGeometry(0.2, 0.07, 100, 16),
+      new THREE.CylinderGeometry(0.25, 0.25, 0.7, 24),
+    ];
+    const tmpBox = new THREE.Box3();
+    for (let i = 0; i < 24; i++) {
+      const mat = new THREE.MeshStandardMaterial({
+        color: new THREE.Color().setHSL(Math.random(), 0.6, 0.5),
+        roughness: 0.4, metalness: 0.2,
+      });
+      const mesh = new THREE.Mesh(geos[i % geos.length], mat);
+      // Pick a spot that doesn't overlap an obstacle
+      for (let tries = 0; tries < 20; tries++) {
+        const angle = (i / 24) * Math.PI * 2 + Math.random() * 0.2;
+        const radius = 2.5 + Math.random() * 6;
+        mesh.position.set(Math.cos(angle) * radius, 0.35 + Math.random() * 1.2, Math.sin(angle) * radius);
+        const clear = obstacleBoxes.every((b) => !tmpBox.copy(b).expandByScalar(0.6).containsPoint(mesh.position));
+        if (clear) break;
+      }
+      mesh.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, 0);
+      mesh.castShadow = mesh.receiveShadow = true;
+      targets.add(mesh);
+    }
+
+    // ---------- Flashlight ----------
+    function createFlashlight() {
+      const group = new THREE.Group();
+
+      // Body (points down -Z, the controller's forward direction)
+      const body = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.018, 0.022, 0.16, 16),
+        new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.5, metalness: 0.7 })
+      );
+      body.rotation.x = Math.PI / 2;
+      body.position.z = 0.02;
+      group.add(body);
+
+      const lensMat = new THREE.MeshBasicMaterial({ color: 0xfff4d6 });
+      const lens = new THREE.Mesh(new THREE.CircleGeometry(0.02, 16), lensMat);
+      lens.position.z = -0.061;
+      lens.rotation.y = Math.PI; // face forward
+      group.add(lens);
+
+      const spot = new THREE.SpotLight(0xfff4d6, 40, 25, Math.PI / 9, 0.45, 2);
+      spot.position.set(0, 0, -0.06);
+      spot.castShadow = true;
+      spot.shadow.mapSize.set(1024, 1024);
+      spot.shadow.camera.near = 0.05;
+      spot.shadow.bias = -0.0005;
+      group.add(spot);
+
+      // Target must be in the same hierarchy so the beam follows the controller
+      spot.target.position.set(0, 0, -1);
+      group.add(spot.target);
+
+      group.userData = { spot, lensMat, on: true };
+      return group;
+    }
+
+    const flashlight = createFlashlight();
+    let flashlightHolder = null;
+
+    function attachFlashlight(parent) {
+      parent.add(flashlight);
+      flashlightHolder = parent;
+      if (parent === camera) {
+        flashlight.position.set(0.15, -0.15, -0.2); // held a bit to the right on desktop
+        flashlight.children[0].visible = true;
+      } else {
+        flashlight.position.set(0, 0, 0);
+      }
+    }
+    attachFlashlight(camera);
+
+    function toggleFlashlight() {
+      const d = flashlight.userData;
+      d.on = !d.on;
+      d.spot.visible = d.on;
+      d.lensMat.color.set(d.on ? 0xfff4d6 : 0x222222);
+    }
+
+    window.addEventListener('keydown', (e) => {
+      if (e.key.toLowerCase() === 'f') toggleFlashlight();
+    });
+
+    // ---------- Controllers (children of playerRig) ----------
+    const controllerModelFactory = new XRControllerModelFactory();
+    const controllers = [];
+    const hands = []; // locomotion state per controller
+
+    const rayGeometry = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(0, 0, -1),
+    ]);
+    const handSphereGeo = new THREE.SphereGeometry(MIN_RAYCAST_DISTANCE, 16, 8);
+
+    for (let i = 0; i < 2; i++) {
+      // Target-ray space: where the controller points
+      const controller = renderer.xr.getController(i);
+      const ray = new THREE.Line(rayGeometry, new THREE.LineBasicMaterial({ color: 0x66ccff, transparent: true, opacity: 0.6 }));
+      ray.scale.z = 5;
+      ray.visible = false;
+      controller.add(ray);
+      controller.userData = { ray, inputSource: null, hovered: null };
+      playerRig.add(controller);
+
+      // Grip space: the tracked hand pose (leftHandTransform / rightHandTransform)
+      const grip = renderer.xr.getControllerGrip(i);
+      playerRig.add(grip);
+
+      // Hand follower (leftHandFollower / rightHandFollower): where the physics hand actually is.
+      // It stops at surfaces, so the controller model goes here instead of on the grip.
+      const follower = new THREE.Group();
+      follower.visible = false;
+      follower.add(controllerModelFactory.createControllerModel(grip));
+      const sphereMat = new THREE.MeshBasicMaterial({ color: 0x88aaff, transparent: true, opacity: 0.25, depthWrite: false });
+      follower.userData.sphereMat = sphereMat;
+      scene.add(follower);
+
+      const hand = {
+        controller,
+        grip,
+        follower,
+        offset: new THREE.Vector3(),
+        tracked: false,
+        last: new THREE.Vector3(),            // lastLeftHandPosition / lastRightHandPosition
+        firstIteration: new THREE.Vector3(),  // firstIterationLeftHand / firstIterationRightHand
+        colliding: false,                     // leftHandColliding / rightHandColliding
+        wasTouching: false,                   // wasLeftHandTouching / wasRightHandTouching
+      };
+      const sphere = new THREE.Mesh(handSphereGeo, sphereMat);
+      hand.sphere = sphere;
+      scene.add(sphere);
+      hands.push(hand);
+
+      controller.addEventListener('connected', (event) => {
+        const src = event.data;
+        controller.userData.inputSource = src;
+        hand.offset.copy(src.handedness === 'left' ? LEFT_HAND_OFFSET : RIGHT_HAND_OFFSET);
+        ray.visible = src.targetRayMode === 'tracked-pointer';
+        // Put the flashlight in the right hand (or whichever controller shows up first)
+        if (src.handedness === 'right' || flashlightHolder === camera) {
+          attachFlashlight(controller);
+        }
+      });
+
+      controller.addEventListener('disconnected', () => {
+        controller.userData.inputSource = null;
+        ray.visible = false;
+        if (flashlightHolder === controller) {
+          const other = controllers.find((c) => c !== controller && c.userData.inputSource);
+          attachFlashlight(other || camera);
+        }
+      });
+
+      // Squeeze (grip button) moves the flashlight to that hand
+      controller.addEventListener('squeezestart', () => {
+        attachFlashlight(controller);
+        pulse(controller, 0.6, 60);
+      });
+
+      controllers.push(controller);
+    }
+
+    function pulse(controller, intensity, ms) {
+      const gp = controller.userData.inputSource?.gamepad;
+      gp?.hapticActuators?.[0]?.pulse?.(intensity, ms);
+    }
+
+    // ---------- A button on the right controller toggles the flashlight ----------
+    // WebXR has no event for face buttons, so poll the gamepad each frame.
+    // In the 'xr-standard' mapping, buttons[4] is A on the right controller (X on the left).
+    const A_BUTTON = 4;
+    let aWasPressed = false;
+
+    function pollAButton() {
+      const right = controllers.find((c) => c.userData.inputSource?.handedness === 'right');
+      const pressed = !!right?.userData.inputSource.gamepad?.buttons[A_BUTTON]?.pressed;
+      if (pressed && !aWasPressed) {
+        toggleFlashlight();
+        pulse(right, 0.4, 40);
+      }
+      aWasPressed = pressed;
+    }
+
+    // =====================================================================
+    //  Physics queries: stand-ins for Unity's Physics.Raycast / SphereCast
+    // =====================================================================
+    // Like Unity, casts ignore colliders that already contain the starting point
+    // (or overlap the starting sphere). Player.cs relies on that behaviour.
+
+    function makeHit() {
+      return { distance: 0, point: new THREE.Vector3(), normal: new THREE.Vector3(), collider: null };
+    }
+    function copyHit(dst, src) {
+      dst.distance = src.distance; dst.point.copy(src.point); dst.normal.copy(src.normal); dst.collider = src.collider;
+    }
+
+    const AXES = ['x', 'y', 'z'];
+    // Ray vs AABB (slab method). Returns entry distance or -1; writes the entry face normal.
+    function rayBox(origin, dir, min, max, maxDist, outNormal) {
+      let tmin = -Infinity, tmax = Infinity, axis = -1, sign = 0;
+      for (let a = 0; a < 3; a++) {
+        const k = AXES[a], o = origin[k], d = dir[k];
+        if (Math.abs(d) < 1e-12) {
+          if (o < min[k] || o > max[k]) return -1;
+          continue;
+        }
+        let t1 = (min[k] - o) / d, t2 = (max[k] - o) / d, s = -1;
+        if (t1 > t2) { const t = t1; t1 = t2; t2 = t; s = 1; }
+        if (t1 > tmin) { tmin = t1; axis = a; sign = s; }
+        if (t2 < tmax) tmax = t2;
+        if (tmin > tmax) return -1;
+      }
+      if (tmin < 0 || tmin > maxDist || axis < 0) return -1; // starts inside, behind, or too far
+      outNormal.set(0, 0, 0)[AXES[axis]] = sign;
+      return tmin;
+    }
+
+    const _castDir = new THREE.Vector3();
+    const _castN = new THREE.Vector3();
+    const _expMin = new THREE.Vector3();
+    const _expMax = new THREE.Vector3();
+
+    // Sweep a sphere from `origin` along `direction` up to `maxDist`.
+    // (Approximates the Minkowski sum with a box expanded by the radius.)
+    function sphereCast(origin, radius, direction, maxDist, outHit) {
+      const len = direction.length();
+      if (len < 1e-9 || maxDist <= 0) return false;
+      _castDir.copy(direction).divideScalar(len);
+      let best = Infinity;
+      for (const c of colliders) {
+        _expMin.copy(c.box.min).subScalar(radius);
+        _expMax.copy(c.box.max).addScalar(radius);
+        const t = rayBox(origin, _castDir, _expMin, _expMax, maxDist, _castN);
+        if (t >= 0 && t < best) {
+          best = t;
+          outHit.distance = t;
+          outHit.normal.copy(_castN);
+          outHit.point.copy(origin).addScaledVector(_castDir, t).addScaledVector(_castN, -radius);
+          outHit.collider = c;
+        }
+      }
+      return best !== Infinity;
+    }
+
+    function raycast(origin, direction, maxDist, outHit) {
+      return sphereCast(origin, 0, direction, maxDist, outHit);
+    }
+
+    // =====================================================================
+    //  Port of Player.CollisionsSphereCast
+    // =====================================================================
+    const _csStart = new THREE.Vector3();
+    const _csMove = new THREE.Vector3();
+    const _csToFinal = new THREE.Vector3();
+    const _csInner = makeHit();
+
+    function collisionsSphereCast(startPosition, sphereRadius, movementVector, precision, outFinal, outHit) {
+      const start = _csStart.copy(startPosition);
+      const move = _csMove.copy(movementVector);
+      // initial spherecast
+      if (sphereCast(start, sphereRadius * precision, move, move.length() + sphereRadius * (1 - precision), outHit)) {
+        // if we hit, we're trying to move to a position a sphereradius distance from the normal
+        outFinal.copy(outHit.point).addScaledVector(outHit.normal, sphereRadius);
+        _csToFinal.subVectors(outFinal, start);
+        const toFinalLen = _csToFinal.length();
+
+        // check a spherecast from the original position to the intended final position
+        if (sphereCast(start, sphereRadius * precision * precision, _csToFinal,
+                       toFinalLen + sphereRadius * (1 - precision * precision), _csInner)) {
+          const d = Math.max(0, outHit.distance - sphereRadius * (1 - precision * precision));
+          outFinal.copy(start).addScaledVector(_csToFinal.normalize(), d);
+          copyHit(outHit, _csInner);
+        }
+        // bonus raycast check to make sure that something odd didn't happen with the spherecast
+        else if (raycast(start, _csToFinal, toFinalLen + sphereRadius * precision * precision * 0.999, _csInner)) {
+          outFinal.copy(start);
+          copyHit(outHit, _csInner);
+          return true;
+        }
+        return true;
+      }
+      // anti-clipping through geometry check
+      else if (raycast(start, move, move.length() + sphereRadius * precision * 0.999, outHit)) {
+        outFinal.copy(start);
+        return true;
+      }
+      outFinal.set(0, 0, 0);
+      return false;
+    }
+
+    // =====================================================================
+    //  Port of Player.IterativeCollisionSphereCast (hit + slide along the surface)
+    // =====================================================================
+    const _icStart = new THREE.Vector3();
+    const _icMove = new THREE.Vector3();
+    const _icTarget = new THREE.Vector3();
+    const _icFirst = new THREE.Vector3();
+    const _icProj = new THREE.Vector3();
+    const _icTmp = new THREE.Vector3();
+    const _icTmp2 = new THREE.Vector3();
+    const _icHit = makeHit();
+
+    function iterativeCollisionSphereCast(startPosition, sphereRadius, movementVector, precision, outEnd, singleHand) {
+      const start = _icStart.copy(startPosition);
+      const move = _icMove.copy(movementVector);
+      const target = _icTarget.addVectors(start, move);
+
+      // first spherecast from the starting position to the final position
+      if (collisionsSphereCast(start, sphereRadius * precision, move, precision, outEnd, _icHit)) {
+        // hit a surface: slide a bit along its plane
+        _icFirst.copy(outEnd);
+        const slipPercentage = _icHit.collider?.slipPercentage !== undefined
+          ? _icHit.collider.slipPercentage
+          : (!singleHand ? DEFAULT_SLIDE_FACTOR : 0.001);
+        // Vector3.ProjectOnPlane(target - firstPosition, normal) * slip
+        _icProj.subVectors(target, _icFirst);
+        _icProj.addScaledVector(_icHit.normal, -_icProj.dot(_icHit.normal)).multiplyScalar(slipPercentage);
+
+        if (collisionsSphereCast(_icFirst, sphereRadius, _icProj, precision * precision, outEnd, _icHit)) {
+          // hit while moving along the surface: stop there
+          return true;
+        }
+        _icTmp.addVectors(_icProj, _icFirst);
+        _icTmp2.subVectors(target, _icTmp);
+        if (collisionsSphereCast(_icTmp, sphereRadius, _icTmp2, precision * precision * precision, outEnd, _icHit)) {
+          // moved back towards the true point and hit: use that
+          return true;
+        }
+        // the slide got around a corner: don't slide
+        outEnd.copy(_icFirst);
+        return true;
+      }
+      // sanity check with a smaller sphere for when we started already touching a surface
+      _icTmp.copy(move).normalize().multiplyScalar(move.length() + sphereRadius * precision * 0.34);
+      if (collisionsSphereCast(start, sphereRadius * precision * 0.66, _icTmp, precision * 0.66, outEnd, _icHit)) {
+        outEnd.copy(start);
+        return true;
+      }
+      outEnd.set(0, 0, 0);
+      return false;
+    }
+
+    // =====================================================================
+    //  Player state
+    // =====================================================================
+    const rigVelocity = new THREE.Vector3();          // playerRigidBody.velocity
+    const headLocal = new THREE.Vector3(0, 1.6, 0);   // head position inside the rig (from the XR viewer pose)
+    const lastHeadPosition = new THREE.Vector3();
+    const lastPosition = new THREE.Vector3();
+    const velocityHistory = Array.from({ length: VELOCITY_HISTORY_SIZE }, () => new THREE.Vector3());
+    let velocityIndex = 0;
+    const currentVelocity = new THREE.Vector3();
+    const denormalizedVelocityAverage = new THREE.Vector3();
+    let locomotionReady = false;
+
+    function headWorld(out) {
+      return out.copy(headLocal).add(playerRig.position);
+    }
+
+    // CurrentLeftHandPosition / CurrentRightHandPosition: tracked hand + offset, clamped to maxArmLength from the head
+    const _hwHead = new THREE.Vector3();
+    const _hwDelta = new THREE.Vector3();
+    function currentHandPosition(hand, out) {
+      // grip pose is local to the rig; the rig only translates, so world = rig.position + local
+      out.copy(hand.offset).applyQuaternion(hand.grip.quaternion).add(hand.grip.position).add(playerRig.position);
+      headWorld(_hwHead);
+      _hwDelta.subVectors(out, _hwHead);
+      if (_hwDelta.length() >= MAX_ARM_LENGTH) {
+        out.copy(_hwHead).addScaledVector(_hwDelta.normalize(), MAX_ARM_LENGTH);
+      }
+      return out;
+    }
+
+    function resetLocomotion() {
+      playerRig.position.set(0, 0, 0);
+      rigVelocity.set(0, 0, 0);
+      for (const v of velocityHistory) v.set(0, 0, 0);
+      denormalizedVelocityAverage.set(0, 0, 0);
+      velocityIndex = 0;
+      locomotionReady = false; // re-initialised on the first frame with a head pose
+      for (const h of hands) {
+        h.tracked = false;
+        h.colliding = h.wasTouching = false;
+        h.follower.visible = h.sphere.visible = false;
+      }
+    }
+
+    // InitializeValues()
+    function initializeValues() {
+      headWorld(lastHeadPosition);
+      lastPosition.copy(playerRig.position);
+      locomotionReady = true;
+    }
+
+    // StoreVelocities(): rolling average of the rig's velocity over the last N frames
+    function storeVelocities(dt) {
+      velocityIndex = (velocityIndex + 1) % VELOCITY_HISTORY_SIZE;
+      const oldestVelocity = velocityHistory[velocityIndex];
+      currentVelocity.subVectors(playerRig.position, lastPosition).divideScalar(dt);
+      denormalizedVelocityAverage.addScaledVector(currentVelocity, 1 / VELOCITY_HISTORY_SIZE)
+                                 .addScaledVector(oldestVelocity, -1 / VELOCITY_HISTORY_SIZE);
+      oldestVelocity.copy(currentVelocity);
+      lastPosition.copy(playerRig.position);
+    }
+
+    // =====================================================================
+    //  Rigidbody stand-in: gravity, body/head collision, ground friction
+    //  (Unity's physics step runs before Update, so this runs first each frame)
+    // =====================================================================
+    const _closest = new THREE.Vector3();
+    const _diff = new THREE.Vector3();
+    const _push = new THREE.Vector3();
+    const _sphereCenter = new THREE.Vector3();
+    const _normal = new THREE.Vector3();
+
+    // If a sphere overlaps a box, write the push-out vector into `out` and return true.
+    function sphereBoxPush(center, radius, box, out) {
+      _closest.copy(center).clamp(box.min, box.max);
+      _diff.subVectors(center, _closest);
+      const dist = _diff.length();
+      if (dist >= radius) return false;
+      if (dist > 1e-6) {
+        out.copy(_diff).multiplyScalar((radius - dist) / dist);
+        return true;
+      }
+      // Centre is inside the box: exit through the nearest face
+      const faces = [
+        [center.x - box.min.x, -1, 0, 0], [box.max.x - center.x, 1, 0, 0],
+        [center.y - box.min.y, 0, -1, 0], [box.max.y - center.y, 0, 1, 0],
+        [center.z - box.min.z, 0, 0, -1], [box.max.z - center.z, 0, 0, 1],
+      ];
+      let best = faces[0];
+      for (const f of faces) if (f[0] < best[0]) best = f;
+      out.set(best[1], best[2], best[3]).multiplyScalar(best[0] + radius);
+      return true;
+    }
+
+    // Head sphere + capsule (approximated by spheres along its axis), offsets from the head
+    const BODY_SPHERES = [{ y: 0, r: HEAD_RADIUS }];
+    for (let k = 0; k <= 3; k++) {
+      BODY_SPHERES.push({ y: BODY_CAPSULE.top + (BODY_CAPSULE.bottom - BODY_CAPSULE.top) * (k / 3), r: BODY_CAPSULE.radius });
+    }
+
+    function physicsStep(dt) {
+      rigVelocity.y -= GRAVITY * dt;
+      playerRig.position.addScaledVector(rigVelocity, dt);
+
+      let grounded = false;
+      for (const s of BODY_SPHERES) {
+        for (const c of colliders) {
+          headWorld(_sphereCenter).y += s.y;
+          if (!sphereBoxPush(_sphereCenter, s.r, c.box, _push)) continue;
+          playerRig.position.add(_push);
+          // no bounce: remove the velocity going into the surface
+          _normal.copy(_push).normalize();
+          const into = rigVelocity.dot(_normal);
+          if (into < 0) rigVelocity.addScaledVector(_normal, -into);
+          if (_normal.y > 0.7) grounded = true;
+        }
+      }
+
+      if (grounded) {
+        // Coulomb friction on the body while it slides along the ground
+        const horiz = Math.hypot(rigVelocity.x, rigVelocity.z);
+        if (horiz > 0) {
+          const f = Math.max(0, horiz - BODY_FRICTION * GRAVITY * dt) / horiz;
+          rigVelocity.x *= f;
+          rigVelocity.z *= f;
+        }
+      }
+    }
+
+    // =====================================================================
+    //  Port of Player.Update()
+    // =====================================================================
+    const _cur = new THREE.Vector3();
+    const _travel = new THREE.Vector3();
+    const _final = new THREE.Vector3();
+    const _move = new THREE.Vector3();
+    const _head = new THREE.Vector3();
+    const _dir = new THREE.Vector3();
+    const _hit = makeHit();
+
+    function gorillaUpdate(dt) {
+      const [handA, handB] = hands;
+      const bothHandsHolding = () =>
+        (handA.colliding || handA.wasTouching) && (handB.colliding || handB.wasTouching);
+
+      // --- first pass: does each hand hit something on its way to the tracked position? ---
+      for (const h of hands) {
+        h.colliding = false;
+        h.firstIteration.set(0, 0, 0);
+        if (!h.tracked) continue;
+
+        currentHandPosition(h, _cur);
+        _travel.subVectors(_cur, h.last);
+        _travel.y -= 2 * GRAVITY * dt * dt; // Vector3.down * 2 * 9.8 * dt²: keeps a resting hand in contact
+
+        if (iterativeCollisionSphereCast(h.last, MIN_RAYCAST_DISTANCE, _travel, DEFAULT_PRECISION, _final, true)) {
+          // stick to the touched point: as long as you keep touching, this is the zero point for that hand
+          if (h.wasTouching) h.firstIteration.subVectors(h.last, _cur);
+          else               h.firstIteration.subVectors(_final, _cur);
+          rigVelocity.set(0, 0, 0);
+          h.colliding = true;
+        }
+      }
+
+      // --- average (both hands holding) or add ---
+      _move.addVectors(handA.firstIteration, handB.firstIteration);
+      if (bothHandsHolding()) _move.multiplyScalar(0.5);
+
+      // --- check valid head movement ---
+      headWorld(_head);
+      _travel.copy(_head).add(_move).sub(lastHeadPosition);
+      if (iterativeCollisionSphereCast(lastHeadPosition, HEAD_RADIUS, _travel, DEFAULT_PRECISION, _final, false)) {
+        _move.subVectors(_final, lastHeadPosition);
+        // last check to make sure the head won't phase through geometry
+        _dir.copy(_head).sub(lastHeadPosition).add(_move);
+        if (raycast(lastHeadPosition, _dir, _dir.length() + HEAD_RADIUS * DEFAULT_PRECISION * 0.999, _hit)) {
+          _move.subVectors(lastHeadPosition, _head);
+        }
+      }
+
+      if (_move.lengthSq() > 0) playerRig.position.add(_move);
+      headWorld(lastHeadPosition);
+
+      // --- final hand positions (the hand slides along surfaces instead of passing through) ---
+      for (const h of hands) {
+        if (!h.tracked) continue;
+        currentHandPosition(h, _cur);
+        _travel.subVectors(_cur, h.last);
+        if (iterativeCollisionSphereCast(h.last, MIN_RAYCAST_DISTANCE, _travel, DEFAULT_PRECISION, _final, !bothHandsHolding())) {
+          h.last.copy(_final);
+          h.colliding = true;
+        } else {
+          h.last.copy(_cur);
+        }
+      }
+
+      storeVelocities(dt);
+
+      // --- launch: rolling-average velocity × jumpMultiplier, capped at maxJumpSpeed ---
+      if (handA.colliding || handB.colliding) {
+        const speed = denormalizedVelocityAverage.length();
+        if (speed > VELOCITY_LIMIT) {
+          if (speed * JUMP_MULTIPLIER > MAX_JUMP_SPEED) {
+            rigVelocity.copy(denormalizedVelocityAverage).normalize().multiplyScalar(MAX_JUMP_SPEED);
+          } else {
+            rigVelocity.copy(denormalizedVelocityAverage).multiplyScalar(JUMP_MULTIPLIER);
+          }
+        }
+      }
+
+      // --- unstick a hand that's far from its tracked position with a clear line from the head ---
+      headWorld(_head);
+      for (const h of hands) {
+        if (!h.colliding) continue;
+        currentHandPosition(h, _cur);
+        _dir.subVectors(_cur, _head);
+        if (_cur.distanceTo(h.last) > UNSTICK_DISTANCE &&
+            !sphereCast(_head, MIN_RAYCAST_DISTANCE * DEFAULT_PRECISION, _dir, _dir.length() - MIN_RAYCAST_DISTANCE, _hit)) {
+          h.last.copy(_cur);
+          h.colliding = false;
+        }
+      }
+
+      // --- followers + touch state ---
+      for (const h of hands) {
+        if (h.tracked) {
+          // Put the controller model where the physics hand is (undo the hand offset)
+          h.follower.position.copy(h.offset).applyQuaternion(h.grip.quaternion).negate().add(h.last);
+          h.follower.quaternion.copy(h.grip.quaternion);
+          h.sphere.position.copy(h.last);
+          h.follower.userData.sphereMat.color.set(h.colliding ? 0x66ff99 : 0x88aaff);
+          if (h.colliding && !h.wasTouching) pulse(h.controller, 0.25, 20);
+        }
+        h.wasTouching = h.colliding;
+      }
+    }
+
+    function updateLocomotion(dt, frame) {
+      const pose = frame?.getViewerPose(renderer.xr.getReferenceSpace());
+      if (!pose) return;
+      const p = pose.transform.position;
+      headLocal.set(p.x, p.y, p.z);
+
+      if (!locomotionReady) initializeValues();
+
+      // A hand that just started tracking begins at its tracked position
+      for (const h of hands) {
+        const tracked = !!h.controller.userData.inputSource && h.grip.visible;
+        if (tracked && !h.tracked) {
+          currentHandPosition(h, h.last);
+          h.colliding = h.wasTouching = false;
+        }
+        h.tracked = tracked;
+        h.follower.visible = h.sphere.visible = tracked;
+      }
+
+      physicsStep(dt);
+      gorillaUpdate(dt);
+
+      // Safety net in case something goes wrong
+      if (playerRig.position.y < -20) resetLocomotion();
+    }
+
+    // ---------- Simple pointer raycasting (highlights what you aim at) ----------
+    const raycaster = new THREE.Raycaster();
+    const tmpMatrix = new THREE.Matrix4();
+
+    function updatePointer(controller) {
+      const ud = controller.userData;
+      if (!ud.inputSource || !ud.ray.visible) return;
+
+      tmpMatrix.identity().extractRotation(controller.matrixWorld);
+      raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+      raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tmpMatrix);
+
+      const hit = raycaster.intersectObjects(targets.children, false)[0];
+      if (ud.hovered && ud.hovered !== hit?.object) {
+        ud.hovered.material.emissive.setHex(0x000000);
+        ud.hovered = null;
+      }
+      if (hit) {
+        hit.object.material.emissive.setHex(0x223344);
+        ud.hovered = hit.object;
+        ud.ray.scale.z = hit.distance;
+      } else {
+        ud.ray.scale.z = 5;
+      }
+    }
+
+    // ---------- XR session hooks ----------
+    renderer.xr.addEventListener('sessionstart', () => {
+      orbit.enabled = false;
+      resetLocomotion();
+    });
+    renderer.xr.addEventListener('sessionend', () => {
+      orbit.enabled = true;
+      resetLocomotion();
+      attachFlashlight(camera);
+      camera.position.set(0, 1.6, 3);
+      orbit.update();
+    });
+
+    // ---------- Resize & loop ----------
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    const clock = new THREE.Clock();
+    renderer.setAnimationLoop((time, frame) => {
+      const dt = Math.min(clock.getDelta(), 1 / 30); // clamp so a hitch can't fling you through walls
+      targets.children.forEach((m, i) => { m.rotation.y += dt * (0.2 + (i % 5) * 0.05); });
+
+      if (renderer.xr.isPresenting && dt > 0) {
+        updateLocomotion(dt, frame);
+        playerRig.updateMatrixWorld(true); // so the rays use this frame's rig position
+      }
+
+      pollAButton();
+      controllers.forEach(updatePointer);
+      renderer.render(scene, camera);
+    });
+  </script>
+</body>
+</html>
