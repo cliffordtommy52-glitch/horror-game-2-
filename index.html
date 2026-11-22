@@ -7060,6 +7060,1267 @@
       }
     }
 
+    // =====================================================================
+    //  WAITING ROOM + MAPS
+    //  After PLAY you arrive in an eerie, dimly lit wooden waiting room (Gorilla locomotion works as normal) with a
+    //  big illuminated map-selection screen on the wall. Pick a map and press LAUNCH / ENTER MAP to be taken there:
+    //    - LAKESIDE WOODS: the original camp (generators, cabins, lake and boat), unchanged.
+    //    - FOGGY GRAVEYARD: a fenced graveyard of crooked headstones, a mausoleum and dead trees in thick pale fog.
+    //    - ABANDONED MINE: a timbered mine with rails, carts and lantern-lit tunnels behind a rock face, near-black.
+    //  The two new maps are built far outside the camp (fog hides them from each other). Each map has its own fog,
+    //  sky and moonlight. Dying (fire, drowning) respawns you at the spawn of the map you're in.
+    // =====================================================================
+    const WAIT_ROOM = { x: 0, z: -95, w: 8, d: 7, h: 2.6 };
+    const GRAVE = { x: 95, z: 0, size: 32 };
+    const MINE = { x: -95, z: 0 };
+    const hemiLight = scene.children.find((o) => o.isHemisphereLight);
+    const _wrng = mulberry32(5150), wpr = (a, b) => a + _wrng() * (b - a);   // own seed: the existing layouts don't shift
+    const glowMatFlame = new THREE.MeshBasicMaterial({ color: 0xffc060 });
+    const MAPS = [
+      { id: 'camp', name: 'LAKESIDE WOODS', tag: 'THE CAMP', desc: 'The original camp: power 4 generators, fix the boat and escape across the lake.',
+        spawn: { x: 0, z: 0, yaw: 0 }, fog: [NIGHT, 0.085], sky: NIGHT, hemi: [0x1b2a4a, 0x050403, 0.25], desk: { cam: [0, 1.6, 3], target: [0, 0.4, -2.5] } },
+      { id: 'graveyard', name: 'FOGGY GRAVEYARD', tag: 'VARIATION', desc: 'Crooked headstones, a sealed mausoleum and dead trees, lost in thick pale fog.',
+        spawn: { x: GRAVE.x, z: GRAVE.z + 13.5, yaw: 0 }, fog: [0x26302c, 0.13], sky: 0x1a201e, hemi: [0x5a7a74, 0x0a0a08, 0.42],
+        desk: { cam: [GRAVE.x + 4, 2.2, GRAVE.z + 17], target: [GRAVE.x, 0.4, GRAVE.z + 6] } },
+      { id: 'mine', name: 'ABANDONED MINE', tag: 'VARIATION', desc: 'Lantern-lit tunnels, rails and old carts deep in the rock. Bring your head lamp.',
+        spawn: { x: MINE.x + 12, z: MINE.z, yaw: Math.PI / 2 }, fog: [0x0d0a07, 0.12], sky: 0x060504, hemi: [0x3a2a1a, 0x050403, 0.18],
+        desk: { cam: [MINE.x + 15, 1.6, MINE.z + 3], target: [MINE.x + 6, 0.6, MINE.z] } },
+    ];
+    const ROOM_ENV = { fog: [0x0b0907, 0.045], sky: 0x050403, hemi: [0x2a2420, 0x050403, 0.2] };
+    let currentMap = 'waiting';                       // 'waiting' until you launch a map
+    function applyEnv(env) {
+      scene.fog.color.setHex(env.fog[0]); scene.fog.density = env.fog[1];
+      scene.background.setHex(env.sky);
+      if (hemiLight) { hemiLight.color.setHex(env.hemi[0]); hemiLight.groundColor.setHex(env.hemi[1]); hemiLight.intensity = env.hemi[2]; }
+    }
+    function mapById(id) { return MAPS.find((m) => m.id === id); }
+    // where you stand when you arrive (and when you respawn) in the current place
+    function spawnOfCurrent() {
+      if (currentMap === 'waiting') return { x: WAIT_ROOM.x, z: WAIT_ROOM.z + 1.2, yaw: 0 };
+      return mapById(currentMap).spawn;
+    }
+    // respawning (start, death, catch) puts you at the spawn of the place you're in: wrap the existing reset
+    {
+      const baseReset = resetLocomotion;
+      resetLocomotion = function () {
+        baseReset();
+        if (currentMap === 'camp' || !renderer.xr.isPresenting) return;   // the camp keeps its original spawn exactly; the desktop view stays at the origin
+        const s = spawnOfCurrent();
+        playerRig.position.x = s.x; playerRig.position.z = s.z;
+        playerRig.rotation.set(0, s.yaw, 0);
+      };
+    }
+    // the camp ambience belongs to the maps, not the waiting room
+    {
+      const baseStart = horrorAudio.start;
+      horrorAudio.start = function (...a) { if (currentMap === 'waiting') return; return baseStart.apply(this, a); };
+    }
+
+    // ---------- textures ----------
+    const oldBoardsTex = canvasTexture(256, (g, s) => {             // weathered vertical boards with gaps and stains
+      for (let b = 0; b < 8; b++) {
+        const v = wpr(-12, 12) | 0, x0 = (b / 8) * s;
+        g.fillStyle = `rgb(${52 + v},${40 + v},${30 + v})`; g.fillRect(x0, 0, s / 8, s);
+        for (let k = 0; k < 10; k++) { g.strokeStyle = `rgba(20,12,8,${wpr(0.2, 0.5).toFixed(2)})`; g.lineWidth = 1; const x = x0 + wpr(2, s / 8 - 2); g.beginPath(); g.moveTo(x, 0); g.lineTo(x + wpr(-3, 3), s); g.stroke(); }
+        g.fillStyle = '#0d0806'; g.fillRect(x0, 0, 2, s);
+        for (const y of [s * 0.12, s * 0.88]) { g.fillStyle = '#2a2a2a'; g.fillRect(x0 + s / 16 - 2, y, 4, 4); }   // nails
+      }
+      for (let k = 0; k < 14; k++) {                                // water stains and grime
+        const x = wpr(0, s), y = wpr(0, s), r = wpr(10, 40);
+        const grd = g.createRadialGradient(x, y, 0, x, y, r); grd.addColorStop(0, 'rgba(15,10,6,0.45)'); grd.addColorStop(1, 'rgba(15,10,6,0)');
+        g.fillStyle = grd; g.fillRect(x - r, y - r, r * 2, r * 2);
+      }
+    }, 1);
+    const roomWallMat = new THREE.MeshStandardMaterial({ map: oldBoardsTex, roughness: 0.95 });
+    const roomFloorTex = woodTex.clone(); roomFloorTex.needsUpdate = true; roomFloorTex.wrapS = roomFloorTex.wrapT = THREE.RepeatWrapping; roomFloorTex.repeat.set(4, 4);
+    const roomFloorMat = new THREE.MeshStandardMaterial({ map: roomFloorTex, color: 0x8a7a68, roughness: 0.9 });
+    const graveGroundTex = groundTex.clone(); graveGroundTex.needsUpdate = true; graveGroundTex.wrapS = graveGroundTex.wrapT = THREE.RepeatWrapping; graveGroundTex.repeat.set(8, 8);
+    const mineDirtTex = canvasTexture(256, (g, s) => {
+      g.fillStyle = '#1e1813'; g.fillRect(0, 0, s, s);
+      for (let k = 0; k < 6000; k++) { const v = wpr(15, 55) | 0; g.fillStyle = `rgba(${v + 8},${v},${v - 6},0.6)`; g.fillRect(wpr(0, s), wpr(0, s), wpr(1, 3), wpr(1, 3)); }
+      for (let k = 0; k < 90; k++) { const v = wpr(50, 90) | 0; g.fillStyle = `rgb(${v},${v - 6},${v - 12})`; g.beginPath(); g.arc(wpr(0, s), wpr(0, s), wpr(1.5, 4), 0, Math.PI * 2); g.fill(); }
+    }, 10);
+
+    // ---------- the waiting room ----------
+    let roomBulb = null;
+    {
+      const W = WAIT_ROOM, rb = makeBatch(), T = 0.2;
+      const box = (mat, x, y0, z, w, h, d, solid = true) => {
+        rb.add(UNIT_BOX, mat, W.x + x, y0 + h / 2, W.z + z, 0, 0, 0, w, h, d);
+        if (solid) addBoxCollider(W.x + x, y0, W.z + z, w, h, d);
+      };
+      box(roomFloorMat, 0, -0.3, 0, W.w + 2 * T, 0.3, W.d + 2 * T);                        // floor (top at 0)
+      box(roomWallMat, 0, 0, -W.d / 2 - T / 2, W.w + 2 * T, W.h, T);                       // north wall (the screen)
+      box(roomWallMat, 0, 0, W.d / 2 + T / 2, W.w + 2 * T, W.h, T);                        // south wall (the door)
+      box(roomWallMat, -W.w / 2 - T / 2, 0, 0, T, W.h, W.d);                               // west
+      box(roomWallMat, W.w / 2 + T / 2, 0, 0, T, W.h, W.d);                                // east
+      box(roofMat, 0, W.h, 0, W.w + 2 * T, 0.2, W.d + 2 * T);                              // ceiling
+      for (let k = -1; k <= 1; k++) box(trimMat, k * 2.6, W.h - 0.16, 0, 0.16, 0.16, W.d, false);   // ceiling beams
+      for (const s of [-1, 1]) for (const zz of [-1, 1]) box(trimMat, s * (W.w / 2 - 0.1), 0, zz * (W.d / 2 - 0.1), 0.18, W.h, 0.18, false);   // corner posts
+      box(trimMat, 0, 0, 0, W.w, 0.08, 0.001, false);                                       // (keeps the batch non-empty)
+      // skirting and a dado rail all round
+      for (const [x, z, w, d] of [[0, -W.d / 2 + 0.02, W.w, 0.04], [0, W.d / 2 - 0.02, W.w, 0.04], [-W.w / 2 + 0.02, 0, 0.04, W.d], [W.w / 2 - 0.02, 0, 0.04, W.d]]) {
+        box(trimMat, x, 0, z, w, 0.12, d, false);
+        box(trimMat, x, 0.85, z, w, 0.04, d, false);
+      }
+      // the old front door (shut) on the south wall
+      box(doorWoodMat, 0, 0, W.d / 2 - 0.03, 0.8, 1.7, 0.06, false);
+      box(trimMat, 0, 1.7, W.d / 2 - 0.05, 0.96, 0.08, 0.08, false);
+      for (const s of [-1, 1]) box(trimMat, s * 0.44, 0, W.d / 2 - 0.05, 0.08, 1.7, 0.08, false);
+      rb.add(new THREE.SphereGeometry(0.03, 8, 6), brassMat, W.x + 0.3, 0.85, W.z + W.d / 2 - 0.08);
+      // a boarded-up window on the east wall
+      box(windowVoidMat, W.w / 2 - 0.01, 0.8, -0.6, 0.02, 0.8, 1.0, false);
+      for (let k = 0; k < 4; k++) rb.add(UNIT_BOX, plankMat, W.x + W.w / 2 - 0.04, 0.95 + k * 0.17, W.z - 0.6, 0.06 * (k - 1.5), 0, 0, 0.04, 0.1, 1.2);
+      // benches facing the screen
+      for (const [x, z] of [[-1.8, 0.8], [1.8, 0.8], [-1.8, 2.2], [1.8, 2.2]]) {
+        box(plankMat, x, 0.34, z, 1.6, 0.06, 0.4);
+        box(plankMat, x, 0.5, z + 0.18, 1.6, 0.3, 0.05, false);
+        for (const s of [-1, 1]) box(trimMat, x + s * 0.7, 0, z, 0.06, 0.34, 0.36, false);
+        addBoxCollider(W.x + x, 0, W.z + z, 1.6, 0.34, 0.4);
+      }
+      // a table with dripping candles and a tipped-over chair
+      box(plankMat, -3.0, 0.6, -2.0, 0.9, 0.05, 0.6);
+      for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) box(trimMat, -3.0 + sx * 0.4, 0, -2.0 + sz * 0.25, 0.05, 0.6, 0.05, false);
+      addBoxCollider(W.x - 3.0, 0, W.z - 2.0, 0.9, 0.6, 0.6);
+      const candleMat = new THREE.MeshStandardMaterial({ color: 0xe8e0c8, roughness: 0.6 });
+      for (const [cx, cz, ch] of [[-3.2, -2.1, 0.12], [-3.05, -1.9, 0.08], [-2.85, -2.05, 0.15]]) {
+        rb.add(new THREE.CylinderGeometry(0.018, 0.02, ch, 8), candleMat, W.x + cx, 0.65 + ch / 2, W.z + cz);
+        rb.add(new THREE.SphereGeometry(0.012, 6, 4), glowMatFlame, W.x + cx, 0.665 + ch, W.z + cz, 0, 0, 0, 1, 2, 1);
+      }
+      rb.add(UNIT_BOX, plankMat, W.x + 2.9, 0.12, W.z - 2.2, 0, 0.6, Math.PI / 2, 0.45, 0.05, 0.45);         // the toppled chair
+      rb.add(UNIT_BOX, plankMat, W.x + 3.1, 0.25, W.z - 2.35, 0, 0.6, Math.PI / 2, 0.05, 0.5, 0.45);
+      // faded portraits
+      const portraitTex = canvasTexture(128, (g, s) => {
+        const grd = g.createLinearGradient(0, 0, 0, s); grd.addColorStop(0, '#3a3128'); grd.addColorStop(1, '#1a1510');
+        g.fillStyle = grd; g.fillRect(0, 0, s, s);
+        g.fillStyle = 'rgba(160,140,110,0.35)'; g.beginPath(); g.ellipse(s / 2, s * 0.42, s * 0.16, s * 0.2, 0, 0, Math.PI * 2); g.fill();
+        g.beginPath(); g.ellipse(s / 2, s * 0.95, s * 0.32, s * 0.28, 0, 0, Math.PI * 2); g.fill();
+        g.fillStyle = '#000'; for (const x of [s * 0.44, s * 0.56]) { g.beginPath(); g.arc(x, s * 0.4, 4, 0, Math.PI * 2); g.fill(); }   // no faces, just dark eyes
+      });
+      const portraitMat = new THREE.MeshStandardMaterial({ map: portraitTex, roughness: 0.8 });
+      for (const [x, z, ry] of [[-W.w / 2 + 0.02, -1.2, Math.PI / 2], [-W.w / 2 + 0.02, 1.4, Math.PI / 2], [W.w / 2 - 0.02, 1.6, -Math.PI / 2]]) {
+        rb.add(new THREE.PlaneGeometry(0.5, 0.62), portraitMat, W.x + x + Math.sin(ry) * 0.02, 1.45, W.z + z, 0, ry, 0.05);
+        rb.add(UNIT_BOX, trimMat, W.x + x, 1.45, W.z + z, 0, ry, 0.05, 0.6, 0.72, 0.02);
+      }
+      // cobwebs in the top corners
+      const webMat = new THREE.MeshBasicMaterial({ color: 0xbdb8ae, transparent: true, opacity: 0.25, side: THREE.DoubleSide, depthWrite: false });
+      for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+        const web = new THREE.CircleGeometry(0.5, 8, 0, Math.PI / 2);
+        rb.add(web, webMat, W.x + sx * (W.w / 2 - 0.01), W.h - 0.01, W.z + sz * (W.d / 2 - 0.01), Math.PI / 2 * sz * -1, 0, 0, 1, 1, 1);
+      }
+      rb.build(scene, { rayTarget: true });
+      // lights: a bare bulb hanging from the middle (cold, it flickers and drops out) and two wall lanterns (warm)
+      const bulbMat = new THREE.MeshStandardMaterial({ color: 0x222222, emissive: 0xcfe0ff, emissiveIntensity: 2 });
+      const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.045, 10, 8), bulbMat);
+      bulb.position.set(W.x, W.h - 0.55, W.z + 0.6);
+      scene.add(bulb);
+      const cord = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, 0.5, 4), ironMat);
+      cord.position.set(W.x, W.h - 0.27, W.z + 0.6);
+      scene.add(cord);
+      const bulbGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xcfe0ff, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false }));
+      bulbGlow.scale.set(1.2, 1.2, 1); bulbGlow.position.copy(bulb.position);
+      scene.add(bulbGlow);
+      roomBulb = { mat: bulbMat, glow: bulbGlow, level: 1, t: 0, drop: 0 };
+      roomBulb.src = { x: W.x, y: W.h - 0.6, z: W.z + 0.6, color: 0xbcd2ff, intensity: 6, distance: 9, weight: 3 };
+      lightSources.push(roomBulb.src);
+      const lantMat = new THREE.MeshStandardMaterial({ color: 0x2a1a08, emissive: 0xffa040, emissiveIntensity: 1.6 });
+      for (const s of [-1, 1]) {
+        const lx = W.x + s * (W.w / 2 - 0.12), lz = W.z - 1.6;
+        const l = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.14, 10), lantMat);
+        l.position.set(lx, 1.35, lz); scene.add(l);
+        const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xffa040, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false }));
+        sp.scale.set(0.9, 0.9, 1); sp.position.set(lx, 1.37, lz); scene.add(sp);
+        lightSources.push({ x: lx, y: 1.4, z: lz, color: 0xffa050, intensity: 2.5, distance: 5, weight: 2.4, fire: true });
+      }
+      // drifting dust
+      const n = 160, pos = new Float32Array(n * 3);
+      for (let i = 0; i < n; i++) pos.set([W.x + wpr(-W.w / 2, W.w / 2), wpr(0.1, W.h - 0.1), W.z + wpr(-W.d / 2, W.d / 2)], i * 3);
+      const dg = new THREE.BufferGeometry(); dg.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      const dust = new THREE.Points(dg, new THREE.PointsMaterial({ color: 0x9a9080, size: 0.01, transparent: true, opacity: 0.5, depthWrite: false }));
+      scene.add(dust);
+      roomBulb.dust = dust;
+    }
+    function updateWaitingRoom(dt) {
+      const b = roomBulb;
+      b.t += dt;
+      // mostly steady with a faint buzz, now and then it stutters, sometimes it dies for a moment
+      if (Math.random() < dt * 0.35) b.drop = 0.08 + Math.random() * 0.5;
+      if (b.drop > 0) { b.drop -= dt; b.level = Math.random() < 0.5 ? 0.05 : 0.6; }
+      else b.level = 0.9 + 0.1 * Math.sin(b.t * 50) * Math.sin(b.t * 3.1);
+      b.mat.emissiveIntensity = 2 * b.level;
+      b.glow.material.opacity = 0.6 * b.level;
+      b.src.intensity = 6 * b.level;            // the pooled point light follows the bulb
+      b.dust.rotation.y += dt * 0.01;
+    }
+
+    // ---------- FOGGY GRAVEYARD ----------
+    {
+      const G = GRAVE, half = G.size / 2, gb = makeBatch();
+      const ground = new THREE.Mesh(new THREE.PlaneGeometry(G.size + 6, G.size + 6), new THREE.MeshStandardMaterial({ map: graveGroundTex, color: 0x9aa098, roughness: 1 }));
+      ground.rotation.x = -Math.PI / 2; ground.position.set(G.x, 0.001, G.z); ground.receiveShadow = true;
+      scene.add(ground);
+      addBoxCollider(G.x, -1, G.z, G.size + 6, 1, G.size + 6);
+      for (const [x, z, w, d] of [[0, -half - 1, G.size + 4, 0.4], [0, half + 1, G.size + 4, 0.4], [-half - 1, 0, 0.4, G.size + 4], [half + 1, 0, 0.4, G.size + 4]]) {
+        addBoxCollider(G.x + x, -1, G.z + z, w, 6, d);                                        // invisible boundary
+      }
+      // wrought-iron fence with spear tips round the edge, a gap for the gate in the south side
+      const fenceAt = (x0, z0, x1, z1) => {
+        const len = Math.hypot(x1 - x0, z1 - z0), n = Math.round(len / 0.25), ry = Math.atan2(x1 - x0, z1 - z0);
+        for (let k = 0; k <= n; k++) {
+          const t = k / n, x = x0 + (x1 - x0) * t, z = z0 + (z1 - z0) * t;
+          gb.add(new THREE.CylinderGeometry(0.012, 0.012, 1.1, 5), ironMat, G.x + x, 0.55, G.z + z);
+          gb.add(new THREE.ConeGeometry(0.025, 0.08, 4), ironMat, G.x + x, 1.14, G.z + z);
+        }
+        for (const y of [0.25, 0.95]) gb.add(UNIT_BOX, ironMat, G.x + (x0 + x1) / 2, y, G.z + (z0 + z1) / 2, 0, ry, 0, 0.025, 0.03, len);
+      };
+      fenceAt(-half, -half, half, -half); fenceAt(-half, -half, -half, half); fenceAt(half, -half, half, half);
+      fenceAt(-half, half, -1.2, half); fenceAt(1.2, half, half, half);
+      for (const s of [-1, 1]) {                                                              // gate pillars
+        gb.add(UNIT_BOX, stoneMat, G.x + s * 1.35, 0.8, G.z + half, 0, 0, 0, 0.35, 1.6, 0.35);
+        gb.add(new THREE.SphereGeometry(0.14, 10, 8), stoneMat, G.x + s * 1.35, 1.72, G.z + half);
+        addBoxCollider(G.x + s * 1.35, 0, G.z + half, 0.35, 1.6, 0.35);
+      }
+      // headstones in crooked rows: rounded slabs, crosses, obelisks and flat slabs, each with a grave mound
+      const dirtMat = new THREE.MeshStandardMaterial({ color: 0x2a2219, roughness: 1, flatShading: true });
+      const mossStone = new THREE.MeshStandardMaterial({ color: 0x4d524a, roughness: 0.95, flatShading: true });
+      const rng2 = mulberry32(1313);
+      for (let row = 0; row < 9; row++) for (let col = 0; col < 12; col++) {
+        if (rng2() < 0.22) continue;
+        const x = -12 + col * 2.2 + (rng2() - 0.5) * 0.6, z = -11 + row * 2.3 + (rng2() - 0.5) * 0.5;
+        if (Math.abs(x) < 2 && z > 6) continue;                                                // keep the path from the gate clear
+        if (Math.abs(x) < 3.2 && z < -9) continue;                                             // and the mausoleum
+        const kind = rng2(), mat = rng2() < 0.4 ? mossStone : stoneMat;
+        const lean = (rng2() - 0.5) * 0.35, twist = (rng2() - 0.5) * 0.3;
+        const px = G.x + x, pz = G.z + z;
+        if (kind < 0.5) {
+          const h = 0.45 + rng2() * 0.35;
+          gb.add(UNIT_BOX, mat, px, h / 2, pz, lean, twist, 0, 0.42, h, 0.1);
+          gb.add(new THREE.CylinderGeometry(0.21, 0.21, 0.1, 12, 1, false, 0, Math.PI), mat, px, h, pz, Math.PI / 2 + lean, twist + Math.PI / 2, 0);
+        } else if (kind < 0.75) {
+          gb.add(UNIT_BOX, mat, px, 0.42, pz, lean, twist, 0, 0.08, 0.84, 0.08);
+          gb.add(UNIT_BOX, mat, px, 0.6, pz, lean, twist, 0, 0.42, 0.08, 0.08);
+        } else if (kind < 0.88) {
+          gb.add(UNIT_BOX, mat, px, 0.15, pz, 0, twist, 0, 0.32, 0.3, 0.32);
+          gb.add(new THREE.ConeGeometry(0.14, 0.9, 4), mat, px, 0.75, pz, 0, Math.PI / 4 + twist, 0);
+        } else {
+          gb.add(UNIT_BOX, mat, px, 0.08, pz + 0.5, 0, twist, 0, 0.6, 0.16, 1.1);
+        }
+        gb.add(new THREE.SphereGeometry(1, 8, 5, 0, Math.PI * 2, 0, Math.PI / 2), dirtMat, px, 0, pz + 0.65, 0, twist, 0, 0.32, 0.1, 0.6);
+        addBoxCollider(px, 0, pz, 0.45, kind < 0.88 ? 0.75 : 0.16, kind < 0.88 ? 0.2 : 1.1);
+      }
+      // an open grave with a dirt pile
+      gb.add(UNIT_BOX, windowVoidMat, G.x - 6, 0.002, G.z + 7.2, 0, 0, 0, 0.7, 0.004, 1.4);
+      gb.add(new THREE.SphereGeometry(1, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2), dirtMat, G.x - 5.1, 0, G.z + 7.2, 0, 0, 0, 0.45, 0.3, 0.7);
+      // the mausoleum at the far end: steps, walls, columns, a pediment roof and an iron door
+      {
+        const mx = G.x, mz = G.z - 12.6;
+        const solid = (mat, x, y0, z, w, h, d) => { gb.add(UNIT_BOX, mat, mx + x, y0 + h / 2, mz + z, 0, 0, 0, w, h, d); addBoxCollider(mx + x, y0, mz + z, w, h, d); };
+        solid(stoneMat, 0, 0, 0, 4.4, 0.2, 3.4);
+        solid(stoneMat, 0, 0.2, -0.2, 3.8, 2.0, 2.6);
+        solid(stoneMat, 0, 0, 1.85, 2.0, 0.1, 0.4);
+        for (const s of [-1, 1]) solid(mossStone, s * 1.4, 0.2, 1.3, 0.3, 2.0, 0.3);
+        gb.add(UNIT_BOX, stoneMat, mx, 2.3, mz + 0.1, 0, 0, 0, 4.2, 0.2, 3.2);
+        gb.add(new THREE.ConeGeometry(2.3, 0.75, 4, 1), stoneMat, mx, 2.78, mz + 0.1, 0, Math.PI / 4, 0, 1, 1, 0.75);
+        gb.add(UNIT_BOX, ironMat, mx, 1.0, mz + 1.11, 0, 0, 0, 1.0, 1.6, 0.04);
+        for (let k = 0; k < 5; k++) gb.add(UNIT_BOX, windowVoidMat, mx - 0.4 + k * 0.2, 1.4, mz + 1.135, 0, 0, 0, 0.04, 0.6, 0.01);
+      }
+      // dead, bare trees
+      for (let k = 0; k < 11; k++) {
+        const a = rng2() * Math.PI * 2, r = 6 + rng2() * 8.5, x = G.x + Math.cos(a) * r, z = G.z + Math.sin(a) * r * 0.9;
+        if (Math.abs(x - G.x) < 2 && z > G.z + 5) continue;
+        const h = 2.8 + rng2() * 2;
+        gb.add(new THREE.CylinderGeometry(0.06, 0.16, h, 6), barkMat, x, h / 2, z, (rng2() - 0.5) * 0.15, 0, (rng2() - 0.5) * 0.15);
+        for (let b = 0; b < 5; b++) {
+          const by = h * (0.45 + b * 0.11), ba = rng2() * Math.PI * 2, bl = 0.6 + rng2() * 0.9;
+          gb.add(new THREE.CylinderGeometry(0.015, 0.05, bl, 5), barkMat, x + Math.cos(ba) * bl * 0.4, by + bl * 0.3, z + Math.sin(ba) * bl * 0.4,
+            Math.sin(ba) * 0.95, 0, -Math.cos(ba) * 0.95);
+        }
+        addBoxCollider(x, 0, z, 0.22, h, 0.22);
+      }
+      // lamp posts with a cold, sickly light
+      const lampMat = new THREE.MeshStandardMaterial({ color: 0x1a2a22, emissive: 0xa8f0c8, emissiveIntensity: 1.4 });
+      for (const [x, z] of [[-3, 8], [3, 8], [-9, -4], [9, -4], [0, -7]]) {
+        gb.add(new THREE.CylinderGeometry(0.03, 0.04, 1.6, 6), ironMat, G.x + x, 0.8, G.z + z);
+        gb.add(UNIT_BOX, lampMat, G.x + x, 1.7, G.z + z, 0, 0, 0, 0.14, 0.18, 0.14);
+        gb.add(new THREE.ConeGeometry(0.13, 0.1, 4), ironMat, G.x + x, 1.84, G.z + z, 0, Math.PI / 4, 0);
+        addBoxCollider(G.x + x, 0, G.z + z, 0.1, 1.6, 0.1);
+        const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xa8f0c8, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false }));
+        sp.scale.set(1.3, 1.3, 1); sp.position.set(G.x + x, 1.7, G.z + z); scene.add(sp);
+        lightSources.push({ x: G.x + x, y: 1.6, z: G.z + z, color: 0xa8f0c8, intensity: 3.5, distance: 7, weight: 1 });
+      }
+      gb.build(scene, { rayTarget: true });
+      // low ground mist drifting between the stones
+      const mist = [];
+      for (let k = 0; k < 18; k++) {
+        const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0x8a9a94, transparent: true, opacity: 0.12, depthWrite: false }));
+        s.scale.set(5, 1.6, 1);
+        s.position.set(G.x + (rng2() - 0.5) * G.size, 0.35, G.z + (rng2() - 0.5) * G.size);
+        scene.add(s); mist.push(s);
+      }
+      MAPS[1].mist = mist;
+    }
+
+    // ---------- ABANDONED MINE ----------
+    {
+      const M = MINE, mb = makeBatch();
+      const ground = new THREE.Mesh(new THREE.PlaneGeometry(44, 40), new THREE.MeshStandardMaterial({ map: mineDirtTex, roughness: 1 }));
+      ground.rotation.x = -Math.PI / 2; ground.position.set(M.x - 2, 0.001, M.z); ground.receiveShadow = true;
+      scene.add(ground);
+      addBoxCollider(M.x - 2, -1, M.z, 44, 1, 40);
+      const darkRock = new THREE.MeshStandardMaterial({ color: 0x2c2620, roughness: 1, flatShading: true });
+      const timberMat = new THREE.MeshStandardMaterial({ map: woodTex, color: 0x6a5038, roughness: 0.95 });
+      // tunnel layout on a 1 m grid (world x from M.x-16 to M.x+8, z from M.z-13 to M.z+14): open cells are tunnel
+      const X0 = M.x - 16, Z0 = M.z - 13, NX = 24, NZ = 27, open = [];
+      for (let i = 0; i < NX; i++) { open.push(new Array(NZ).fill(false)); }
+      const carve = (x0, x1, z0, z1) => { for (let i = 0; i < NX; i++) for (let j = 0; j < NZ; j++) { const x = X0 + i + 0.5, z = Z0 + j + 0.5; if (x > x0 && x < x1 && z > z0 && z < z1) open[i][j] = true; } };
+      carve(M.x - 9, M.x + 7, M.z - 1, M.z + 1);          // main adit, from the entrance (east) going west
+      carve(M.x - 15, M.x - 9, M.z - 3, M.z + 3);         // the end chamber
+      carve(M.x - 4, M.x - 2, M.z + 1, M.z + 10);         // north drift
+      carve(M.x - 6, M.x + 0, M.z + 10, M.z + 13);        // north chamber
+      carve(M.x + 2, M.x + 4, M.z - 9, M.z - 1);          // south drift
+      carve(M.x + 0, M.x + 6, M.z - 12, M.z - 9);         // south chamber
+      const isOpen = (i, j) => i >= 0 && j >= 0 && i < NX && j < NZ && open[i][j];
+      const WALL_H = 2.0, WT = 0.4;
+      // walls: every open cell edge that meets rock gets a wall face; faces in a row are merged into one collider
+      const runs = [];
+      for (let j = 0; j < NZ; j++) for (const dz of [-1, 1]) {           // faces facing +z / -z, merged along x
+        let start = -1;
+        for (let i = 0; i <= NX; i++) {
+          const face = i < NX && isOpen(i, j) && !isOpen(i, j + dz);
+          if (face && start < 0) start = i;
+          if (!face && start >= 0) { runs.push({ axis: 'x', a0: X0 + start, a1: X0 + i, at: Z0 + j + (dz > 0 ? 1 : 0), out: dz }); start = -1; }
+        }
+      }
+      for (let i = 0; i < NX; i++) for (const dx of [-1, 1]) {           // faces facing +x / -x, merged along z
+        let start = -1;
+        for (let j = 0; j <= NZ; j++) {
+          const isEntrance = dx > 0 && Math.abs(X0 + i + 1 - (M.x + 7)) < 0.01;  // the east end of the main adit is the way in
+          const face = j < NZ && isOpen(i, j) && !isOpen(i + dx, j) && !(isEntrance && Math.abs(Z0 + j + 0.5 - M.z) < 1);
+          if (face && start < 0) start = j;
+          if (!face && start >= 0) { runs.push({ axis: 'z', a0: Z0 + start, a1: Z0 + j, at: X0 + i + (dx > 0 ? 1 : 0), out: dx }); start = -1; }
+        }
+      }
+      const rr3 = mulberry32(4242);
+      for (const r of runs) {
+        const len = r.a1 - r.a0, c = (r.a0 + r.a1) / 2;
+        if (r.axis === 'x') {
+          addBoxCollider(c, 0, r.at + r.out * WT / 2, len + WT, WALL_H + 0.4, WT);
+          mb.add(UNIT_BOX, darkRock, c, WALL_H / 2, r.at + r.out * WT / 2, 0, 0, 0, len + WT, WALL_H + 0.1, WT);
+        } else {
+          addBoxCollider(r.at + r.out * WT / 2, 0, c, WT, WALL_H + 0.4, len + WT);
+          mb.add(UNIT_BOX, darkRock, r.at + r.out * WT / 2, WALL_H / 2, c, 0, 0, 0, WT, WALL_H + 0.1, len + WT);
+        }
+        for (let k = 0; k < len * 2.2; k++) {                                 // rough rock lumps on the face
+          const t = r.a0 + rr3() * len, y = rr3() * WALL_H, s = 0.12 + rr3() * 0.22;
+          const x = r.axis === 'x' ? t : r.at + r.out * 0.02, z = r.axis === 'x' ? r.at + r.out * 0.02 : t;
+          mb.add(new THREE.DodecahedronGeometry(1, 0), k % 3 ? darkRock : rockMat, x, y, z, rr3() * 3, rr3() * 3, 0, s, s * 0.8, s);
+        }
+      }
+      // ceiling over the tunnels (rows merged), with lumps hanging from it
+      for (let j = 0; j < NZ; j++) {
+        let start = -1;
+        for (let i = 0; i <= NX; i++) {
+          const o = i < NX && isOpen(i, j);
+          if (o && start < 0) start = i;
+          if (!o && start >= 0) {
+            const x0 = X0 + start, x1 = X0 + i;
+            addBoxCollider((x0 + x1) / 2, WALL_H, Z0 + j + 0.5, x1 - x0 + 0.02, 0.5, 1.02);
+            mb.add(UNIT_BOX, darkRock, (x0 + x1) / 2, WALL_H + 0.25, Z0 + j + 0.5, 0, 0, 0, x1 - x0 + 0.02, 0.5, 1.02);
+            start = -1;
+          }
+        }
+      }
+      // the rock face round the entrance (outside), a timber portal and a warning sign
+      const ex = M.x + 7;
+      for (const s of [-1, 1]) {
+        addBoxCollider(ex + 0.6, 0, M.z + s * 7.5, 1.2, 6, 13);
+        mb.add(UNIT_BOX, darkRock, ex + 0.6, 3, M.z + s * 7.5, 0, 0, 0, 1.2, 6, 13);
+        for (let k = 0; k < 30; k++) mb.add(new THREE.DodecahedronGeometry(1, 0), rockMat, ex + 1.2, rr3() * 4.4, M.z + s * (1.2 + rr3() * 12.6), rr3() * 3, rr3() * 3, 0, 0.3 + rr3() * 0.5, 0.3 + rr3() * 0.4, 0.3 + rr3() * 0.4);
+      }
+      addBoxCollider(ex + 0.6, 2.0, M.z, 1.2, 4, 2.2);
+      mb.add(UNIT_BOX, darkRock, ex + 0.6, 4, M.z, 0, 0, 0, 1.2, 4, 2.2);
+      for (const s of [-1, 1]) mb.add(UNIT_BOX, timberMat, ex + 1.25, 1.0, M.z + s * 0.98, 0, 0, 0, 0.16, 2.0, 0.16);
+      mb.add(UNIT_BOX, timberMat, ex + 1.25, 2.05, M.z, 0, 0, 0, 0.2, 0.18, 2.4);
+      const signTex = canvasTexture(256, (g, s) => {
+        g.fillStyle = '#4a3a28'; g.fillRect(0, s * 0.25, s, s * 0.5);
+        for (let k = 0; k < 6; k++) { g.fillStyle = 'rgba(20,12,6,0.4)'; g.fillRect(0, s * 0.25 + k * s * 0.083, s, 2); }
+        g.fillStyle = '#d8c8a0'; g.font = 'bold 52px Georgia, serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+        g.fillText('MINE No. 3', s / 2, s * 0.42);
+        g.fillStyle = '#9a1a12'; g.font = 'bold 30px Georgia, serif'; g.fillText('KEEP OUT', s / 2, s * 0.62);
+      });
+      mb.add(new THREE.PlaneGeometry(1.4, 1.4), new THREE.MeshStandardMaterial({ map: signTex, transparent: true, alphaTest: 0.1, roughness: 0.9 }), ex + 1.36, 2.45, M.z, 0, Math.PI / 2, 0.05);
+      // outside: a small rocky yard closed in by rocks and invisible walls
+      for (const [x, z, w, d] of [[ex + 9, M.z, 0.4, 16], [ex + 5, M.z - 7.8, 9, 0.4], [ex + 5, M.z + 7.8, 9, 0.4]]) addBoxCollider(x, -1, z, w, 6, d);
+      for (let k = 0; k < 22; k++) {
+        const a = -Math.PI / 2 + (k / 21) * Math.PI, x = ex + 4.5 + Math.cos(a) * 4.6, z = M.z + Math.sin(a) * 7.2;
+        const s = 0.5 + rr3() * 0.6;
+        mb.add(new THREE.DodecahedronGeometry(1, 0), rockMat, x + 0.5, s * 0.5, z, rr3() * 3, rr3() * 3, 0, s, s * 0.9, s);
+      }
+      // timber supports every 3 m along the tunnels (posts and a cap beam)
+      const support = (x, z, alongX) => {
+        for (const s of [-1, 1]) {
+          const px = alongX ? x : x + s * 0.9, pz = alongX ? z + s * 0.9 : z;
+          mb.add(UNIT_BOX, timberMat, px, 0.95, pz, 0, 0, 0, 0.14, 1.9, 0.14);
+          addBoxCollider(px, 0, pz, 0.14, 1.9, 0.14);
+        }
+        mb.add(UNIT_BOX, timberMat, x, 1.93, z, 0, 0, 0, alongX ? 0.18 : 2.0, 0.16, alongX ? 2.0 : 0.18);
+      };
+      for (let x = M.x + 5; x > M.x - 9; x -= 3) support(x, M.z, true);
+      for (let z = M.z + 3; z < M.z + 10; z += 3) support(M.x - 3, z, false);
+      for (let z = M.z - 3; z > M.z - 9; z -= 3) support(M.x + 3, z, false);
+      // rails along the main adit and up the north drift, with sleepers
+      const railMat = new THREE.MeshStandardMaterial({ color: 0x4a3a30, roughness: 0.5, metalness: 0.8 });
+      const rails = (x0, z0, x1, z1) => {
+        const len = Math.hypot(x1 - x0, z1 - z0), ry = Math.atan2(x1 - x0, z1 - z0), nx = Math.cos(ry), nz = -Math.sin(ry);
+        for (const s of [-1, 1]) mb.add(UNIT_BOX, railMat, (x0 + x1) / 2 + nx * s * 0.3, 0.05, (z0 + z1) / 2 + nz * s * 0.3, 0, ry, 0, 0.04, 0.05, len);
+        for (let k = 0; k < len / 0.5; k++) { const t = (k + 0.5) / (len / 0.5); mb.add(UNIT_BOX, timberMat, x0 + (x1 - x0) * t, 0.015, z0 + (z1 - z0) * t, 0, ry, 0, 0.9, 0.03, 0.14); }
+      };
+      rails(M.x + 9, M.z, M.x - 12, M.z);
+      rails(M.x - 3, M.z + 0.8, M.x - 3, M.z + 11);
+      // ore carts (one tipped over), crates, barrels, a rubble fall in the end chamber
+      const cart = (x, z, ry, tip) => {
+        const hullMat = new THREE.MeshStandardMaterial({ color: 0x3a2e26, map: grimeTex, roughness: 0.6, metalness: 0.7 });
+        const q = [x, z];
+        mb.add(new THREE.CylinderGeometry(0.42, 0.3, 0.4, 4, 1, true), hullMat, q[0], 0.4, q[1], tip, Math.PI / 4 + ry, 0, 1.3, 1, 0.9);
+        mb.add(UNIT_BOX, hullMat, q[0], 0.2, q[1], tip, ry, 0, 0.75, 0.04, 0.5);
+        if (!tip) for (const sx of [-1, 1]) for (const sz of [-1, 1]) mb.add(new THREE.CylinderGeometry(0.1, 0.1, 0.05, 10), railMat, q[0] + sx * 0.28, 0.1, q[1] + sz * 0.3, Math.PI / 2, 0, 0);
+        addBoxCollider(x, 0, z, 0.9, 0.6, 0.7);
+      };
+      cart(M.x + 1, M.z, 0, 0);
+      cart(M.x - 12, M.z - 1.5, 0.6, 1.2);
+      for (const [x, z] of [[M.x - 13, M.z + 2], [M.x - 12.2, M.z + 2.3], [M.x - 4.5, M.z + 11.5], [M.x + 4.5, M.z - 10.5], [M.x + 1.2, M.z - 11]]) {
+        mb.add(UNIT_BOX, plankMat, x, 0.22, z, 0, rr3(), 0, 0.45, 0.45, 0.45);
+        addBoxCollider(x, 0, z, 0.45, 0.45, 0.45);
+      }
+      for (const [x, z] of [[M.x - 1.5, M.z + 11.8], [M.x + 2.4, M.z - 10.8]]) {
+        mb.add(new THREE.CylinderGeometry(0.2, 0.2, 0.55, 12), ironMat, x, 0.275, z);
+        addBoxCollider(x, 0, z, 0.4, 0.55, 0.4);
+      }
+      for (let k = 0; k < 26; k++) {
+        const s = 0.15 + rr3() * 0.35;
+        mb.add(new THREE.DodecahedronGeometry(1, 0), rockMat, M.x - 15 + rr3() * 2, s * 0.6, M.z - 2.5 + rr3() * 5, rr3() * 3, rr3() * 3, 0, s, s * 0.8, s);
+      }
+      addBoxCollider(M.x - 14.2, 0, M.z, 1.6, 0.7, 5);
+      // lanterns hanging from the supports: warm, flickering pools of light in the dark
+      const lantMat = new THREE.MeshStandardMaterial({ color: 0x2a1a08, emissive: 0xffa040, emissiveIntensity: 1.8 });
+      for (const [x, z] of [[M.x + 5, M.z + 0.7], [M.x - 1, M.z - 0.7], [M.x - 7, M.z + 0.7], [M.x - 12, M.z], [M.x - 3.7, M.z + 6], [M.x - 3, M.z + 11.5], [M.x + 3.7, M.z - 6], [M.x + 3, M.z - 10.5]]) {
+        mb.add(new THREE.CylinderGeometry(0.05, 0.05, 0.13, 10), lantMat, x, 1.62, z);
+        mb.add(new THREE.CylinderGeometry(0.003, 0.003, 0.25, 4), ironMat, x, 1.8, z);
+        const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xffa040, transparent: true, opacity: 0.65, blending: THREE.AdditiveBlending, depthWrite: false }));
+        sp.scale.set(1.1, 1.1, 1); sp.position.set(x, 1.62, z); scene.add(sp);
+        lightSources.push({ x, y: 1.55, z, color: 0xffa050, intensity: 3.5, distance: 6, weight: 1.2, fire: true });
+      }
+      mb.build(scene, { rayTarget: true });
+    }
+
+    // ---------- waiting room music: low drones, dissonant music-box notes, wind and creaks (procedural) ----------
+    const waitingMusic = (() => {
+      let ctx = null, out = null, noise = null, timer = null, playing = false, nextNote = 0, nextCreak = 0, nextScrape = 0;
+      const BOX = [69, 70, 75, 76, 81, 82, 86, 87];                 // music-box notes: close, clashing intervals
+      const hz = (m) => 440 * Math.pow(2, (m - 69) / 12);
+      function build() {
+        ctx = new (window.AudioContext || window.webkitAudioContext)();
+        out = ctx.createGain(); out.gain.value = 0;
+        const verbLen = ctx.sampleRate * 3.5, ir = ctx.createBuffer(2, verbLen, ctx.sampleRate);
+        for (let ch = 0; ch < 2; ch++) { const d = ir.getChannelData(ch); for (let i = 0; i < verbLen; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / verbLen, 2.2); }
+        const verb = ctx.createConvolver(); verb.buffer = ir;
+        const wet = ctx.createGain(); wet.gain.value = 0.45;
+        out.connect(ctx.destination); out.connect(verb); verb.connect(wet); wet.connect(ctx.destination);
+        out._wet = wet;
+        const len = ctx.sampleRate * 2; noise = ctx.createBuffer(1, len, ctx.sampleRate);
+        const nd = noise.getChannelData(0); for (let i = 0; i < len; i++) nd[i] = Math.random() * 2 - 1;
+        // drone pads: two clusters of detuned saws through a slowly breathing low-pass
+        const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 320; lp.Q.value = 3;
+        const lfo = ctx.createOscillator(); lfo.frequency.value = 0.05; const lfoG = ctx.createGain(); lfoG.gain.value = 180;
+        lfo.connect(lfoG); lfoG.connect(lp.frequency); lfo.start();
+        const padG = ctx.createGain(); padG.gain.value = 0.11;
+        lp.connect(padG); padG.connect(out);
+        for (const [f, det] of [[36.7, -8], [36.7, 7], [55, -5], [58.3, 6], [77.8, 3]]) {   // D, A and a sour B-flat, low E-flat
+          const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = f; o.detune.value = det;
+          const g = ctx.createGain(); g.gain.value = 0.3; o.connect(g); g.connect(lp); o.start();
+        }
+        // wind: band-passed noise sweeping slowly
+        const ws = ctx.createBufferSource(); ws.buffer = noise; ws.loop = true;
+        const wf = ctx.createBiquadFilter(); wf.type = 'bandpass'; wf.Q.value = 1.4; wf.frequency.value = 500;
+        const wl = ctx.createOscillator(); wl.frequency.value = 0.07; const wlg = ctx.createGain(); wlg.gain.value = 300;
+        wl.connect(wlg); wlg.connect(wf.frequency); wl.start();
+        const wg = ctx.createGain(); wg.gain.value = 0.05;
+        ws.connect(wf); wf.connect(wg); wg.connect(out); ws.start();
+      }
+      function bell(t, m, vel) {                                    // a slightly out-of-tune music-box tine
+        for (const [mul, amp, dec] of [[1, 1, 2.2], [2.01, 0.35, 0.9], [3.98, 0.15, 0.5]]) {
+          const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = hz(m) * mul; o.detune.value = (Math.random() - 0.5) * 30;
+          const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.05 * vel * amp, t + 0.004);
+          g.gain.exponentialRampToValueAtTime(0.0001, t + dec);
+          o.connect(g); g.connect(out); o.start(t); o.stop(t + dec + 0.05);
+        }
+      }
+      function creak(t) {                                           // old wood groaning
+        const s = ctx.createBufferSource(); s.buffer = noise;
+        const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = 18;
+        f.frequency.setValueAtTime(220 + Math.random() * 200, t); f.frequency.exponentialRampToValueAtTime(140 + Math.random() * 80, t + 1.2);
+        const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.35, t + 0.3); g.gain.exponentialRampToValueAtTime(0.0001, t + 1.3);
+        s.connect(f); f.connect(g); g.connect(out); s.start(t, Math.random()); s.stop(t + 1.4);
+      }
+      function scrape(t) {                                          // a distant metallic scrape
+        const s = ctx.createBufferSource(); s.buffer = noise;
+        const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = 25;
+        f.frequency.setValueAtTime(1800 + Math.random() * 1500, t); f.frequency.linearRampToValueAtTime(900 + Math.random() * 600, t + 2.5);
+        const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.12, t + 1); g.gain.exponentialRampToValueAtTime(0.0001, t + 2.6);
+        s.connect(f); f.connect(g); g.connect(out); s.start(t, Math.random()); s.stop(t + 2.7);
+      }
+      function tick() {
+        if (!playing) return;
+        const now = ctx.currentTime;
+        while (nextNote < now + 0.3) {
+          const m = BOX[(Math.random() * BOX.length) | 0];
+          bell(nextNote, m, 0.6 + Math.random() * 0.4);
+          if (Math.random() < 0.35) bell(nextNote + 0.02, BOX[(Math.random() * BOX.length) | 0], 0.4);   // a clashing second tine
+          nextNote += 1.3 + Math.random() * 3.2;
+        }
+        if (nextCreak < now) { creak(now + 0.05); nextCreak = now + 5 + Math.random() * 9; }
+        if (nextScrape < now) { scrape(now + 0.05); nextScrape = now + 9 + Math.random() * 14; }
+      }
+      return {
+        start() {
+          try {
+            if (!ctx) build();
+            ctx.resume();
+            if (playing) return;
+            playing = true;
+            const t = ctx.currentTime;
+            nextNote = t + 1.5; nextCreak = t + 3; nextScrape = t + 6;
+            out.gain.cancelScheduledValues(t); out.gain.setValueAtTime(out.gain.value, t); out.gain.linearRampToValueAtTime(0.5, t + 3);
+            out._wet.gain.cancelScheduledValues(t); out._wet.gain.setValueAtTime(0.45, t);
+            timer = setInterval(tick, 50);
+          } catch (e) { console.warn('Waiting room music could not start:', e); }
+        },
+        fadeOut(sec) {
+          if (!ctx || !playing) return;
+          const t = ctx.currentTime;
+          out.gain.cancelScheduledValues(t); out.gain.setValueAtTime(out.gain.value, t); out.gain.linearRampToValueAtTime(0, t + sec);
+          out._wet.gain.cancelScheduledValues(t); out._wet.gain.setValueAtTime(out._wet.gain.value, t); out._wet.gain.linearRampToValueAtTime(0, t + sec);
+          setTimeout(() => { playing = false; clearInterval(timer); }, sec * 1000 + 100);
+        },
+      };
+    })();
+
+    // ---------- moving between the waiting room and the maps ----------
+    const travelFadeMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0, side: THREE.BackSide, depthTest: false, depthWrite: false, fog: false });
+    const travelFade = new THREE.Mesh(new THREE.SphereGeometry(0.26, 16, 12), travelFadeMat);
+    travelFade.renderOrder = 9998; travelFade.visible = false; travelFade.frustumCulled = false;
+    camera.add(travelFade);
+    let travel = null, deskRoomPlaced = false;
+    function placeDesktopCamera(cam, target) {
+      camera.position.set(...cam);
+      orbit.target.set(...target);
+      orbit.update();
+    }
+    function goTo(id) {                                 // 'waiting' or a map id; fades through black
+      if (travel) return;
+      travel = { id, t: 0, swapped: false };
+      if (id !== 'waiting') waitingMusic.fadeOut(2.5);
+    }
+    function arrive(id) {
+      currentMap = id;
+      applyEnv(id === 'waiting' ? ROOM_ENV : mapById(id).env ?? mapById(id));
+      for (const p of parts) if (p.held >= 0) releasePart(p);
+      resetLocomotion();                                 // (wrapped above: puts you at this place's spawn)
+      if (id === 'waiting') { waitingMusic.start(); horrorAudio.stop?.(); }
+      else horrorAudio.start();
+      if (!renderer.xr.isPresenting) {
+        if (id === 'waiting') placeDesktopCamera([WAIT_ROOM.x + 0.5, 1.05, WAIT_ROOM.z + 2.9], [WAIT_ROOM.x, 0.95, WAIT_ROOM.z - WAIT_ROOM.d / 2]);
+        else placeDesktopCamera(mapById(id).desk.cam, mapById(id).desk.target);
+      }
+    }
+    // PLAY now leads to the waiting room (the lobby's own PLAY code is wrapped, not changed)
+    {
+      const basePress = pressPlay;
+      pressPlay = function (inVR) {
+        const was = titleActive;
+        basePress(inVR);
+        if (was && !titleActive) {
+          currentMap = 'waiting';
+          applyEnv(ROOM_ENV);
+          waitingMusic.start();
+          deskRoomPlaced = false;
+        }
+      };
+    }
+    vrButton.addEventListener('click', () => { if (!titleActive && currentMap === 'waiting') waitingMusic.start(); });
+    function updateTravel(dt) {
+      if (currentMap === 'waiting' && !titleActive) updateWaitingRoom(dt);
+      // desktop: once the lobby has gone, look into the waiting room
+      if (!titleActive && !renderer.xr.isPresenting && currentMap === 'waiting' && !deskRoomPlaced && !titleGroup.visible) {
+        deskRoomPlaced = true;
+        placeDesktopCamera([WAIT_ROOM.x + 0.5, 1.05, WAIT_ROOM.z + 2.9], [WAIT_ROOM.x, 0.95, WAIT_ROOM.z - WAIT_ROOM.d / 2]);
+      }
+      if (MAPS[1].mist && currentMap === 'graveyard') for (const [k, s] of MAPS[1].mist.entries()) s.position.x += Math.sin(performance.now() * 0.0001 + k) * dt * 0.15;
+      if (!travel) return;
+      travel.t += dt;
+      const T_OUT = 0.45, T_IN = 0.9;
+      let f;
+      if (!travel.swapped) {
+        f = Math.min(1, travel.t / T_OUT);
+        if (travel.t >= T_OUT) { travel.swapped = true; travel.t = 0; f = 1; arrive(travel.id); }
+      } else {
+        f = Math.max(0, 1 - travel.t / T_IN);
+        if (travel.t >= T_IN) travel = null;
+      }
+      travelFadeMat.opacity = f;
+      travelFade.visible = f > 0.001;
+    }
+
+    // leaving VR on the desktop: look at the place you're in again
+    renderer.xr.addEventListener('sessionend', () => {
+      if (titleActive) return;
+      if (currentMap === 'waiting') placeDesktopCamera([WAIT_ROOM.x + 0.5, 1.05, WAIT_ROOM.z + 2.9], [WAIT_ROOM.x, 0.95, WAIT_ROOM.z - WAIT_ROOM.d / 2]);
+      else placeDesktopCamera(mapById(currentMap).desk.cam, mapById(currentMap).desk.target);
+    });
+
+    // =====================================================================
+    //  3D UI PANELS (map screen + settings menu), TURN MODES, PLAYER ROLE and the PLAYER-DRIVEN MONSTER
+    //  Panels are canvases on planes. In VR, point a controller at one and pull the trigger; on the desktop, click.
+    //  The settings menu opens with B / Y on a controller (or a Menu button, if the browser exposes it), or
+    //  Tab / Escape on the desktop. It has SNAP / SMOOTH / NO TURN and SURVIVOR / MONSTER.
+    // =====================================================================
+    const uiPanels = [];
+    const _uiRay = new THREE.Raycaster(), _uiM = new THREE.Matrix4(), _uiO = new THREE.Vector3(), _uiD = new THREE.Vector3();
+    const UI_FONT = '"Courier New", monospace';
+    function makePanel(w, h, cw, ch, draw, onClick, { onTop = false } = {}) {
+      const canvas = document.createElement('canvas'); canvas.width = cw; canvas.height = ch;
+      const tex = new THREE.CanvasTexture(canvas); tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, fog: false, toneMapped: false, depthTest: !onTop, depthWrite: !onTop });
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
+      if (onTop) mesh.renderOrder = 9990;
+      const p = { mesh, canvas, g: canvas.getContext('2d'), tex, cw, ch, buttons: [], hover: null, draw, onClick };
+      uiPanels.push(p);
+      return p;
+    }
+    function redrawPanel(p) { p.buttons = []; p.draw(p.g, p); p.tex.needsUpdate = true; }
+    function uiButton(p, id, x, y, w, h) { p.buttons.push({ id, x, y, w, h }); return p.hover === id; }
+    function shownInScene(o) { for (; o; o = o.parent) { if (!o.visible) return false; if (o === scene) return true; } return false; }
+    // nearest panel hit along a ray: { p, dist, point, id }
+    function uiHit(origin, dir) {
+      _uiRay.set(origin, dir); _uiRay.far = 12;
+      let best = null;
+      for (const p of uiPanels) {
+        if (!shownInScene(p.mesh)) continue;
+        const h = _uiRay.intersectObject(p.mesh, false)[0];
+        if (!h || (best && h.distance >= best.dist)) continue;
+        const cx = h.uv.x * p.cw, cy = (1 - h.uv.y) * p.ch;
+        const b = p.buttons.find((b) => cx >= b.x && cx <= b.x + b.w && cy >= b.y && cy <= b.y + b.h);
+        best = { p, dist: h.distance, point: h.point, id: b ? b.id : null };
+      }
+      return best;
+    }
+    function setHover(p, id) { if (p.hover !== id) { p.hover = id; redrawPanel(p); } }
+    function roundRect(g, x, y, w, h, r) { g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); }
+    function wrapText(g, text, x, y, maxW, lh) {
+      const words = text.split(' '); let line = '';
+      for (const w of words) {
+        const t = line ? line + ' ' + w : w;
+        if (g.measureText(t).width > maxW && line) { g.fillText(line, x, y); y += lh; line = w; } else line = t;
+      }
+      if (line) g.fillText(line, x, y);
+    }
+    function drawButton(g, x, y, w, h, label, { on = false, hover = false, accent = '#d8c8a0', size = 26 } = {}) {
+      roundRect(g, x, y, w, h, 10);
+      g.fillStyle = on ? 'rgba(150,30,22,0.9)' : hover ? 'rgba(70,60,48,0.95)' : 'rgba(28,24,20,0.9)'; g.fill();
+      g.lineWidth = on || hover ? 4 : 2; g.strokeStyle = on ? '#ffb090' : hover ? accent : 'rgba(216,200,160,0.45)'; g.stroke();
+      g.fillStyle = on ? '#fff2e0' : '#e8dcc0'; g.font = `bold ${size}px ${UI_FONT}`; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText(label, x + w / 2, y + h / 2 + 1);
+      g.textAlign = 'left';
+    }
+
+    // ---------- map previews (small painted scenes) ----------
+    const mapPreview = {};
+    {
+      const mk = (paint) => { const c = document.createElement('canvas'); c.width = 400; c.height = 225; paint(c.getContext('2d'), 400, 225); return c; };
+      const rng = mulberry32(31337);
+      const trees = (g, W, H, y0, col, n, h0, h1) => {
+        g.fillStyle = col;
+        for (let k = 0; k < n; k++) { const x = rng() * W, h = h0 + rng() * (h1 - h0), w = h * 0.28; g.beginPath(); g.moveTo(x, y0 - h); g.lineTo(x - w, y0); g.lineTo(x + w, y0); g.closePath(); g.fill(); }
+      };
+      mapPreview.camp = mk((g, W, H) => {
+        let grd = g.createLinearGradient(0, 0, 0, H); grd.addColorStop(0, '#0a1020'); grd.addColorStop(1, '#141c26'); g.fillStyle = grd; g.fillRect(0, 0, W, H);
+        g.fillStyle = '#dfe6ee'; g.beginPath(); g.arc(320, 42, 16, 0, Math.PI * 2); g.fill();
+        trees(g, W, H, 130, '#0b1410', 26, 40, 90);
+        grd = g.createLinearGradient(0, 130, 0, H); grd.addColorStop(0, '#16283a'); grd.addColorStop(1, '#0a121b'); g.fillStyle = grd; g.fillRect(0, 130, W, 40);   // the lake
+        g.fillStyle = 'rgba(220,230,240,0.25)'; g.fillRect(300, 140, 40, 2);
+        g.fillStyle = '#100c08'; g.fillRect(0, 170, W, H - 170);
+        g.fillStyle = '#2a1a10'; g.beginPath(); g.moveTo(60, 170); g.lineTo(110, 140); g.lineTo(160, 170); g.closePath(); g.fill();                  // cabin
+        g.fillStyle = '#ffa040'; g.fillRect(100, 156, 10, 8);
+        const fg = g.createRadialGradient(240, 190, 2, 240, 190, 60); fg.addColorStop(0, 'rgba(255,160,60,0.9)'); fg.addColorStop(1, 'rgba(255,120,40,0)');
+        g.fillStyle = fg; g.fillRect(170, 130, 140, 95);                                                                                              // campfire glow
+        g.fillStyle = '#ffd080'; g.beginPath(); g.moveTo(232, 196); g.lineTo(240, 178); g.lineTo(248, 196); g.closePath(); g.fill();
+      });
+      mapPreview.graveyard = mk((g, W, H) => {
+        let grd = g.createLinearGradient(0, 0, 0, H); grd.addColorStop(0, '#2c3632'); grd.addColorStop(1, '#4a5652'); g.fillStyle = grd; g.fillRect(0, 0, W, H);
+        g.fillStyle = 'rgba(200,220,210,0.5)'; g.beginPath(); g.arc(80, 50, 22, 0, Math.PI * 2); g.fill();
+        g.strokeStyle = '#1e2422'; g.lineWidth = 3;                                                                                                 // dead trees
+        for (const [x, h] of [[40, 110], [350, 130], [300, 90]]) { g.beginPath(); g.moveTo(x, 170); g.lineTo(x + 4, 170 - h); g.stroke(); for (let b = 0; b < 4; b++) { g.beginPath(); g.moveTo(x + 3, 170 - h * (0.5 + b * 0.12)); g.lineTo(x + (b % 2 ? 26 : -24), 170 - h * (0.65 + b * 0.12)); g.stroke(); } }
+        g.fillStyle = '#3a3a36'; g.fillRect(150, 92, 100, 70); g.beginPath(); g.moveTo(140, 92); g.lineTo(200, 66); g.lineTo(260, 92); g.closePath(); g.fill();   // mausoleum
+        g.fillStyle = '#121414'; g.fillRect(186, 120, 28, 42);
+        for (let k = 0; k < 14; k++) {
+          const x = 20 + k * 27 + rng() * 8, y = 172 + (k % 3) * 14, s = 0.7 + (k % 3) * 0.2;
+          g.fillStyle = k % 2 ? '#5a5e58' : '#6a6e68';
+          if (k % 4 === 1) { g.fillRect(x - 3 * s, y - 34 * s, 6 * s, 34 * s); g.fillRect(x - 12 * s, y - 26 * s, 24 * s, 6 * s); }
+          else { g.beginPath(); g.moveTo(x - 12 * s, y); g.lineTo(x - 12 * s, y - 22 * s); g.arc(x, y - 22 * s, 12 * s, Math.PI, 0); g.lineTo(x + 12 * s, y); g.closePath(); g.fill(); }
+        }
+        g.fillStyle = 'rgba(180,200,195,0.35)'; for (let k = 0; k < 6; k++) { g.beginPath(); g.ellipse(rng() * W, 170 + rng() * 50, 90, 14, 0, 0, Math.PI * 2); g.fill(); }   // ground mist
+      });
+      mapPreview.mine = mk((g, W, H) => {
+        g.fillStyle = '#0a0806'; g.fillRect(0, 0, W, H);
+        for (let k = 0; k < 400; k++) { const v = 20 + rng() * 30 | 0; g.fillStyle = `rgb(${v + 6},${v},${v - 4})`; g.fillRect(rng() * W, rng() * H, 6, 4); }
+        g.fillStyle = '#000'; g.beginPath(); g.moveTo(130, 215); g.lineTo(130, 90); g.quadraticCurveTo(200, 50, 270, 90); g.lineTo(270, 215); g.closePath(); g.fill();   // tunnel mouth
+        g.fillStyle = '#5a4028'; g.fillRect(122, 80, 16, 135); g.fillRect(262, 80, 16, 135); g.fillRect(116, 72, 168, 16);                                         // timbers
+        const lg = g.createRadialGradient(200, 130, 2, 200, 130, 70); lg.addColorStop(0, 'rgba(255,170,70,0.85)'); lg.addColorStop(1, 'rgba(255,120,40,0)');
+        g.fillStyle = lg; g.fillRect(130, 60, 140, 140);
+        g.fillStyle = '#ffd080'; g.fillRect(196, 122, 8, 12);
+        g.strokeStyle = '#4a3a30'; g.lineWidth = 3;                                                                                                               // rails
+        g.beginPath(); g.moveTo(185, 150); g.lineTo(120, 225); g.moveTo(215, 150); g.lineTo(280, 225); g.stroke();
+        g.fillStyle = '#d8c8a0'; g.font = 'bold 14px Georgia, serif'; g.fillText('MINE No. 3', 160, 66);
+      });
+    }
+
+    // ---------- the map selection screen in the waiting room ----------
+    let mapSelected = 'camp';
+    const mapScreen = makePanel(2.6, 1.4625, 1024, 576, (g, p) => {
+      const W = p.cw, H = p.ch;
+      const grd = g.createLinearGradient(0, 0, 0, H); grd.addColorStop(0, '#15110d'); grd.addColorStop(1, '#0a0806');
+      g.fillStyle = grd; g.fillRect(0, 0, W, H);
+      for (let y = 0; y < H; y += 4) { g.fillStyle = 'rgba(255,255,255,0.025)'; g.fillRect(0, y, W, 1); }          // scanlines
+      g.strokeStyle = 'rgba(216,200,160,0.6)'; g.lineWidth = 4; g.strokeRect(8, 8, W - 16, H - 16);
+      g.fillStyle = '#e8dcc0'; g.font = `bold 44px ${UI_FONT}`; g.textBaseline = 'middle'; g.textAlign = 'center';
+      g.fillText('SELECT A MAP', W / 2, 50);
+      g.fillStyle = 'rgba(200,60,40,0.8)'; g.fillRect(W / 2 - 170, 78, 340, 3);
+      g.textAlign = 'left';
+      // map cards on the left
+      MAPS.forEach((m, k) => {
+        const x = 34, y = 104 + k * 132, w = 380, h = 118, on = m.id === mapSelected, hov = uiButton(p, 'map:' + m.id, x, y, w, h);
+        roundRect(g, x, y, w, h, 12);
+        g.fillStyle = on ? 'rgba(120,28,20,0.85)' : hov ? 'rgba(60,50,40,0.95)' : 'rgba(30,26,22,0.95)'; g.fill();
+        g.lineWidth = on ? 5 : hov ? 4 : 2; g.strokeStyle = on ? '#ffb090' : hov ? '#d8c8a0' : 'rgba(216,200,160,0.35)'; g.stroke();
+        g.save(); roundRect(g, x + 10, y + 10, 150, 98, 8); g.clip(); g.drawImage(mapPreview[m.id], x + 10, y + 10, 150, 98); g.restore();
+        g.fillStyle = on ? '#fff2e0' : '#e8dcc0'; g.font = `bold 21px ${UI_FONT}`; g.fillText(m.name, x + 172, y + 40);
+        g.fillStyle = on ? '#ffc0a0' : 'rgba(216,200,160,0.6)'; g.font = `18px ${UI_FONT}`; g.fillText(m.id === 'camp' ? 'PRIMARY MAP' : 'NEW MAP', x + 172, y + 74);
+      });
+      // the preview on the right
+      const m = mapById(mapSelected), px = 446, py = 104, pw = W - px - 34, ph = 236;
+      g.drawImage(mapPreview[m.id], 0, (225 - 400 * ph / pw) / 2, 400, 400 * ph / pw, px, py, pw, ph);
+      g.strokeStyle = 'rgba(216,200,160,0.6)'; g.lineWidth = 3; g.strokeRect(px, py, pw, ph);
+      const ty = py + ph + 34;
+      g.fillStyle = '#ffe2c8'; g.font = `bold 34px ${UI_FONT}`; g.fillText(m.name, px, ty);
+      g.fillStyle = '#c8b894'; g.font = `20px ${UI_FONT}`; wrapText(g, m.desc, px, ty + 34, pw, 24);
+      drawButton(g, px + pw - 300, H - 86, 300, 60, 'LAUNCH / ENTER MAP', { hover: uiButton(p, 'launch', px + pw - 300, H - 86, 300, 60), size: 24 });
+      if (travel) { g.fillStyle = 'rgba(0,0,0,0.6)'; g.fillRect(0, 0, W, H); g.fillStyle = '#e8dcc0'; g.font = `bold 40px ${UI_FONT}`; g.textAlign = 'center'; g.fillText('LOADING...', W / 2, H / 2); g.textAlign = 'left'; }
+    }, (id) => {
+      if (id === 'launch') { goTo(mapSelected); redrawPanel(mapScreen); waitingClick(true); }
+      else if (id && id.startsWith('map:')) { mapSelected = id.slice(4); redrawPanel(mapScreen); waitingClick(false); }
+    });
+    mapScreen.mesh.position.set(WAIT_ROOM.x, 0.95, WAIT_ROOM.z - WAIT_ROOM.d / 2 + 0.04);
+    scene.add(mapScreen.mesh);
+    redrawPanel(mapScreen);
+    {
+      // the screen's frame: dark timber with a cold glow round the edge
+      const fb = makeBatch();
+      const SW = 2.6, SH = 1.4625, Z = WAIT_ROOM.z - WAIT_ROOM.d / 2 + 0.025;
+      for (const [x, y, w, h] of [[0, SH / 2 + 0.05, SW + 0.2, 0.1], [0, -SH / 2 - 0.05, SW + 0.2, 0.1], [-SW / 2 - 0.05, 0, 0.1, SH + 0.2], [SW / 2 + 0.05, 0, 0.1, SH + 0.2]])
+        fb.add(UNIT_BOX, trimMat, WAIT_ROOM.x + x, 0.95 + y, Z, 0, 0, 0, w, h, 0.05);
+      fb.build(scene);
+      const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0x9ab8d8, transparent: true, opacity: 0.18, blending: THREE.AdditiveBlending, depthWrite: false }));
+      glow.scale.set(4.2, 2.6, 1); glow.position.set(WAIT_ROOM.x, 0.95, Z + 0.06);
+      scene.add(glow);
+    }
+    // a soft click (and a deeper thud for LAUNCH) from its own tiny audio graph
+    let _uiCtx = null;
+    function waitingClick(big) {
+      try {
+        _uiCtx = _uiCtx || new (window.AudioContext || window.webkitAudioContext)();
+        const t = _uiCtx.currentTime, o = _uiCtx.createOscillator(), g = _uiCtx.createGain();
+        o.type = 'triangle'; o.frequency.setValueAtTime(big ? 160 : 620, t); o.frequency.exponentialRampToValueAtTime(big ? 50 : 300, t + (big ? 0.5 : 0.08));
+        g.gain.setValueAtTime(big ? 0.35 : 0.12, t); g.gain.exponentialRampToValueAtTime(0.0001, t + (big ? 0.6 : 0.1));
+        o.connect(g); g.connect(_uiCtx.destination); o.start(t); o.stop(t + 0.7);
+      } catch (e) { /* no audio: fine */ }
+    }
+
+    // ---------- settings: turn mode and role ----------
+    let turnMode = 'snap';                       // 'snap' (the original 45° snap turn) | 'smooth' | 'none'
+    let playerRole = 'survivor';                 // 'survivor' (default) | 'monster'
+    const SMOOTH_TURN_SPEED = 130;               // degrees per second at full stick
+    const SMOOTH_TURN_DEADZONE = 0.18;
+    {
+      const baseSnap = pollSnapTurn;
+      let lastT = 0;
+      pollSnapTurn = function (...a) {
+        if (turnMode === 'snap') return baseSnap.apply(this, a);
+        const now = performance.now(), dt = Math.min(0.05, Math.max(0, (now - lastT) / 1000)); lastT = now;
+        if (turnMode === 'none') return;
+        const right = controllers.find((c) => c.userData.inputSource?.handedness === 'right');
+        const axes = right?.userData.inputSource.gamepad?.axes;
+        if (!axes) return;
+        const x = axes.length >= 4 ? axes[2] : (axes[0] ?? 0);
+        if (Math.abs(x) < SMOOTH_TURN_DEADZONE) return;
+        const k = Math.sign(x) * (Math.abs(x) - SMOOTH_TURN_DEADZONE) / (1 - SMOOTH_TURN_DEADZONE);
+        snapTurn(-k * SMOOTH_TURN_SPEED * dt);   // turns round your head's position, like the snap turn
+      };
+    }
+    const hudRoleEl = hpHudEl.querySelector('span');
+    function setRole(r) {
+      playerRole = r;
+      hudRoleEl.textContent = r === 'monster' ? 'MONSTER' : 'SURVIVOR';
+      hudRoleEl.style.color = r === 'monster' ? '#ff6a5a' : '';
+      survival.shownKey = '';                    // the wrist display redraws with the new label
+    }
+    {
+      // the wrist display: same drawing, with the role in the label (and in its redraw key)
+      const baseWrist = drawWrist;
+      let shownRole = 'survivor';
+      drawWrist = function (...a) {
+        if (shownRole !== playerRole) { shownRole = playerRole; survival.shownKey = ''; }
+        const before = survival.shownKey;
+        const r = baseWrist.apply(this, a);
+        if (playerRole === 'monster' && survival.shownKey !== before) {
+          const g = wristCanvas.getContext('2d');
+          g.clearRect(6, 6, 150, 28);
+          g.fillStyle = 'rgba(8,10,12,0.75)'; g.fillRect(6, 6, 150, 28);
+          g.fillStyle = survival.burning ? '#d8dde2' : '#ff6a5a'; g.font = 'bold 20px "Courier New", monospace'; g.textBaseline = 'middle'; g.textAlign = 'left';
+          g.fillText(survival.burning ? 'BURNING!' : 'MONSTER', 12, 20);
+          wristTex.needsUpdate = true;
+        }
+        return r;
+      };
+    }
+
+    // ---------- the floating settings menu ----------
+    const menuGroup = new THREE.Group();
+    menuGroup.visible = false;
+    scene.add(menuGroup);
+    const MENU_W = 0.42, MENU_H = 0.38;
+    const menuPanel = makePanel(MENU_W, MENU_H, 760, 688, (g, p) => {
+      const W = p.cw, H = p.ch;
+      roundRect(g, 4, 4, W - 8, H - 8, 26);
+      g.fillStyle = 'rgba(14,11,9,0.94)'; g.fill();
+      g.lineWidth = 5; g.strokeStyle = 'rgba(216,200,160,0.7)'; g.stroke();
+      g.fillStyle = '#e8dcc0'; g.font = `bold 46px ${UI_FONT}`; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText('MENU', W / 2, 54);
+      g.fillStyle = 'rgba(200,60,40,0.8)'; g.fillRect(W / 2 - 100, 84, 200, 3);
+      g.font = `20px ${UI_FONT}`; g.fillStyle = 'rgba(216,200,160,0.65)';
+      g.fillText(currentMap === 'waiting' ? 'WAITING ROOM' : mapById(currentMap).name, W / 2, 112);
+      g.textAlign = 'left';
+      g.fillStyle = '#c8b894'; g.font = `bold 26px ${UI_FONT}`; g.fillText('TURNING', 40, 160);
+      const tb = [['snap', 'SNAP TURN'], ['smooth', 'SMOOTH TURN'], ['none', 'NO TURN']];
+      tb.forEach(([id, label], k) => {
+        const x = 40 + k * 232, y = 182, w = 216, h = 74;
+        drawButton(g, x, y, w, h, label, { on: turnMode === id, hover: uiButton(p, 'turn:' + id, x, y, w, h), size: 24 });
+      });
+      g.fillStyle = '#c8b894'; g.font = `bold 26px ${UI_FONT}`; g.fillText('ROLE', 40, 300);
+      [['survivor', 'SURVIVOR'], ['monster', 'MONSTER']].forEach(([id, label], k) => {
+        const x = 40 + k * 348, y = 322, w = 332, h = 84;
+        drawButton(g, x, y, w, h, label, { on: playerRole === id, hover: uiButton(p, 'role:' + id, x, y, w, h), size: 30 });
+      });
+      if (currentMap !== 'waiting') drawButton(g, 40, 446, W - 80, 70, 'BACK TO WAITING ROOM', { hover: uiButton(p, 'room', 40, 446, W - 80, 70), size: 24 });
+      const cy = currentMap !== 'waiting' ? 548 : 470;
+      drawButton(g, 40, cy, W - 80, 80, 'CLOSE', { hover: uiButton(p, 'close', 40, cy, W - 80, 80), size: 30 });
+      g.fillStyle = 'rgba(216,200,160,0.45)'; g.font = `17px ${UI_FONT}`; g.textAlign = 'center';
+      g.fillText(renderer.xr.isPresenting ? 'B / Y opens and closes this menu' : 'Tab / Esc opens and closes this menu', W / 2, H - 30);
+      g.textAlign = 'left';
+    }, (id) => {
+      if (!id) return;
+      waitingClick(false);
+      if (id.startsWith('turn:')) { turnMode = id.slice(5); snapReady = true; }
+      else if (id.startsWith('role:')) setRole(id.slice(5));
+      else if (id === 'room') { goTo('waiting'); setMenu(false); return; }
+      else if (id === 'close') { setMenu(false); return; }
+      redrawPanel(menuPanel);
+    }, { onTop: true });
+    menuGroup.add(menuPanel.mesh);
+    const _mnP = new THREE.Vector3(), _mnD = new THREE.Vector3();
+    function setMenu(open) {
+      if (open && titleActive) return;
+      menuGroup.visible = open;
+      if (!open) return;
+      // in front of your eyes, level, facing you
+      const vr = renderer.xr.isPresenting;
+      camera.getWorldPosition(_mnP); camera.getWorldDirection(_mnD);
+      _mnD.y = 0; if (_mnD.lengthSq() < 1e-6) _mnD.set(0, 0, -1); _mnD.normalize();
+      const dist = vr ? 0.42 : 0.62;
+      menuGroup.position.copy(_mnP).addScaledVector(_mnD, dist);
+      menuGroup.position.y -= vr ? 0.05 : 0.0;
+      menuGroup.scale.setScalar(vr ? 1 : 1.15);
+      menuGroup.lookAt(_mnP.x, menuGroup.position.y, _mnP.z);
+      redrawPanel(menuPanel);
+    }
+    window.addEventListener('keydown', (e) => {
+      if (e.code !== 'Tab' && e.code !== 'Escape') return;
+      if (titleActive) return;
+      e.preventDefault();
+      setMenu(!menuGroup.visible);
+    });
+
+    // ---------- pointing and clicking: VR controllers ----------
+    const uiReticles = [0, 1].map(() => {
+      const r = new THREE.Mesh(new THREE.RingGeometry(0.006, 0.011, 20), new THREE.MeshBasicMaterial({ color: 0xffe2c8, transparent: true, opacity: 0.9, depthTest: false, fog: false, side: THREE.DoubleSide }));
+      r.renderOrder = 9995; r.visible = false; scene.add(r);
+      return r;
+    });
+    const uiPrevTrig = [false, false], uiPrevMenu = [false, false];
+    let uiDeskHover = null;
+    function menuButtonDown(c) {
+      const b = c.userData.inputSource?.gamepad?.buttons;
+      if (!b) return false;
+      if (b[5]?.pressed) return true;                                     // B / Y
+      for (let k = 6; k < b.length; k++) if (b[k]?.pressed) return true;   // a Menu button, where the browser exposes one
+      return false;
+    }
+    function updateUI() {
+      const vr = renderer.xr.isPresenting;
+      const hovered = new Set();
+      if (vr && !titleActive) {
+        controllers.forEach((c, i) => {
+          const ud = c.userData, src = ud.inputSource;
+          const menuNow = !!src && menuButtonDown(c);
+          if (menuNow && !uiPrevMenu[i]) { setMenu(!menuGroup.visible); pulse(c, 0.4, 30); }
+          uiPrevMenu[i] = menuNow;
+          const trig = btn(c, 0), edge = trig && !uiPrevTrig[i];
+          uiPrevTrig[i] = trig;
+          uiReticles[i].visible = false;
+          if (!src || !ud.ray.visible) return;
+          _uiM.identity().extractRotation(c.matrixWorld);
+          _uiO.setFromMatrixPosition(c.matrixWorld);
+          _uiD.set(0, 0, -1).applyMatrix4(_uiM);
+          const h = uiHit(_uiO, _uiD);
+          if (!h) return;
+          ud.ray.scale.z = Math.min(ud.ray.scale.z, h.dist / playerRig.scale.x);   // the pointer ray stops on the panel
+          uiReticles[i].visible = true;
+          uiReticles[i].position.copy(h.point);
+          uiReticles[i].quaternion.copy(h.p.mesh.getWorldQuaternion(_avQ));
+          uiReticles[i].scale.setScalar(playerRig.scale.x * (h.id ? 1.6 : 1));
+          if (h.id) { hovered.add(h.p); setHover(h.p, h.id); }
+          if (edge && h.id) { h.p.onClick(h.id); pulse(c, 0.6, 40); }
+        });
+      } else {
+        uiReticles[0].visible = uiReticles[1].visible = false;
+        if (uiDeskHover) hovered.add(uiDeskHover.p);
+      }
+      for (const p of uiPanels) if (!hovered.has(p) && p.hover !== null) setHover(p, null);
+      if (!vr && uiDeskHover) setHover(uiDeskHover.p, uiDeskHover.id);
+    }
+    // ---------- pointing and clicking: desktop mouse ----------
+    const _uiNDC = new THREE.Vector2(), _uiCamP = new THREE.Vector3();
+    let uiDown = null;
+    function deskUiHit(e) {
+      if (titleActive || renderer.xr.isPresenting) return null;
+      const r = renderer.domElement.getBoundingClientRect();
+      _uiNDC.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+      _uiRay.setFromCamera(_uiNDC, camera);
+      _uiCamP.copy(_uiRay.ray.origin); _uiD.copy(_uiRay.ray.direction);
+      return uiHit(_uiCamP, _uiD);
+    }
+    renderer.domElement.addEventListener('pointermove', (e) => {
+      const h = deskUiHit(e);
+      uiDeskHover = h && h.id ? h : null;
+      if (!titleActive && !renderer.xr.isPresenting) renderer.domElement.style.cursor = uiDeskHover ? 'pointer' : '';
+    });
+    renderer.domElement.addEventListener('pointerdown', (e) => { uiDown = { x: e.clientX, y: e.clientY }; });
+    renderer.domElement.addEventListener('pointerup', (e) => {
+      if (!uiDown) return;
+      const moved = Math.hypot(e.clientX - uiDown.x, e.clientY - uiDown.y);
+      uiDown = null;
+      if (moved > 6) return;                                              // that was an orbit drag, not a click
+      const h = deskUiHit(e);
+      if (h && h.id) h.p.onClick(h.id);
+    });
+
+    // =====================================================================
+    //  THE MONSTER (player model in MONSTER mode)
+    //  A legless gorilla-style torso in a tattered dark coat, low-poly ape head in a pale yellow hockey mask, a silver
+    //  chain round the neck, silver wrist shackles with broken chains, dark clawed hands with bloodied fingertips, and a
+    //  straight silver machete in the right hand. Head and mask follow your headset (hidden from your own eyes in VR),
+    //  the torso follows your head's turn, and the arms reach to your controllers (two-bone IK).
+    // =====================================================================
+    const monsterModel = new THREE.Group();     // origin = your eyes; faces +z (so it's turned round to face where you look)
+    monsterModel.visible = false;
+    scene.add(monsterModel);
+    const MON_SCALE = 0.75;                     // model units -> metres (hem ends near the floor at gorilla height)
+    // materials and textures
+    const mCoatMat = new THREE.MeshStandardMaterial({ color: 0x2e2622, map: grimeTex, roughness: 0.95, flatShading: true });
+    const mCoatDark = new THREE.MeshStandardMaterial({ color: 0x1b1614, roughness: 1, flatShading: true, side: THREE.DoubleSide });
+    const mSleeveMat = new THREE.MeshStandardMaterial({ color: 0x3a2a1e, map: grimeTex, roughness: 0.95, flatShading: true });   // dark brown sleeves
+    const mHemMat = new THREE.MeshStandardMaterial({ color: 0x5a5c60, roughness: 0.9, flatShading: true });
+    const mSkinMat = new THREE.MeshStandardMaterial({ color: 0x6e6258, map: grimeTex, roughness: 0.9, flatShading: true });     // greyish-brown
+    const mHandMat = new THREE.MeshStandardMaterial({ color: 0x4a423c, map: grimeTex, roughness: 0.85, flatShading: true });    // darker claws
+    const mChainMat = new THREE.MeshStandardMaterial({ color: 0xe4e6ea, roughness: 0.28, metalness: 0.85 });
+    const mBloodMat = new THREE.MeshStandardMaterial({ color: 0xd8180f, roughness: 0.35, emissive: 0x300000 });
+    const mEarMat = new THREE.MeshStandardMaterial({ color: 0x5e5650, roughness: 0.8, flatShading: true });
+    const maskTex = (() => {
+      const c = document.createElement('canvas'); c.width = 512; c.height = 512;
+      const g = c.getContext('2d');
+      g.fillStyle = '#efe4a6'; g.fillRect(0, 0, 512, 512);                     // pale yellow
+      const nrng = mulberry32(666);
+      for (let k = 0; k < 900; k++) { g.fillStyle = `rgba(120,100,50,${(nrng() * 0.1).toFixed(3)})`; g.fillRect(nrng() * 512, nrng() * 512, 3, 3); }
+      g.fillStyle = '#0b0a0a';                                                // large black oval eye holes
+      for (const x of [178, 334]) { g.beginPath(); g.ellipse(x, 205, 54, 42, 0, 0, Math.PI * 2); g.fill(); }
+      g.fillStyle = '#b3160f';                                                // red triangular cheek markings
+      for (const [x, s] of [[150, 1], [362, -1]]) {
+        for (const dy of [0, 24]) { g.beginPath(); g.moveTo(x - s * 40, 264 + dy); g.lineTo(x + s * 45, 250 + dy); g.lineTo(x + s * 45, 268 + dy); g.closePath(); g.fill(); }
+      }
+      g.fillStyle = '#141212';                                                // vertical mouth slits
+      for (const x of [226, 256, 286]) g.fillRect(x - 6, 330, 12, 120);
+      for (const [x, y] of [[214, 92], [256, 80], [298, 92], [235, 128], [277, 128]]) { g.beginPath(); g.arc(x, y, 8, 0, Math.PI * 2); g.fill(); }   // forehead dots
+      // the diagonal scratch over its left eye (the model's left is your right, looking at it: the right of the canvas)
+      g.strokeStyle = '#3a2a20'; g.lineWidth = 7; g.lineCap = 'round';
+      g.beginPath(); g.moveTo(300, 120); g.lineTo(390, 300); g.stroke();
+      g.strokeStyle = 'rgba(255,255,255,0.35)'; g.lineWidth = 2;
+      g.beginPath(); g.moveTo(305, 118); g.lineTo(394, 296); g.stroke();
+      const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+    })();
+    const steelTex = (() => {                                                 // straight silver blade: brushed, brighter edge
+      const c = document.createElement('canvas'); c.width = 512; c.height = 128;
+      const g = c.getContext('2d');
+      const grd = g.createLinearGradient(0, 0, 0, 128);
+      grd.addColorStop(0, '#9a9da2'); grd.addColorStop(0.7, '#c4c7cc'); grd.addColorStop(1, '#f0f2f4');
+      g.fillStyle = grd; g.fillRect(0, 0, 512, 128);
+      const srng = mulberry32(42);
+      for (let k = 0; k < 500; k++) { g.fillStyle = `rgba(255,255,255,${(srng() * 0.12).toFixed(3)})`; g.fillRect(srng() * 512, srng() * 128, 20 + srng() * 80, 1); }
+      for (let k = 0; k < 8; k++) { g.fillStyle = 'rgba(120,12,8,0.55)'; g.fillRect(380 + srng() * 120, 80 + srng() * 40, 3 + srng() * 10, 3 + srng() * 6); }   // a little blood near the tip
+      const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+    })();
+    const mBladeMat = new THREE.MeshStandardMaterial({ map: steelTex, roughness: 0.3, metalness: 0.9, side: THREE.DoubleSide });
+
+    // torso: tapered, low-poly, legless, with a grey bottom cap, jagged tears (chest and back) showing skin
+    const mTorso = new THREE.Group();
+    mTorso.position.set(0, -0.47, -0.07);       // hangs below your eyes, set back a little so you can look down at it
+    monsterModel.add(mTorso);
+    const T_SX = 1.25, T_SZ = 0.78;
+    const torsoR = (y) => y < 0.3 ? 0.13 + 0.07 * (y / 0.3) : 0.2 - 0.05 * Math.min(1, (y - 0.3) / 0.08);
+    {
+      const tb = makeBatch();
+      const prof = [new THREE.Vector2(0, -0.02), new THREE.Vector2(0.13, -0.02)];
+      for (let k = 0; k <= 10; k++) { const y = (k / 10) * 0.38; prof.push(new THREE.Vector2(torsoR(y), y)); }
+      prof.push(new THREE.Vector2(0.07, 0.4), new THREE.Vector2(0, 0.4));
+      const torso = new THREE.LatheGeometry(prof, 12);
+      torso.scale(T_SX, 1, T_SZ);
+      tb.addMatrix(torso, mCoatMat, IDENTITY);
+      tb.add(new THREE.CylinderGeometry(0.14, 0.135, 0.05, 12), mHemMat, 0, -0.01, 0, 0, 0, 0, T_SX, 1, T_SZ);    // grey bottom cap
+      const onTorso = (a, y, lift) => { const r = torsoR(y) + lift; return new THREE.Vector3(Math.sin(a) * r * T_SX, y, Math.cos(a) * r * T_SZ); };
+      // jagged tears: a skin patch with a ragged outline, a dark torn flap peeling off one edge
+      const tears = [[0.35, 0.22, 0.055], [-0.45, 0.12, 0.05], [0.05, 0.3, 0.035], [2.7, 0.26, 0.055], [3.4, 0.1, 0.06], [-2.9, 0.2, 0.045]];
+      for (const [a, y, s] of tears) {
+        const c0 = onTorso(a, y, 0.004), n = new THREE.Vector3(Math.sin(a) / T_SX, 0, Math.cos(a) / T_SZ).normalize();
+        const t1 = new THREE.Vector3(Math.cos(a), 0, -Math.sin(a)).normalize(), up = new THREE.Vector3(0, 1, 0);
+        const outline = [[0, 1.1], [0.35, 0.55], [0.95, 0.3], [0.5, -0.1], [0.75, -0.8], [0.1, -0.5], [-0.5, -1.0], [-0.45, -0.2], [-0.95, 0.25], [-0.3, 0.45]];
+        const pts = outline.map(([u, v]) => c0.clone().addScaledVector(t1, u * s).addScaledVector(up, v * s * 1.2));
+        const tri = [];
+        for (let k = 0; k < pts.length; k++) tri.push(c0, pts[k], pts[(k + 1) % pts.length]);
+        const g = new THREE.BufferGeometry().setFromPoints(tri); g.computeVertexNormals();
+        tb.addMatrix(g, mSkinMat, IDENTITY);
+        const f0 = pts[2].clone(), f1 = pts[4].clone(), tip = c0.clone().addScaledVector(t1, s * 1.35).addScaledVector(n, 0.03).addScaledVector(up, -s * 0.3);
+        tb.addMatrix(new THREE.BufferGeometry().setFromPoints([f0, f1, tip]), mCoatDark, IDENTITY);
+      }
+      for (let k = 0; k < 12; k++) {                                          // ragged points round the shoulders and hem
+        const a = (k / 12) * Math.PI * 2, y = k % 2 ? 0.34 : 0.02, c0 = onTorso(a, y, 0.003);
+        const tip = c0.clone().add(new THREE.Vector3(Math.sin(a) * 0.04, k % 2 ? 0.02 : -0.06, Math.cos(a) * 0.04));
+        const side = new THREE.Vector3(Math.cos(a), 0, -Math.sin(a)).multiplyScalar(0.03);
+        tb.addMatrix(new THREE.BufferGeometry().setFromPoints([c0.clone().sub(side), c0.clone().add(side), tip]), mCoatDark, IDENTITY);
+      }
+      // thick silver neck chain draped round the collar, with a short chain dangling at the front
+      const link = new THREE.TorusGeometry(0.024, 0.0075, 6, 12);
+      link.scale(1, 1.6, 1);
+      const N = 18, chainPts = [];
+      for (let k = 0; k < N; k++) {
+        const a = (k / N) * Math.PI * 2, front = Math.max(0, Math.cos(a));
+        chainPts.push(new THREE.Vector3(Math.sin(a) * 0.15, 0.4 - 0.05 * front * front, Math.cos(a) * 0.12 + 0.01));
+      }
+      chainPts.forEach((p, k) => {
+        const dir = chainPts[(k + 1) % N].clone().sub(p).normalize();
+        const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+        if (k % 2) q.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2));
+        tb.addMatrix(link, mChainMat, new THREE.Matrix4().compose(p, q, new THREE.Vector3(1, 1, 1)));
+      });
+      for (let k = 0; k < 4; k++) tb.add(link, mChainMat, 0, 0.32 - k * 0.058, 0.155 + k * 0.004, 0, k % 2 ? Math.PI / 2 : 0, 0, 1.1, 1.1, 1.1);   // dangling chain
+      tb.build(mTorso, { castShadow: true, receiveShadow: false });
+    }
+    // head: low-poly greyish-brown, small ears, the pale yellow hockey mask
+    const mHead = new THREE.Group();
+    mHead.position.set(0, 0.47, 0.07);          // at your eyes (cancels the torso offset)
+    mTorso.add(mHead);
+    {
+      const hb2 = makeBatch();
+      hb2.add(new THREE.IcosahedronGeometry(0.11, 1), mSkinMat, 0, 0.01, -0.01, 0, 0, 0, 1, 1.15, 1.02);
+      for (const s of [-1, 1]) {
+        hb2.add(new THREE.CylinderGeometry(0.024, 0.028, 0.02, 7), mEarMat, s * 0.11, 0.0, -0.01, 0, 0, Math.PI / 2);    // small ears
+        hb2.add(new THREE.CylinderGeometry(0.013, 0.015, 0.022, 7), mSkinMat, s * 0.112, 0.0, -0.01, 0, 0, Math.PI / 2);
+      }
+      hb2.add(new THREE.CylinderGeometry(0.05, 0.06, 0.09, 8), mSkinMat, 0, -0.11, -0.01);                         // neck
+      hb2.build(mHead, { castShadow: true, receiveShadow: false });
+      const mask = new THREE.Mesh(new THREE.SphereGeometry(0.122, 20, 16, Math.PI / 2 - 0.95, 1.9, 0.45, 1.75),
+        new THREE.MeshStandardMaterial({ map: maskTex, roughness: 0.45, metalness: 0.05 }));
+      mask.scale.set(1, 1.15, 1.02);
+      mask.position.set(0, 0.01, -0.004);
+      mask.castShadow = true;
+      mHead.add(mask);
+    }
+    // arms: long dark-brown sleeves with frayed cuffs, silver shackles with short chains, clawed hands
+    const ARM_A = 0.36, ARM_B = 0.36, ARM_STRETCH = 1.6;
+    const unitSleeve = (r0, r1, len) => { const g = new THREE.CylinderGeometry(r1, r0, len, 9, 2); g.translate(0, len / 2, 0); return g; };
+    const mArms = [-1, 1].map((side) => {
+      const upper = new THREE.Mesh(unitSleeve(0.058, 0.05, ARM_A), mSleeveMat);
+      const fore = new THREE.Group();
+      const foreSleeve = new THREE.Mesh(unitSleeve(0.05, 0.047, ARM_B), mSleeveMat);
+      const wrist = new THREE.Group();                                         // cuff, shackle and chain: kept at the sleeve's end
+      fore.add(foreSleeve, wrist);
+      const cb3 = makeBatch();
+      for (let k = 0; k < 8; k++) {                                            // frayed cuff
+        const a = (k / 8) * Math.PI * 2, len = k % 2 ? 0.035 : 0.06;
+        cb3.addMatrix(new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(Math.cos(a) * 0.05, ARM_B - 0.05, Math.sin(a) * 0.05), new THREE.Vector3(Math.cos(a + 0.5) * 0.05, ARM_B - 0.05, Math.sin(a + 0.5) * 0.05),
+          new THREE.Vector3(Math.cos(a + 0.25) * 0.062, ARM_B - 0.05 + len, Math.sin(a + 0.25) * 0.062)]), mCoatDark, IDENTITY);
+      }
+      cb3.add(new THREE.CylinderGeometry(0.052, 0.052, 0.03, 12, 1, true), mCoatDark, 0, ARM_B - 0.05, 0);
+      cb3.add(new THREE.CylinderGeometry(0.046, 0.046, 0.042, 14), mChainMat, 0, ARM_B + 0.005, 0);        // silver wrist cuff
+      cb3.add(new THREE.TorusGeometry(0.047, 0.006, 6, 16), mChainMat, 0, ARM_B - 0.016, 0, Math.PI / 2, 0, 0);
+      cb3.add(new THREE.TorusGeometry(0.047, 0.006, 6, 16), mChainMat, 0, ARM_B + 0.026, 0, Math.PI / 2, 0, 0);
+      cb3.build(wrist);
+      upper.castShadow = foreSleeve.castShadow = true;
+      const dangle = new THREE.Group();                                        // short chain, kept hanging straight down
+      dangle.position.set(0.045 * side, ARM_B + 0.005, 0);
+      wrist.add(dangle);
+      const db = makeBatch();
+      const link = new THREE.TorusGeometry(0.018, 0.0055, 6, 12); link.scale(1, 1.6, 1);
+      for (let k = 0; k < 4; k++) db.add(link, mChainMat, 0, -0.03 - k * 0.045, 0, 0, k % 2 ? Math.PI / 2 : 0, 0);
+      db.build(dangle);
+      // clawed hand (fingers along +y, curling towards +z): dark greyish-brown with bloodied red fingertips and knuckles
+      const hand = new THREE.Group();
+      const hb3 = makeBatch();
+      hb3.add(UNIT_BOX, mHandMat, 0, 0.045, 0, 0, 0, 0, 0.085, 0.09, 0.038);
+      for (let k = 0; k < 4; k++) {
+        const fx = (k - 1.5) * 0.021;
+        hb3.add(new THREE.SphereGeometry(0.012, 6, 4), mBloodMat, fx, 0.09, 0.012);                            // bloodied knuckles
+        hb3.add(new THREE.CylinderGeometry(0.0095, 0.011, 0.055, 6), mHandMat, fx, 0.115, 0.02, 0.5, 0, 0);
+        hb3.add(new THREE.CylinderGeometry(0.008, 0.0095, 0.045, 6), mHandMat, fx, 0.14, 0.055, 1.25, 0, 0);
+        hb3.add(new THREE.ConeGeometry(0.009, 0.034, 6), mBloodMat, fx, 0.135, 0.085, 2.1, 0, 0);               // red claw tip
+      }
+      hb3.add(new THREE.CylinderGeometry(0.011, 0.013, 0.055, 6), mHandMat, -side * 0.05, 0.055, 0.028, 0.6, 0, side * 0.7);   // thumb
+      hb3.add(new THREE.ConeGeometry(0.009, 0.03, 6), mBloodMat, -side * 0.068, 0.08, 0.05, 1.2, 0, side * 0.6);
+      hb3.build(hand);
+      monsterModel.add(upper, fore, hand);
+      return { side, upper, fore, foreSleeve, wrist, hand, dangle };
+    });
+    // the straight silver machete with a dark grip and a crossguard (along the hand's +y = pointing forward)
+    const mMachete = new THREE.Group();
+    {
+      const mb2 = makeBatch();
+      const gripMat = new THREE.MeshStandardMaterial({ color: 0x181410, roughness: 0.9 });
+      const guardMat = new THREE.MeshStandardMaterial({ color: 0xb8bcc2, roughness: 0.35, metalness: 0.9 });
+      mb2.add(new THREE.CylinderGeometry(0.016, 0.018, 0.13, 8), gripMat, 0, 0, 0);
+      for (let k = 0; k < 5; k++) mb2.add(new THREE.TorusGeometry(0.0175, 0.0035, 4, 10), gripMat, 0, -0.045 + k * 0.022, 0, Math.PI / 2, 0, 0.3);
+      mb2.add(new THREE.CylinderGeometry(0.02, 0.02, 0.012, 8), guardMat, 0, -0.07, 0);                                  // pommel
+      mb2.add(UNIT_BOX, guardMat, 0, 0.071, 0, 0, 0, 0, 0.1, 0.014, 0.03);                                              // crossguard
+      const bs = new THREE.Shape();                                                                                       // straight blade
+      bs.moveTo(-0.022, 0); bs.lineTo(0.024, 0); bs.lineTo(0.026, 0.46); bs.lineTo(0.004, 0.52); bs.lineTo(-0.024, 0.47); bs.lineTo(-0.022, 0);
+      const blade = new THREE.ExtrudeGeometry(bs, { depth: 0.004, bevelEnabled: true, bevelThickness: 0.0015, bevelSize: 0.002, bevelSegments: 1 });
+      blade.translate(0, 0.078, -0.002);
+      const p = blade.attributes.position, uv = blade.attributes.uv;
+      for (let i = 0; i < p.count; i++) uv.setXY(i, (p.getY(i) - 0.078) / 0.52, (p.getX(i) + 0.026) / 0.052);
+      mb2.addMatrix(blade, mBladeMat, IDENTITY);
+      mb2.build(mMachete);
+      mMachete.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+      // in the palm: grip across the curled fingers, blade forward past the knuckles; edge facing down
+      mMachete.position.set(0, 0.06, 0.035);
+      mMachete.rotation.set(0, Math.PI / 2, 0);
+    }
+    mArms[0].hand.add(mMachete);                // model faces +z, so its right hand is on -x: mArms[0]
+
+    // two-bone arm IK (shoulder -> elbow -> wrist), elbows bowed out and back; arms stretch a little if needed
+    const _ikT = new THREE.Vector3(), _ikD = new THREE.Vector3(), _ikP = new THREE.Vector3(), _ikE = new THREE.Vector3();
+    const _ikY = new THREE.Vector3(0, 1, 0), _ikV = new THREE.Vector3(), _ikQi = new THREE.Quaternion();
+    function solveArm(arm, shoulder, target) {
+      _ikD.subVectors(target, shoulder);
+      let d = Math.max(_ikD.length(), 0.05);
+      const reach = ARM_A + ARM_B - 0.002;
+      const k = THREE.MathUtils.clamp(d / reach, 1, ARM_STRETCH);
+      const A = ARM_A * k, B = ARM_B * k;
+      if (d > (A + B) - 0.002) { _ikD.multiplyScalar((A + B - 0.002) / d); d = A + B - 0.002; }
+      _ikT.copy(shoulder).add(_ikD);
+      _ikD.normalize();
+      const x = (A * A - B * B + d * d) / (2 * d), h = Math.sqrt(Math.max(0, A * A - x * x));
+      _ikP.set(arm.side, 0.15, -0.7).normalize();
+      _ikP.addScaledVector(_ikD, -_ikP.dot(_ikD)).normalize();
+      _ikE.copy(shoulder).addScaledVector(_ikD, x).addScaledVector(_ikP, h);
+      arm.upper.position.copy(shoulder);
+      arm.upper.quaternion.setFromUnitVectors(_ikY, _ikV.subVectors(_ikE, shoulder).normalize());
+      arm.upper.scale.set(1, k, 1);
+      arm.fore.position.copy(_ikE);
+      arm.fore.quaternion.setFromUnitVectors(_ikY, _ikV.subVectors(_ikT, _ikE).normalize());
+      arm.foreSleeve.scale.set(1, k, 1);
+      arm.wrist.position.y = ARM_B * (k - 1);
+      arm.fore.updateMatrixWorld(true);
+      arm.dangle.parent.getWorldQuaternion(_ikQi).invert();
+      arm.dangle.quaternion.copy(_ikQi);
+    }
+    // grip space (-Z forward, +Y up) -> hand space (+Y fingers forward, +Z palm side down)
+    const HAND_FROM_GRIP = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(
+      new THREE.Vector3(-1, 0, 0), new THREE.Vector3(0, 0, -1), new THREE.Vector3(0, -1, 0)));
+    const HAND_REST = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);   // knuckles down, fingers forward
+    const _mnRootQi = new THREE.Quaternion(), _mnQ = new THREE.Quaternion(), _mnFlip = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
+    const _mnS = new THREE.Vector3(), _mnW = new THREE.Vector3(), _mnF = new THREE.Vector3(), _mnCam = new THREE.Vector3(), _mnDir = new THREE.Vector3();
+    let monsterYaw = 0, monsterT = 0;
+    function updateMonsterModel(dt) {
+      const on = playerRole === 'monster' && !titleActive;
+      monsterModel.visible = on;
+      for (const h of hands) h.model.group.visible = !on;          // the survivor's hands come back in SURVIVOR mode
+      if (!on) return;
+      avatar.visible = false;                                         // the survivor body is swapped out
+      monsterT += dt;
+      const vr = renderer.xr.isPresenting;
+      let headYaw;
+      if (vr && locomotionReady) {
+        headWorld(monsterModel.position);
+        camera.getWorldDirection(_mnDir);
+        headYaw = Math.atan2(-_mnDir.x, -_mnDir.z);
+        let d = headYaw - monsterYaw; d = Math.atan2(Math.sin(d), Math.cos(d));
+        if (Math.abs(d) > 0.05) monsterYaw += d * Math.min(1, dt * 6);   // the body turns after your head
+        monsterModel.scale.setScalar(MON_SCALE);
+      } else {
+        // desktop: it stands at the place's spawn (to one side in the waiting room), facing the camera, breathing
+        const s = spawnOfCurrent();
+        const off = currentMap === 'waiting' ? -1.5 : 0;
+        monsterModel.position.set(s.x + off, SPAWN_HEAD_HEIGHT + 0.07 + Math.sin(monsterT * 1.6) * 0.006, s.z - (currentMap === 'waiting' ? 1.2 : 0));
+        camera.getWorldPosition(_mnCam);
+        monsterYaw = Math.atan2(_mnCam.x - monsterModel.position.x, _mnCam.z - monsterModel.position.z) + Math.PI;   // the model is turned round below
+        monsterModel.scale.setScalar(MON_SCALE);
+      }
+      monsterModel.rotation.set(0, monsterYaw + Math.PI, 0);            // model +z = where you're facing
+      monsterModel.updateMatrixWorld(true);
+      _mnRootQi.copy(monsterModel.quaternion).invert();
+      mHead.visible = !vr;                                               // never in front of your own eyes in the headset
+      if (vr) mHead.quaternion.copy(_mnRootQi).multiply(camera.getWorldQuaternion(_mnQ)).multiply(_mnFlip);
+      else mHead.quaternion.identity();
+      // arms
+      for (let i = 0; i < 2; i++) {
+        const src = controllers[i]?.userData.inputSource;
+        const h = hands[i];
+        const arm = src?.handedness === 'left' ? mArms[1] : src?.handedness === 'right' ? mArms[0] : mArms[i];
+        _mnS.set(arm.side * 0.23, -0.14, -0.1);                       // shoulder, in model space
+        if (vr && h.tracked && h.follower.visible) {
+          _mnF.set(0, 0, -1).applyQuaternion(h.follower.quaternion);  // controller forward
+          _mnW.copy(h.follower.position).addScaledVector(_mnF, -0.045);  // wrist just behind the palm
+          monsterModel.worldToLocal(_mnW);
+          arm.hand.position.copy(_mnW);
+          arm.hand.quaternion.copy(_mnRootQi).multiply(h.follower.quaternion).multiply(HAND_FROM_GRIP);
+        } else {
+          // resting: knuckles down in front of the body, gorilla style
+          arm.hand.position.set(arm.side * 0.3, -0.5 + Math.sin(monsterT * 1.6 + arm.side) * 0.008, 0.16);
+          arm.hand.quaternion.copy(HAND_REST);
+        }
+        solveArm(arm, _mnS, arm.hand.position);
+      }
+    }
+
+
     // ---------- XR session hooks ----------
     renderer.xr.addEventListener('sessionstart', () => {
       if (!titleActive) horrorAudio.start(); // backup in case the click handler didn't get to run (on the title screen PLAY starts it)
@@ -7106,15 +8367,18 @@
         }
         updateHands(dt); // articulated hands: fist on Grip / Trigger; lobby wireframe; head lamp locked in the lobby
         updateAvatar(dt); // legless survivor body (torso, shoulders; head and eyes hidden from your own view in VR)
+        updateMonsterModel(dt); // MONSTER role: the chained, masked ape body follows your head and hands instead
         updateLake(dt); // lake & boat: water, swimming, repair parts, steering wheel
         updateSurvival(dt); // health: burns, drowning, death and respawn
         updateTitle(dt); // title screen: logo drips, PLAY button, fades into the camp
+        updateTravel(dt); // waiting room (flickering bulb) and fades between the waiting room and the maps
 
         pollAButton();
         updateGenerator(dt);
         horrorAudio.setGeneratorDistance(nearestRunningGeneratorDistance(_camWorld)); // engine sound from the nearest running generator
         updateCampExtras(dt); // cabin and boat lanterns flicker
         controllers.forEach(updatePointer);
+        updateUI(); // map screen + settings menu: controller rays / trigger, menu button (B / Y)
       } catch (err) {
         if (!loopErrorReported) {
           loopErrorReported = true;
