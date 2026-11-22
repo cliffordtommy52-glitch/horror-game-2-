@@ -11,6 +11,13 @@
       background: rgba(0,0,0,.5); padding: 8px 12px; border-radius: 6px; pointer-events: none;
     }
     #info b { color: #dfe; }
+    #diag {
+      position: absolute; bottom: 70px; left: 50%; transform: translateX(-50%); max-width: 90vw;
+      color: #cdd; font: 12px/1.5 ui-monospace, monospace; background: rgba(20,0,0,.75);
+      padding: 8px 12px; border-radius: 6px; display: none;
+    }
+    #diag .bad { color: #ff8a8a; }
+    #diag a { color: #8cf; }
   </style>
   <script type="importmap">
     {
@@ -28,6 +35,50 @@
     <b>A</b> (right controller) toggles the flashlight; grip moves it to that hand.<br />
     Desktop: drag to orbit, <b>F</b> toggles the flashlight (no locomotion).
   </div>
+  <div id="diag"></div>
+
+  <!-- WebXR diagnostics: a plain script, so it still runs if Three.js fails to load.
+       The panel only appears when something is wrong. -->
+  <script>
+    (function () {
+      const box = document.getElementById('diag');
+      function report(html, bad) {
+        if (!bad) return;
+        box.style.display = 'block';
+        box.insertAdjacentHTML('beforeend', '<div class="bad">✗ ' + html + '</div>');
+      }
+      window.__xrDiag = report;
+
+      if (!window.isSecureContext) report('Page is not a secure context. WebXR needs https:// (or localhost).', true);
+      let inFrame;
+      try { inFrame = window.self !== window.top; } catch (e) { inFrame = true; }
+      if (inFrame) {
+        report('Page is running inside an iframe (embed / preview / game host). The parent page must use ' +
+               '&lt;iframe allow="xr-spatial-tracking"&gt;, or <a href="' + location.href + '" target="_blank">open this page in its own tab</a>.', true);
+      }
+      const policy = document.permissionsPolicy || document.featurePolicy;
+      if (policy && policy.allowsFeature && !policy.allowsFeature('xr-spatial-tracking')) {
+        report('The page\'s Permissions-Policy blocks "xr-spatial-tracking" (check your server or host headers).', true);
+      }
+      if (!('xr' in navigator)) {
+        report('navigator.xr is missing: this browser or webview has no WebXR. Open the URL in the headset\'s main browser ' +
+               '(e.g. Meta Quest Browser), not an in-app viewer.', true);
+      } else {
+        navigator.xr.isSessionSupported('immersive-vr')
+          .then((ok) => report('This browser reports immersive-vr as unsupported.', !ok))
+          .catch((e) => report('isSessionSupported failed: ' + e.message, true));
+      }
+      window.addEventListener('error', (e) => {
+        report('Script error: ' + e.message + (e.filename ? ' (' + e.filename.split('/').pop() + ':' + e.lineno + ')' : ''), true);
+      });
+      window.addEventListener('unhandledrejection', (e) => {
+        report('Unhandled error: ' + ((e.reason && e.reason.message) || e.reason), true);
+      });
+      setTimeout(() => {
+        if (!window.__appStarted) report('Three.js didn\'t load from cdn.jsdelivr.net (network, firewall or content blocker).', true);
+      }, 10000);
+    })();
+  </script>
 
   <script type="module">
     /*
@@ -59,6 +110,7 @@
     import { VRButton } from 'three/addons/webxr/VRButton.js';
     import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    window.__appStarted = true; // imports succeeded
 
     // ---------- Locomotion settings (names match Player.cs) ----------
     // Defaults written in Player.cs:
@@ -827,17 +879,27 @@
     });
 
     const clock = new THREE.Clock();
+    let loopErrorReported = false;
     renderer.setAnimationLoop((time, frame) => {
       const dt = Math.min(clock.getDelta(), 1 / 30); // clamp so a hitch can't fling you through walls
-      targets.children.forEach((m, i) => { m.rotation.y += dt * (0.2 + (i % 5) * 0.05); });
+      // An uncaught error here would stop the XR frame loop (frozen headset), so catch and report it once.
+      try {
+        targets.children.forEach((m, i) => { m.rotation.y += dt * (0.2 + (i % 5) * 0.05); });
 
-      if (renderer.xr.isPresenting && dt > 0) {
-        updateLocomotion(dt, frame);
-        playerRig.updateMatrixWorld(true); // so the rays use this frame's rig position
+        if (renderer.xr.isPresenting && dt > 0) {
+          updateLocomotion(dt, frame);
+          playerRig.updateMatrixWorld(true); // so the rays use this frame's rig position
+        }
+
+        pollAButton();
+        controllers.forEach(updatePointer);
+      } catch (err) {
+        if (!loopErrorReported) {
+          loopErrorReported = true;
+          console.error(err);
+          window.__xrDiag?.('Frame loop error: ' + err.message, true);
+        }
       }
-
-      pollAButton();
-      controllers.forEach(updatePointer);
       renderer.render(scene, camera);
     });
   </script>
