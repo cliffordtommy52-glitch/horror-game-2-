@@ -6218,6 +6218,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'UPDATE', date: '22/11/26', title: 'PROBOSCIS MONKEY SURVIVOR, WOODEN COAL CARTS, HANDS-ON TILLER',
+        text: 'Three-fingered grip hands, no kill cutscene, smooth mine stairs, hinged breaker doors, smarter mine AI.' },
       { tag: 'UPDATE', date: '22/11/26', title: 'OBJECTIVES & LIVE MAP IN THE MENU, FASTER GRAVEYARD & MINE',
         text: 'Lock-down breakers, detailed mine carts, an easier mine (2 breakers, 2 fuel, wide tunnels).' },
       { tag: 'UPDATE', date: '22/11/26', title: 'A FRESH MATCH EVERY TIME',
@@ -7385,6 +7387,13 @@
     const BOLT_G = new THREE.CylinderGeometry(0.012, 0.012, 0.012, 6), THRU_BOLT_G = new THREE.CylinderGeometry(0.014, 0.014, 0.2, 6), RIVET_G = new THREE.SphereGeometry(0.008, 5, 4);
     const HS_TOP = new THREE.CylinderGeometry(0.21, 0.21, 0.1, 12, 1, false, 0, Math.PI), HS_TOP2 = new THREE.CylinderGeometry(0.2, 0.2, 0.09, 12, 1, false, 0, Math.PI);
     const MOUND_G = new THREE.SphereGeometry(1, 8, 5, 0, Math.PI * 2, 0, Math.PI / 2), LAMP_POST_G = new THREE.CylinderGeometry(0.03, 0.04, 1.6, 6);
+    // mine stairs: smooth collision ramps (stacked thin slices) and the floor height the monster walks on
+    const aiRampCols = new Map();                 // ramp collider -> footprint where the monster ignores it (it walks up it instead)
+    const MINE_RAMPS = [];                        // { x0, x1, z0, z1, h(x, z) }: walkable floors above the cave floor
+    function mineFloorAt(x, z) {
+      for (const R of MINE_RAMPS) if (x >= R.x0 && x <= R.x1 && z >= R.z0 && z <= R.z1) return R.h(x, z);
+      return 0;
+    }
     const WAIT_ROOM = { x: 0, z: -95, w: 8, d: 7, h: 2.6 };
     const GRAVE = { x: 110, z: 0, size: 56 };
     const MINE = { x: -110, z: 0 };
@@ -8271,45 +8280,88 @@
       const WR = 0.1, TXH = 0.42 * Math.SQRT1_2 * 1.3, TZH = 0.42 * Math.SQRT1_2 * 0.9, BXH = 0.31 * Math.SQRT1_2 * 1.3, BZH = 0.31 * Math.SQRT1_2 * 0.9;
       // build one into batch b, in that batch's coordinates; onRail lifts it onto the rail heads; wheels: false = leave
       // them out (the pushable cart has its own spinning wheels)
+      // sturdy wooden coal carts: a box of weathered horizontal timber planks (dark gaps between the boards) between
+      // vertical corner posts, rusted iron bands round the middle and the top rim, vertical bolted straps down the
+      // sides and ends, iron corner brackets; mounted square on a heavy iron chassis with buffer blocks front and back,
+      // a hanging coupling chain and hook, and four flanged wheels sitting level on the rail heads; heaped with coal
+      const cartWood = new THREE.MeshStandardMaterial({ color: 0x5a4130, map: woodTex, roughness: 0.95 });
+      const cartWood2 = new THREE.MeshStandardMaterial({ color: 0x46321f, map: woodTex, roughness: 0.95 });
+      const cartGap = new THREE.MeshStandardMaterial({ color: 0x0e0a07, roughness: 1 });
+      const rustIron = new THREE.MeshStandardMaterial({ color: 0x3e2e24, map: grimeTex, roughness: 0.72, metalness: 0.6 });
+      const coalChunk = new THREE.MeshStandardMaterial({ color: 0x141414, roughness: 0.45, metalness: 0.3, flatShading: true });
+      const coalGlint = new THREE.MeshStandardMaterial({ color: 0x1c1c1e, roughness: 0.2, metalness: 0.75, flatShading: true });
+      const LINK_G = new THREE.TorusGeometry(0.016, 0.0045, 4, 8), HOOK_G = new THREE.TorusGeometry(0.024, 0.006, 5, 10, Math.PI * 1.4);
       const buildCart = (b, x, z, ry, onRail, wheels = true) => {
         const ay = (onRail ? 0.092 : 0) + WR, cs = Math.cos(ry), sn = Math.sin(ry);
         const P = (lx, ly, lz) => [x + lx * cs + lz * sn, ly, z - lx * sn + lz * cs];
-        const tb = ay + 0.09, th = 0.38, tc = tb + th / 2;
-        b.add(TUB_G, hullMat, ...P(0, tc, 0), 0, Math.PI / 4 + ry, 0, 1.3, 1, 0.9);                                  // the tub
-        b.add(UNIT_BOX, hullMat, ...P(0, tb + 0.01, 0), 0, ry, 0, BXH * 2, 0.02, BZH * 2);                           // its floor
-        for (const sd of [-1, 1]) {                                                                                     // lip rails round the top
-          b.add(UNIT_BOX, castIron, ...P(sd * TXH, tb + th, 0), 0, ry, 0, 0.035, 0.035, TZH * 2 + 0.03);
-          b.add(UNIT_BOX, castIron, ...P(0, tb + th, sd * TZH), 0, ry, 0, TXH * 2 + 0.03, 0.035, 0.035);
-          // reinforcing bands half-way up each face, with rivets
-          const mx = (TXH + BXH) / 2, mz = (TZH + BZH) / 2, tiltX = Math.atan2(TXH - BXH, th), tiltZ = Math.atan2(TZH - BZH, th);
-          b.add(UNIT_BOX, castIron, ...P(sd * (mx + 0.006), tc, 0), sd * 0 + 0, ry, -sd * tiltX, 0.012, 0.04, mz * 2);
-          b.add(UNIT_BOX, castIron, ...P(0, tc, sd * (mz + 0.006)), sd * tiltZ, ry, 0, mx * 2, 0.04, 0.012);
-          for (let k = 0; k < 5; k++) { b.add(RIVET_G, castIron, ...P((k - 2) * mx * 0.4, tc, sd * (mz + 0.014))); b.add(RIVET_G, castIron, ...P((k - 2) * mx * 0.4, tb + th - 0.03, sd * (TZH + 0.02))); }
-          for (let k = 0; k < 3; k++) b.add(RIVET_G, castIron, ...P(sd * (mx + 0.014), tc, (k - 1) * mz * 0.6));
-        }
-        // undercarriage: two beams, cross-members, axles and the wheels
-        for (const sd of [-1, 1]) b.add(UNIT_BOX, castIron, ...P(0, ay + 0.05, sd * 0.2), 0, ry, 0, 0.82, 0.06, 0.05);
+        const LX = 0.42, LZ = 0.31, tb = ay + 0.1, TH = 0.42, GAP = 0.008, PH = (TH - 3 * GAP) / 4;
+        // chassis: two heavy longitudinal beams, cross-members, bearing blocks, axles
+        for (const sd of [-1, 1]) b.add(UNIT_BOX, castIron, ...P(0, ay + 0.035, sd * 0.2), 0, ry, 0, 0.94, 0.07, 0.05);
         for (const sx of [-1, 1]) {
-          b.add(UNIT_BOX, castIron, ...P(sx * 0.3, ay + 0.05, 0), 0, ry, 0, 0.06, 0.05, 0.46);
+          b.add(UNIT_BOX, castIron, ...P(sx * 0.4, ay + 0.035, 0), 0, ry, 0, 0.06, 0.06, 0.46);
           b.add(new THREE.CylinderGeometry(0.018, 0.018, 0.68, 8), castIron, ...P(sx * 0.26, ay, 0), Math.PI / 2, ry, 0);
+          for (const sz of [-1, 1]) b.add(UNIT_BOX, castIron, ...P(sx * 0.26, ay + 0.01, sz * 0.2), 0, ry, 0, 0.09, 0.08, 0.06);   // bearing block
           if (wheels) for (const sz of [-1, 1]) {
             b.add(WHEEL_G, castIron, ...P(sx * 0.26, ay, sz * 0.3), Math.PI / 2, ry, 0);
             b.add(FLANGE_G, castIron, ...P(sx * 0.26, ay, sz * 0.274), Math.PI / 2, ry, 0);          // the flange runs inside the rail
             b.add(HUB_G, boltMat, ...P(sx * 0.26, ay, sz * 0.32), Math.PI / 2, ry, 0);
+            for (const a of [0, Math.PI / 2]) b.add(UNIT_BOX, castIron, ...P(sx * 0.26, ay, sz * 0.322), a, ry, Math.PI / 2, 0.15, 0.014, 0.02);   // spokes
           }
-          // coupling hooks
-          b.add(UNIT_BOX, castIron, ...P(sx * 0.47, ay + 0.06, 0), 0, ry, 0, 0.12, 0.03, 0.04);
-          b.add(new THREE.TorusGeometry(0.025, 0.008, 5, 10, Math.PI * 1.3), castIron, ...P(sx * 0.54, ay + 0.06, 0), 0, ry + Math.PI / 2, sx > 0 ? 0 : Math.PI);
+          // buffer blocks: oak blocks with an iron face plate
+          for (const sz of [-1, 1]) {
+            b.add(UNIT_BOX, cartWood2, ...P(sx * 0.49, ay + 0.07, sz * 0.17), 0, ry, 0, 0.08, 0.1, 0.1);
+            b.add(UNIT_BOX, rustIron, ...P(sx * 0.535, ay + 0.07, sz * 0.17), 0, ry, 0, 0.012, 0.11, 0.11);
+            b.add(RIVET_G, boltMat, ...P(sx * 0.543, ay + 0.07, sz * 0.17));
+          }
+          // the coupling: a drawbar bracket, a hanging chain of links and a hook
+          b.add(UNIT_BOX, rustIron, ...P(sx * 0.49, ay + 0.04, 0), 0, ry, 0, 0.1, 0.03, 0.05);
+          for (let k = 0; k < 3; k++) b.add(LINK_G, rustIron, ...P(sx * 0.545, ay + 0.02 - k * 0.026, 0), 0, ry + (k % 2 ? Math.PI / 2 : 0), 0);
+          b.add(HOOK_G, rustIron, ...P(sx * 0.545, ay - 0.075, 0), 0, ry + Math.PI / 2, Math.PI * 0.8);
         }
-        // the load: coal with glinting ore
-        for (let k = 0; k < 11; k++) {
-          const s2 = 0.05 + rr3() * 0.04;
-          b.add(ROCK_G, k % 4 === 0 ? oreMat : coalMat, ...P((rr3() - 0.5) * TXH * 1.5, tb + th - 0.04 + rr3() * 0.05, (rr3() - 0.5) * TZH * 1.4), rr3() * 3, rr3() * 3, 0, s2, s2 * 0.8, s2);
+        // the tub: floor, a dark liner (so the gaps between the boards read as gaps), corner posts, plank walls
+        b.add(UNIT_BOX, cartWood2, ...P(0, tb + 0.02, 0), 0, ry, 0, LX * 2 - 0.04, 0.04, LZ * 2 - 0.04);
+        b.add(UNIT_BOX, cartGap, ...P(0, tb + TH / 2, 0), 0, ry, 0, LX * 2 - 0.07, TH - 0.02, LZ * 2 - 0.07);
+        for (const sx of [-1, 1]) for (const sz of [-1, 1]) b.add(UNIT_BOX, cartWood2, ...P(sx * (LX - 0.03), tb + TH / 2 + 0.01, sz * (LZ - 0.03)), 0, ry, 0, 0.06, TH + 0.02, 0.06);
+        for (let r = 0; r < 4; r++) {
+          const y = tb + PH / 2 + r * (PH + GAP), m = (r % 2) ? cartWood : cartWood2;
+          for (const sd of [-1, 1]) {
+            b.add(UNIT_BOX, r % 2 ? cartWood2 : cartWood, ...P(0, y, sd * (LZ - 0.0175)), 0, ry, 0, LX * 2 - 0.1, PH, 0.035);   // long sides
+            b.add(UNIT_BOX, m, ...P(sd * (LX - 0.0175), y, 0), 0, ry, 0, 0.035, PH, LZ * 2 - 0.1);                               // ends
+          }
+        }
+        // rusted iron bands round the middle and the top rim
+        for (const by of [tb + TH * 0.5, tb + TH - 0.022]) for (const sd of [-1, 1]) {
+          b.add(UNIT_BOX, rustIron, ...P(0, by, sd * (LZ + 0.004)), 0, ry, 0, LX * 2 + 0.02, 0.036, 0.008);
+          b.add(UNIT_BOX, rustIron, ...P(sd * (LX + 0.004), by, 0), 0, ry, 0, 0.008, 0.036, LZ * 2 + 0.02);
+        }
+        // vertical bolted straps down the sides and the ends, and L-shaped corner brackets
+        const boltsAt = [tb + 0.06, tb + TH * 0.5, tb + TH - 0.06];
+        for (const sd of [-1, 1]) {
+          for (const sx of [-0.2, 0, 0.2]) {
+            b.add(UNIT_BOX, rustIron, ...P(sx, tb + TH / 2, sd * (LZ + 0.011)), 0, ry, 0, 0.034, TH, 0.006);
+            for (const by of boltsAt) b.add(RIVET_G, boltMat, ...P(sx, by, sd * (LZ + 0.016)));
+          }
+          for (const sz of [-0.12, 0.12]) {
+            b.add(UNIT_BOX, rustIron, ...P(sd * (LX + 0.011), tb + TH / 2, sz), 0, ry, 0, 0.006, TH, 0.034);
+            for (const by of boltsAt) b.add(RIVET_G, boltMat, ...P(sd * (LX + 0.016), by, sz));
+          }
+        }
+        for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+          b.add(UNIT_BOX, rustIron, ...P(sx * (LX - 0.03), tb + TH / 2, sz * (LZ + 0.012)), 0, ry, 0, 0.07, TH + 0.01, 0.006);
+          b.add(UNIT_BOX, rustIron, ...P(sx * (LX + 0.012), tb + TH / 2, sz * (LZ - 0.03)), 0, ry, 0, 0.006, TH + 0.01, 0.07);
+          for (const by of boltsAt) { b.add(RIVET_G, boltMat, ...P(sx * (LX - 0.03), by, sz * (LZ + 0.017))); b.add(RIVET_G, boltMat, ...P(sx * (LX + 0.017), by, sz * (LZ - 0.03))); }
+        }
+        // the load: a jagged, uneven heap of faceted coal, higher in the middle
+        for (let k = 0; k < 30; k++) {
+          const u = (rr3() - 0.5) * 2, v = (rr3() - 0.5) * 2, mound = Math.max(0, 1 - (u * u * 0.8 + v * v * 0.8));
+          const s2 = 0.045 + rr3() * 0.045;
+          b.add(ROCK_G, k % 9 === 0 ? coalGlint : coalChunk, ...P(u * (LX - 0.09), tb + TH - 0.05 + mound * 0.11 + rr3() * 0.025, v * (LZ - 0.08)),
+            rr3() * 3, rr3() * 3, rr3() * 3, s2, s2 * (0.7 + rr3() * 0.5), s2 * (0.8 + rr3() * 0.4));
         }
       };
       const oreCart = (x, z, ry, onRail = false) => {
         buildCart(mb, x, z, ry, onRail);
-        addBoxCollider(x, 0, z, Math.abs(Math.cos(ry)) * 0.9 + Math.abs(Math.sin(ry)) * 0.66, onRail ? 0.72 : 0.62, Math.abs(Math.sin(ry)) * 0.9 + Math.abs(Math.cos(ry)) * 0.66);
+        addBoxCollider(x, 0, z, Math.abs(Math.cos(ry)) * 1.1 + Math.abs(Math.sin(ry)) * 0.7, onRail ? 0.72 : 0.62, Math.abs(Math.sin(ry)) * 1.1 + Math.abs(Math.cos(ry)) * 0.7);
       };
       oreCart(M.x - 16, M.z - 18, 0, true); oreCart(M.x - 19, M.z - 18, 0, true); oreCart(M.x, M.z - 17.2, Math.PI / 2); oreCart(M.x - 6.5, M.z + 14.2, Math.PI / 2);
       {
@@ -8337,20 +8389,59 @@
         // railing colliders (the stairs come up through the gaps)
         addBoxCollider((S.split + S.x1) / 2 - 0.5, S.deck, z0 + 0.05, S.x1 - S.split - 1.0, 0.72, 0.08);
         addBoxCollider((S.x0 + S.split) / 2, S.top, z0 + 0.05, S.split - S.x0, 0.72, 0.08);
-        // stair 1: from the cavern floor up to the deck at its east end
-        const steps = 6, sx = S.x1 - 0.55;
-        for (let k = 0; k < steps; k++) {
-          const h = (k + 1) * S.deck / steps, z = z0 - 0.25 - (steps - 1 - k) * 0.4;
-          mb.add(UNIT_BOX, plankMat, sx, h - 0.04, z, 0, 0, 0, 0.9, 0.08, 0.42);
-          mb.add(UNIT_BOX, timberMat, sx, (h - 0.08) / 2, z, 0, 0, 0, 0.8, h - 0.08, 0.06);
-          addBoxCollider(sx, 0, z, 0.9, h, 0.42);
+        // stair 1: from the cavern floor up to the deck at its east end. Eight even steps (same tread depth and riser
+        // height), plank treads with risers, solid side stringers, newel posts and a handrail; underneath it the
+        // collision is a smooth ramp of thin slices, so hands and the monster never snag on a step edge
+        const ramp = (x0, x1, z0r, z1r, y0, slices, along, hFn, fp) => {
+          for (let i = 0; i < slices; i++) {
+            const f0 = i / slices;
+            let bx0 = x0, bx1 = x1, bz0 = z0r, bz1 = z1r;
+            if (along === '+z') bz0 = z0r + (z1r - z0r) * f0; else bx1 = x1 - (x1 - x0) * f0;          // '+z' rises north, '-x' rises west
+            const mx = along === '+z' ? (x0 + x1) / 2 : bx1 - (x1 - x0) / slices / 2, mz = along === '+z' ? bz0 + (z1r - z0r) / slices / 2 : (z0r + z1r) / 2;
+            const h = hFn(mx, mz) - y0;
+            if (h <= 0.005) continue;
+            addBoxCollider((bx0 + bx1) / 2, y0, (bz0 + bz1) / 2, bx1 - bx0, h, bz1 - bz0);
+            aiRampCols.set(colliders[colliders.length - 1], fp);
+          }
+        };
+        {
+          const D = S.deck, N = 8, TR = 0.25, RUN = N * TR, sx = S.x1 - 0.55, zs = z0 - RUN, W = 0.9;
+          const h1 = (x, z) => Math.min(D, THREE.MathUtils.clamp((z - zs) / RUN, 0, 1) * D + D / (2 * N));
+          for (let k = 1; k <= N; k++) {
+            const top = k * D / N, zf = zs + (k - 1) * TR;
+            mb.add(UNIT_BOX, plankMat, sx, top - 0.025, zf + TR / 2 - 0.01, 0, 0, 0, W - 0.04, 0.05, TR + 0.02);       // tread (with a nosing)
+            mb.add(UNIT_BOX, timberMat, sx, top - D / N / 2 - 0.025, zf + 0.012, 0, 0, 0, W - 0.08, D / N - 0.05, 0.024);   // riser
+          }
+          const L = Math.hypot(RUN, D), tilt = -Math.atan2(D, RUN);
+          for (const sd of [-1, 1]) {
+            mb.add(UNIT_BOX, timberMat, sx + sd * (W / 2 - 0.0), D / 2 - 0.06, zs + RUN / 2, tilt, 0, 0, 0.05, 0.24, L + 0.1);   // stringer
+            mb.add(UNIT_BOX, timberMat, sx + sd * (W / 2 + 0.02), D / 2 + 0.82, zs + RUN / 2, tilt, 0, 0, 0.05, 0.06, L);        // handrail
+            mb.add(UNIT_BOX, timberMat, sx + sd * (W / 2 + 0.02), 0.45, zs + 0.03, 0, 0, 0, 0.08, 0.9, 0.08);                  // newel post
+            for (const f of [0.35, 0.7]) mb.add(UNIT_BOX, timberMat, sx + sd * (W / 2 + 0.02), f * D + 0.44, zs + f * RUN, 0, 0, 0, 0.04, 0.82, 0.04);   // balusters
+            mb.add(UNIT_BOX, timberMat, sx + sd * (W / 2 - 0.03), D * 0.25 - 0.1, zs + RUN * 0.5, 0, 0, 0, 0.1, D * 0.5 - 0.18, 0.1);   // a post under the stringer
+          }
+          ramp(sx - W / 2, sx + W / 2, zs, z0, 0, 32, '+z', h1, { x0: sx - W / 2, x1: sx + W / 2, z0: zs - 0.35, z1: z0 + 0.35 });
+          MINE_RAMPS.push({ x0: sx - W / 2, x1: sx + W / 2, z0: zs, z1: z0, h: h1 });
         }
-        // stair 2: along the deck, from level 1 up to level 2 at the split
-        for (let k = 0; k < 4; k++) {
-          const h = S.deck + (k + 1) * (S.top - S.deck) / 4, x = S.split + 0.25 + (3 - k) * 0.38;
-          mb.add(UNIT_BOX, plankMat, x, h - 0.04, S.z + 0.25, 0, 0, 0, 0.4, 0.08, 1.1);
-          addBoxCollider(x, S.deck, S.z + 0.25, 0.4, h - S.deck, 1.1);
+        // stair 2: along the deck, from level 1 up to level 2 at the split (six even steps, stringers and a handrail)
+        {
+          const D = S.deck, T = S.top, N = 6, TR = 0.25, RUN = N * TR, za = S.z - 0.3, zb = S.z + 0.8, xa = S.split, xb = S.split + RUN, zc = (za + zb) / 2;
+          const h2 = (x) => Math.min(T, D + THREE.MathUtils.clamp((xb - x) / RUN, 0, 1) * (T - D) + (T - D) / (2 * N));
+          for (let k = 1; k <= N; k++) {
+            const top = D + k * (T - D) / N, xf = xb - (k - 1) * TR;
+            mb.add(UNIT_BOX, plankMat, xf - TR / 2 + 0.01, top - 0.025, zc, 0, 0, 0, TR + 0.02, 0.05, zb - za - 0.04);
+            mb.add(UNIT_BOX, timberMat, xf - 0.012, top - (T - D) / N / 2 - 0.025, zc, 0, 0, 0, 0.024, (T - D) / N - 0.05, zb - za - 0.08);
+          }
+          const L = Math.hypot(RUN, T - D), tilt = -Math.atan2(T - D, RUN);
+          for (const zz of [za - 0.02, zb + 0.02]) mb.add(UNIT_BOX, timberMat, xa + RUN / 2, (D + T) / 2 - 0.06, zz, 0, 0, tilt, L + 0.1, 0.22, 0.05);
+          mb.add(UNIT_BOX, timberMat, xa + RUN / 2, (D + T) / 2 + 0.82, za - 0.04, 0, 0, tilt, L, 0.06, 0.05);                 // handrail on the open side
+          for (const f of [0.05, 0.5]) mb.add(UNIT_BOX, timberMat, xb - f * RUN, D + f * (T - D) + 0.44, za - 0.04, 0, 0, 0, 0.04, 0.82, 0.04);
+          ramp(xa, xb, za, zb, D, 24, '-x', (x) => h2(x), { x0: xa - 0.35, x1: xb + 0.35, z0: za, z1: zb });
+          MINE_RAMPS.push({ x0: xa, x1: xb, z0: za, z1: zb, h: (x) => h2(x) });
         }
+        // the two decks themselves are floors too (level 2 first: it's the higher one)
+        MINE_RAMPS.push({ x0: S.x0, x1: S.split, z0: z0, z1: z1, h: () => S.top });
+        MINE_RAMPS.push({ x0: S.split, x1: S.x1, z0: z0, z1: z1, h: () => S.deck });
       }
       // the channel's mouth in the cavern wall (a rough rock arch), and the grey light of the world outside at its far end
       for (let k = 0; k < 11; k++) { const a = (k / 10) * Math.PI; mb.add(ROCK_G, rockMat, M.x - 48.9, MN.lake.level + Math.sin(a) * 1.75, M.z + Math.cos(a) * 1.75, rr3() * 3, rr3() * 3, 0, 0.32, 0.26, 0.32); }
@@ -8389,8 +8480,6 @@
         const P = (a, b, c) => [B.pos.x + rx * a + fx * c, B.pos.y + b, B.pos.z + rz * a + fz * c];   // a: right, b: up, c: out from the wall
         let p = P(0, 0, -0.08); mb.add(UNIT_BOX, steelBox, ...p, 0, B.yaw, 0, 0.52, 0.6, 0.14);                     // cabinet
         for (const [a, b, w, h] of [[0, 0.29, 0.54, 0.03], [0, -0.29, 0.54, 0.03], [-0.255, 0, 0.03, 0.6], [0.255, 0, 0.03, 0.6]]) { p = P(a, b, -0.005); mb.add(UNIT_BOX, panelMat, ...p, 0, B.yaw, 0, w, h, 0.02); }   // frame
-        p = P(-0.42, 0, 0.06); mb.add(UNIT_BOX, steelBox, ...p, 0, B.yaw - 1.25, 0, 0.5, 0.56, 0.015);               // the door, swung open
-        for (const b of [0.2, -0.2]) { p = P(-0.27, b, 0.0); mb.add(new THREE.CylinderGeometry(0.012, 0.012, 0.06, 8), ironMat, ...p); }   // hinges
         p = P(0.14, 0.2, 0.002); mb.add(new THREE.PlaneGeometry(0.16, 0.16), dangerMat, ...p, 0, B.yaw, 0);          // label
         for (let k = 0; k < 6; k++) {                                                                                  // small breakers
           p = P(-0.2 + k * 0.045, -0.2, 0.0); mb.add(UNIT_BOX, switchMat, ...p, 0, B.yaw, 0, 0.032, 0.07, 0.025);
@@ -8405,7 +8494,7 @@
       }
       // breakable crates and a barricade
       for (const [x, z, s, ry] of [[-7, 16, 0.45, 0], [-6.4, 16.2, 0.4, 0.5], [1, 14, 0.45, 0.3], [1.5, -19.2, 0.45, 0], [-1, -19, 0.4, 0.8], [-21, -20, 0.45, 0.2],
-                                   [-9, -20, 0.45, 0.4], [-22.2, 11, 0.45, 0.1], [-13.6, 2.4, 0.45, 0], [MN.ex + 7.6 - M.x, 3.2, 0.45, 0.2], [MN.ex + 7.9 - M.x, 2.6, 0.38, 0]]) {
+                                   [-9, -20, 0.45, 0.4], [-22.2, 11, 0.45, 0.1], [-9.4, 2.55, 0.45, 0], [MN.ex + 7.6 - M.x, 3.2, 0.45, 0.2], [MN.ex + 7.9 - M.x, 2.6, 0.38, 0]]) {
         makeCrate('mine', M.x + x, 0, M.z + z, s, ry);
       }
       makeBarricade('mine', M.x - 1, M.z + 13.4, 1.9, 1.1);
@@ -10123,7 +10212,8 @@
         if (aboard && playerRole !== 'monster') {
           thr = controllers.some((c) => btn(c, 0)) ? 1 : 0;
           camera.getWorldDirection(_ebCam);
-          if (Math.hypot(_ebCam.x, _ebCam.z) > 0.2) {
+          if (b.tillerHand >= 0) steer = b.tillerSteer || 0;                  // your hand on the tiller steers
+          else if (Math.hypot(_ebCam.x, _ebCam.z) > 0.2) {
             let d = Math.atan2(-_ebCam.z, _ebCam.x) - b.yaw; d = Math.atan2(Math.sin(d), Math.cos(d));
             steer = THREE.MathUtils.clamp(d * 1.6, -1, 1);
           }
@@ -11565,7 +11655,7 @@
       if (map === 'camp') return inLakeArea(x, z, pad);
       return extraLakes.some((l) => l.map === map && x > l.x0 - pad && x < l.x1 + pad && z > l.z0 - pad && z < l.z1 + pad);
     }
-    const groundY = (map, x, z) => (map === 'camp' ? floorAt(x, z) : 0);
+    const groundY = (map, x, z) => (map === 'camp' ? floorAt(x, z) : map === 'mine' ? mineFloorAt(x, z) : 0);   // (the mine's stairs and decks)
     function buildNav(map) {
       const D = NAV_DEF[map];
       // the solid things in this map at body height, bucketed in 2 m cells
@@ -11598,6 +11688,7 @@
     function circleFree(nav, x, z, r, y0, planning) {
       for (const c of nav.bucketAt(x, z)) {
         if (planning && (doorCols.has(c) || dynamicCols.has(c))) continue;
+        const rf = aiRampCols.get(c); if (rf && x >= rf.x0 && x <= rf.x1 && z >= rf.z0 && z <= rf.z1) continue;   // on a stair: it walks up the ramp
         const b = c.box;
         if (b.max.y < y0 + 0.12 || b.min.y > y0 + 1.0 || b.max.y < -500) continue;
         const dx = Math.max(b.min.x - x, 0, x - b.max.x), dz = Math.max(b.min.z - z, 0, z - b.max.z);
@@ -11635,6 +11726,8 @@
         const m = a * nav.nz + b;
         if (!nav.free[m]) continue;
         if (di && dj && (!nav.free[a * nav.nz + j] || !nav.free[i * nav.nz + b])) continue;   // no cutting corners
+        if (Math.abs(nav.ys[m] - nav.ys[n]) > 0.65) continue;                                  // no stepping off a deck edge (stairs only)
+        if (di && dj && (Math.abs(nav.ys[a * nav.nz + j] - nav.ys[n]) > 0.65 || Math.abs(nav.ys[i * nav.nz + b] - nav.ys[n]) > 0.65)) continue;
         out.push(m);
       }
       return out;
@@ -11691,9 +11784,11 @@
     }
     function segmentWalkable(nav, a, b) {                     // straight-line shortcut check for path smoothing
       const d = Math.hypot(b.x - a.x, b.z - a.z), steps = Math.max(1, Math.ceil(d / 0.3));
+      let py = groundY(nav.map, a.x, a.z);
       for (let k = 1; k <= steps; k++) {
-        const x = a.x + (b.x - a.x) * k / steps, z = a.z + (b.z - a.z) * k / steps;
-        if (inAnyLake(nav.map, x, z, 0.3) || !circleFree(nav, x, z, AI_R, groundY(nav.map, x, z), true)) return false;
+        const x = a.x + (b.x - a.x) * k / steps, z = a.z + (b.z - a.z) * k / steps, y = groundY(nav.map, x, z);
+        if (Math.abs(y - py) > 0.3) return false; py = y;                                     // never straight off a deck edge
+        if (inAnyLake(nav.map, x, z, 0.3) || !circleFree(nav, x, z, AI_R, y, true)) return false;
       }
       return true;
     }
@@ -11863,6 +11958,7 @@
       for (let it = 0; it < 2; it++) {
         for (const c of nav.bucketAt(ai.pos.x, ai.pos.z)) {
           if (c === aiCol) continue;
+          const rf = aiRampCols.get(c); if (rf && ai.pos.x >= rf.x0 && ai.pos.x <= rf.x1 && ai.pos.z >= rf.z0 && ai.pos.z <= rf.z1) continue;
           const b = c.box;
           if (b.max.y < ai.pos.y + 0.12 || b.min.y > ai.pos.y + 1.0 || b.max.y < -500) continue;
           const cx = THREE.MathUtils.clamp(ai.pos.x, b.min.x, b.max.x), cz = THREE.MathUtils.clamp(ai.pos.z, b.min.z, b.max.z);
@@ -15058,6 +15154,438 @@
       if (currentMap === 'mine') for (const f of fuelCans) if (!f.taken) f.glow.material.opacity = 0.45 + 0.3 * Math.sin(performance.now() * 0.004 + f.p.x);
     }
 
+    // =====================================================================
+    //  Update 23/11: the proboscis monkey survivor, no takedown cutscene, hinged breaker doors, a grabbable tiller on
+    //  every escape boat, waypoint navigation for the monster in the mine, and an unobstructed PLAY button.
+    // =====================================================================
+
+    // ---------- the survivor: a legless, pot-bellied proboscis monkey (matches the reference sheet) ----------
+    // Warm orange-brown fur on the back, shoulders and upper arms; a cream belly, chest, neck ruff and shoulder collar;
+    // a rounded head with a dark brown cap and brow, cream cheeks and muzzle, dark eyes, small dark ears and the big
+    // drooping peach nose. Dark grey-brown forearms and three-fingered hands (a thumb and two fingers) on the
+    // controllers. In the headset the head (and nose) stays hidden from your own eyes, as before.
+    const furTex = canvasTexture(128, (g, S) => {
+      g.fillStyle = '#d8d8d8'; g.fillRect(0, 0, S, S);
+      const r = mulberry32(2323);
+      for (let k = 0; k < 1400; k++) {                                   // short soft strands
+        const x = r() * S, y = r() * S, l = 3 + r() * 7, v = 150 + (r() * 105 | 0);
+        g.strokeStyle = `rgba(${v},${v},${v},0.55)`; g.lineWidth = 1 + r();
+        g.beginPath(); g.moveTo(x, y); g.lineTo(x + (r() - 0.5) * 2, y + l); g.stroke();
+      }
+    });
+    furTex.wrapS = furTex.wrapT = THREE.RepeatWrapping; furTex.repeat.set(3, 3);
+    const FUR = { orange: new THREE.Color(0xc8722c), deep: new THREE.Color(0xa65a1e), cream: new THREE.Color(0xecd29c),
+                  cap: new THREE.Color(0x6e3414), grey: new THREE.Color(0x6a5e58), dark: new THREE.Color(0x3e3430) };
+    const furMat = new THREE.MeshStandardMaterial({ map: furTex, vertexColors: true, roughness: 0.92 });
+    const furOrange = new THREE.MeshStandardMaterial({ map: furTex, color: 0xc8722c, roughness: 0.92 });
+    const furCream = new THREE.MeshStandardMaterial({ map: furTex, color: 0xecd29c, roughness: 0.92 });
+    const furCap = new THREE.MeshStandardMaterial({ map: furTex, color: 0x6e3414, roughness: 0.9 });
+    const furGrey = new THREE.MeshStandardMaterial({ map: furTex, color: 0x6a5e58, roughness: 0.9 });
+    const palmMat = new THREE.MeshStandardMaterial({ color: 0x4a403c, roughness: 0.75 });
+    const noseMat = new THREE.MeshStandardMaterial({ color: 0xe9a27c, roughness: 0.55 });
+    const eyeMat = new THREE.MeshStandardMaterial({ color: 0x120c08, roughness: 0.15 });
+    const eyeHi = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    const earMat = new THREE.MeshStandardMaterial({ color: 0x3a2a22, roughness: 0.8 });
+    // paint vertex colours from a function of the (unit) direction from a centre and the height
+    function paintFur(geo, fn) {
+      const p = geo.attributes.position, col = new Float32Array(p.count * 3), c = new THREE.Color(), v = new THREE.Vector3();
+      for (let i = 0; i < p.count; i++) { v.fromBufferAttribute(p, i); fn(v, c); col.set([c.r, c.g, c.b], i * 3); }
+      geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+      return geo;
+    }
+    const smooth = (a, b, x) => THREE.MathUtils.smoothstep(x, a, b);
+    {
+      // swap out the old survivor's meshes (anything else hung on the body, like the necklace, stays)
+      const oldHead = [...avatarHead.children], oldBody = avatarBody.children.filter((o) => o.isMesh);
+      for (const o of oldHead) o.visible = false;
+      for (const o of oldBody) o.visible = false;
+      // ---- head (forward is -z) ----
+      const HC = new THREE.Vector3(0, -0.012, 0.045);
+      const head = new THREE.Group(); avatarHead.add(head);
+      const skullGeo = paintFur(new THREE.SphereGeometry(0.066, 28, 20), (v, c) => {
+        const n = v.clone().normalize();
+        const face = smooth(-0.15, -0.55, n.z) * (1 - smooth(0.2, 0.45, n.y));           // the front, below the brow
+        const cap = smooth(0.3, 0.62, n.y) * (1 - smooth(0.35, 0.8, n.z)) + smooth(0.05, 0.3, n.y) * smooth(-0.4, -0.75, n.z) * 0.9;
+        c.copy(FUR.orange).lerp(FUR.cream, Math.min(1, face + smooth(-0.1, -0.5, n.y) * 0.6)).lerp(FUR.cap, Math.min(1, cap));
+      });
+      const add = (parent, geo, mat, x, y, z, sx = 1, sy = 1, sz = 1, rx = 0, ry = 0, rz = 0) => {
+        const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.scale.set(sx, sy, sz); m.rotation.set(rx, ry, rz); parent.add(m); return m;
+      };
+      add(head, skullGeo, furMat, HC.x, HC.y, HC.z, 1.0, 1.04, 1.0);
+      add(head, new THREE.SphereGeometry(1, 16, 10), furCap, 0, HC.y + 0.03, HC.z - 0.052, 0.05, 0.016, 0.022);     // the heavy brow ridge
+      add(head, new THREE.SphereGeometry(1, 16, 12), furCream, 0, HC.y - 0.034, HC.z - 0.045, 0.048, 0.034, 0.034); // cream muzzle and cheeks
+      for (const s of [-1, 1]) {
+        add(head, new THREE.SphereGeometry(1, 12, 10), furCream, s * 0.036, HC.y - 0.016, HC.z - 0.044, 0.026, 0.03, 0.026);   // cheek fluff
+        add(head, new THREE.SphereGeometry(0.0115, 12, 10), eyeMat, s * 0.023, HC.y + 0.012, HC.z - 0.06);                       // dark eyes
+        add(head, new THREE.SphereGeometry(0.0028, 6, 4), eyeHi, s * 0.023 - 0.003, HC.y + 0.016, HC.z - 0.071);                 // a glint
+        add(head, new THREE.SphereGeometry(1, 10, 8), earMat, s * 0.066, HC.y + 0.006, HC.z + 0.012, 0.007, 0.016, 0.013);       // small dark ears
+      }
+      // the big drooping proboscis: a bridge from between the eyes, then a heavy bulb hanging over the upper lip
+      const bridge = new THREE.Mesh(new THREE.CapsuleGeometry(0.014, 0.034, 6, 12), noseMat);
+      bridge.position.set(0, HC.y - 0.012, HC.z - 0.07); bridge.rotation.x = -0.5; head.add(bridge);
+      add(head, new THREE.SphereGeometry(1, 20, 16), noseMat, 0, HC.y - 0.05, HC.z - 0.084, 0.03, 0.04, 0.028, 0.2, 0, 0);
+      add(head, new THREE.SphereGeometry(1, 16, 12), noseMat, 0, HC.y - 0.074, HC.z - 0.08, 0.026, 0.02, 0.024);   // the tip curling under
+      for (const s of [-1, 1]) add(head, new THREE.SphereGeometry(1, 8, 6), earMat, s * 0.009, HC.y - 0.08, HC.z - 0.066, 0.006, 0.004, 0.008);   // nostrils
+      add(head, UNIT_BOX, earMat, 0, HC.y - 0.07, HC.z - 0.064, 0.03, 0.003, 0.004);                                  // the mouth line behind it
+      head.traverse((o) => { if (o.isMesh) o.castShadow = false; });
+      // ---- body: the pot-bellied, legless torso with a flat rounded base ----
+      const prof = [[0.0, -0.072], [0.045, -0.075], [0.085, -0.1], [0.112, -0.125], [0.118, -0.17], [0.13, -0.24], [0.126, -0.3], [0.108, -0.335], [0.074, -0.353], [0.0, -0.357]];
+      const torsoGeo = new THREE.LatheGeometry(prof.map(([r, y]) => new THREE.Vector2(r, y)), 32);
+      torsoGeo.scale(1.1, 1, 0.82);
+      paintFur(torsoGeo, (v, c) => {
+        const ax = v.x / 1.1, az = v.z / 0.82, len = Math.hypot(ax, az) || 1, nz = az / len, nx = ax / len;
+        const front = smooth(-0.1, -0.55, nz);                                      // cream belly and chest
+        const collar = smooth(-0.19, -0.11, v.y) * 0.85;                             // cream neck ruff and shoulder collar all round
+        const base = smooth(-0.33, -0.357, v.y) * 0.3;
+        const stripe = smooth(0.55, 0.9, nz) * (1 - smooth(0.15, 0.4, Math.abs(nx))) * smooth(-0.13, -0.2, v.y);   // darker down the spine
+        c.copy(FUR.orange).lerp(FUR.deep, stripe * 0.8).lerp(FUR.cream, Math.min(1, front * (1 - smooth(-0.31, -0.35, v.y) * 0.4) + collar * (1 - front))).lerp(FUR.deep, base);
+      });
+      torsoGeo.computeVertexNormals();
+      const torso = add(avatarBody, torsoGeo, furMat, 0, 0, 0.05);
+      add(avatarBody, new THREE.TorusGeometry(0.058, 0.022, 10, 24), furCream, 0, -0.088, 0.05, 1.05, 1, 0.85, Math.PI / 2);   // fluffy neck ruff
+      for (const s of [-1, 1]) {
+        add(avatarBody, new THREE.SphereGeometry(0.046, 16, 12), furOrange, s * 0.118, -0.128, 0.05);                         // shoulder
+        add(avatarBody, new THREE.SphereGeometry(1, 12, 10), furCream, s * 0.098, -0.112, 0.03, 0.05, 0.028, 0.045);          // the cream collar over it
+        add(avatarBody, new THREE.CapsuleGeometry(0.034, 0.08, 6, 12), furOrange, s * 0.142, -0.19, 0.052, 1, 1, 1, 0, 0, s * 0.22);   // upper arm
+        add(avatarBody, new THREE.SphereGeometry(0.036, 12, 10), furGrey, s * 0.153, -0.243, 0.054);                          // elbow: the grey starts
+      }
+      avatarBody.traverse((o) => { if (o.isMesh && !oldBody.includes(o)) o.castShadow = false; });
+      // the necklace (charm pendant) sits on the new, rounder chest instead of inside the fur
+      for (const o of avatarBody.children) {
+        if (o.isMesh || !o.children.length) continue;
+        o.scale.setScalar(2.4); o.position.set(0, 0.159, -0.068);                  // round the thick neck ruff, the pendant on the chest
+        for (const k of o.children) if (k.isGroup && k.position.y < -0.1) k.scale.setScalar(1.5 / 2.4);   // (the charm itself stays charm-sized)
+      }
+      void torso;
+    }
+    // ---- the hands: dark grey-brown forearms and three-fingered hands (built in the old hand's grip frame) ----
+    const monkeyHands = hands.map((h) => {
+      const model = h.model, g = model.group;
+      for (const m of model.meshes) m.visible = false;                              // the old human hand
+      const mine = [];
+      const add = (parent, geo, mat, x, y, z, sx = 1, sy = 1, sz = 1, rx = 0, ry = 0, rz = 0) => {
+        const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.scale.set(sx, sy, sz); m.rotation.set(rx, ry, rz);
+        m.castShadow = true; m.userData.mat = mat; parent.add(m); mine.push(m); return m;
+      };
+      // forearm (up from the wrist, +Y) and wrist
+      add(g, new THREE.CapsuleGeometry(0.03, 0.1, 6, 12), furGrey, 0.036, 0.135, 0.002, 1, 1, 0.92);
+      add(g, new THREE.SphereGeometry(0.034, 12, 10), furGrey, 0.036, 0.2, 0.002, 1.05, 0.9, 1.0);                  // elbow end, shaggy
+      add(g, new THREE.CylinderGeometry(0.024, 0.027, 0.04, 12), furGrey, 0.035, 0.068, 0.002, 0.8, 1, 1);           // wrist
+      // palm: a thick rounded pad, the back of the hand towards +X
+      add(g, new THREE.SphereGeometry(1, 16, 12), palmMat, 0.034, 0.008, 0, 0.019, 0.05, 0.042);
+      add(g, new THREE.SphereGeometry(1, 12, 10), furGrey, 0.042, 0.016, 0, 0.014, 0.04, 0.038);                     // furry back of the hand
+      // two main fingers: two thick segments each, curling towards -X (into the palm) with Grip
+      const fingers = [-0.016, 0.017].map((fz) => {
+        const j0 = new THREE.Group(); j0.position.set(0.034, -0.038, fz); g.add(j0);
+        const g0 = new THREE.CapsuleGeometry(0.0125, 0.03, 4, 10); g0.translate(0, -0.026, 0);
+        add(j0, g0, palmMat, 0, 0, 0);
+        const j1 = new THREE.Group(); j1.position.set(0, -0.052, 0); j0.add(j1);
+        const g1 = new THREE.CapsuleGeometry(0.0115, 0.022, 4, 10); g1.translate(0, -0.02, 0);
+        add(j1, g1, palmMat, 0, 0, 0);
+        add(j1, new THREE.SphereGeometry(0.0085, 8, 6), earMat, -0.006, -0.036, 0);                                  // dark fingertip pad
+        return [j0, j1];
+      });
+      // the thumb: from the base of the palm on the index side, pointing along -Z, kept out and open
+      const t0 = new THREE.Group(); t0.position.set(0.026, 0.018, -0.034); t0.rotation.set(-0.45, -0.3, 0); g.add(t0);
+      const tg0 = new THREE.CapsuleGeometry(0.012, 0.024, 4, 10); tg0.rotateX(-Math.PI / 2); tg0.translate(0, 0, -0.02);
+      add(t0, tg0, palmMat, 0, 0, 0);
+      const t1 = new THREE.Group(); t1.position.set(0, 0, -0.04); t1.rotation.set(0, 0.2, 0); t0.add(t1);
+      const tg1 = new THREE.CapsuleGeometry(0.0105, 0.016, 4, 10); tg1.rotateX(-Math.PI / 2); tg1.translate(0, 0, -0.016);
+      add(t1, tg1, palmMat, 0, 0, 0);
+      let curl = 0, wire = null;
+      const basePose = model.pose, baseWire = model.setWire;
+      model.pose = function (grip, trig, dt) {
+        basePose.call(this, grip, trig, dt);
+        curl += (grip - curl) * Math.min(1, dt * 16);                                 // Grip closes the two fingers; the thumb stays open
+        for (const [j0, j1] of fingers) { j0.rotation.z = -(0.18 + curl * 1.5); j1.rotation.z = -(0.22 + curl * 1.75); }
+      };
+      model.setWire = function (on) {
+        baseWire.call(this, on);
+        if (on === wire) return;
+        wire = on;
+        for (const m of mine) { m.material = on ? handWireMat : m.userData.mat; m.castShadow = !on; }
+      };
+      return { mine, fingers };
+    });
+
+    // ---------- no third-person takedown: a red hit flash and a thud, then straight to YOU WERE CAUGHT ----------
+    {
+      const baseUpdateCatch = updateCatch;
+      beginCatch = function () {
+        if (caught) return;
+        ai.state = 'catch'; ai.path = []; ai.speed = 0; ai.slash = null;
+        caught = { t: 0, map: ai.map, quick: true, overlay: false, env: null, light: null, pivot: null };
+        redFlash.visible = true; redFlash.material.opacity = 1;
+        flashEl.style.transition = 'none'; flashEl.style.opacity = 1;
+        requestAnimationFrame(() => { flashEl.style.transition = 'opacity 0.9s ease'; flashEl.style.opacity = 0.4; });
+        gameAudio.smash(1.2); gameAudio.thud?.(0); gameAudio.growl();
+        chaseAudio.sting(); chaseAudio.setTarget(0); chaseAudio.heartbeat?.(1);
+        controllers.forEach((c) => pulse(c, 1, 350));
+        for (const g of [...generators, ...extraGens]) if (g.holding >= 0) releaseHandle(g);
+        boat.holding = -1;
+        for (const b of Object.values(escapeBoats)) b.tillerHand = -1;
+      };
+      updateCatch = function (dt) {
+        const C = caught; if (!C) return;
+        if (!C.quick) return baseUpdateCatch(dt);
+        C.t += dt;
+        redFlash.material.opacity = Math.max(0.55, redFlash.material.opacity - dt * 1.2);
+        if (C.t > 0.35) { travelFade.visible = true; travelFadeMat.opacity = Math.min(0.6, (C.t - 0.35) * 1.5); }
+        if (C.t > 0.5 && !C.overlay) {
+          C.overlay = true;
+          if (renderer.xr.isPresenting) { redrawPanel(caughtPanel); caughtGroup.visible = true; placeCaughtPanel(true); }
+          else caughtEl.classList.add('show');
+        }
+        if (caughtGroup.visible) placeCaughtPanel(false);
+      };
+    }
+
+    // ---------- the breaker doors: a steel door on two hinges at the left seam of each cabinet ----------
+    // The pivot sits right on the cabinet's left edge; the door hangs open on it, swings when you push it with a hand
+    // (it creaks, and clangs at its stops), and settles back to rest open. It can never come off the box.
+    const boltMat = new THREE.MeshStandardMaterial({ color: 0x3a3c3e, roughness: 0.45, metalness: 0.85 });
+    const breakerDoors = MN.breakers.map((B) => {
+      const doorMat = new THREE.MeshStandardMaterial({ color: 0x5a6258, map: grimeTex, roughness: 0.55, metalness: 0.7 });
+      const innerMat = new THREE.MeshStandardMaterial({ color: 0x46504a, map: grimeTex, roughness: 0.6, metalness: 0.6 });
+      const fx = Math.sin(B.yaw), fz = Math.cos(B.yaw), rx = Math.cos(B.yaw), rz = -Math.sin(B.yaw);
+      const P = (a, b, c) => new THREE.Vector3(B.pos.x + rx * a + fx * c, B.pos.y + b, B.pos.z + rz * a + fz * c);
+      const fixed = new THREE.Group(); fixed.position.copy(P(-0.268, 0, 0.0)); fixed.rotation.y = B.yaw; scene.add(fixed);
+      const pivot = new THREE.Group(); pivot.position.copy(fixed.position); scene.add(pivot);
+      // the hinges: a leaf screwed to the cabinet side, the knuckle (barrel) on the seam and its pin caps
+      const knuckleG = new THREE.CylinderGeometry(0.009, 0.009, 0.07, 10);
+      for (const hy of [0.2, -0.2]) {
+        const leaf = new THREE.Mesh(UNIT_BOX, ironMat); leaf.scale.set(0.004, 0.06, 0.05); leaf.position.set(-0.004, hy, -0.03); fixed.add(leaf);
+        for (const bz of [-0.015, -0.045]) { const bt = new THREE.Mesh(RIVET_G, boltMat); bt.position.set(-0.007, hy, bz); fixed.add(bt); }
+        const kn = new THREE.Mesh(knuckleG, ironMat); kn.position.set(0, hy, 0.004); fixed.add(kn);
+        for (const s of [-1, 1]) { const cap = new THREE.Mesh(BOLT_G, boltMat); cap.position.set(0, hy + s * 0.04, 0.004); fixed.add(cap); }
+      }
+      // the door (local +x runs from the hinge to its free edge, +z is out of its face when shut)
+      const door = new THREE.Group(); pivot.add(door);
+      const panel = new THREE.Mesh(UNIT_BOX, doorMat); panel.scale.set(0.5, 0.56, 0.015); panel.position.set(0.262, 0, 0.012); door.add(panel);
+      const lip = new THREE.Mesh(UNIT_BOX, innerMat); lip.scale.set(0.46, 0.52, 0.01); lip.position.set(0.262, 0, 0.0); door.add(lip);   // the inside skin
+      for (let k = 0; k < 5; k++) { const lv = new THREE.Mesh(UNIT_BOX, innerMat); lv.scale.set(0.16, 0.012, 0.012); lv.position.set(0.3, 0.12 - k * 0.03, 0.024); lv.rotation.x = 0.5; door.add(lv); }   // louvres
+      for (const hy of [0.2, -0.2]) {                                                       // the door's own hinge leaves
+        const leaf = new THREE.Mesh(UNIT_BOX, ironMat); leaf.scale.set(0.05, 0.06, 0.004); leaf.position.set(0.028, hy, 0.021); door.add(leaf);
+        for (const bx of [0.018, 0.042]) { const bt = new THREE.Mesh(RIVET_G, boltMat); bt.position.set(bx, hy, 0.024); door.add(bt); }
+      }
+      const handle = new THREE.Mesh(UNIT_BOX, ironMat); handle.scale.set(0.018, 0.09, 0.018); handle.position.set(0.47, 0, 0.034); door.add(handle);   // the latch handle
+      const latch = new THREE.Mesh(UNIT_BOX, boltMat); latch.scale.set(0.03, 0.02, 0.01); latch.position.set(0.47, 0, 0.022); door.add(latch);
+      door.traverse((o) => { if (o.isMesh) o.castShadow = false; });
+      const D = { B, pivot, door, ang: 1.95, vel: 0, creakT: 0, prev: hands.map(() => new THREE.Vector3()), had: hands.map(() => false) };
+      applyDoor(D);
+      return D;
+    });
+    function applyDoor(D) { D.pivot.rotation.set(0, D.B.yaw - D.ang, 0); }
+    const DOOR_MIN = 0.95, DOOR_MAX = 2.75, DOOR_REST = 1.95;
+    const _dl = new THREE.Vector3(), _dv = new THREE.Vector3(), _dCam = new THREE.Vector3(), _dq = new THREE.Quaternion();
+    function updateBreakerDoors(dt) {
+      if (currentMap !== 'mine') return;
+      for (const D of breakerDoors) {
+        D.pivot.updateMatrixWorld(true);
+        // hands push it: their speed across the door's face turns it about the hinge
+        hands.forEach((h, i) => {
+          if (!renderer.xr.isPresenting || !h.tracked) { D.had[i] = false; return; }
+          _dl.copy(h.last); D.pivot.worldToLocal(_dl);
+          if (D.had[i] && _dl.x > 0.05 && _dl.x < 0.52 && Math.abs(_dl.y) < 0.3 && Math.abs(_dl.z - 0.012) < 0.06) {
+            _dv.copy(h.last).sub(D.prev[i]);                                            // world motion this frame...
+            _dv.applyQuaternion(D.pivot.getWorldQuaternion(_dq).invert());                                                     // ...in the door's frame
+            const vz = _dv.z / Math.max(dt, 1e-3), push = vz / Math.max(0.08, _dl.x);
+            if ((_dl.z - 0.012) * vz < 0 || Math.abs(_dl.z - 0.012) < 0.02) D.vel += (push - D.vel) * 0.5;
+          }
+          D.prev[i].copy(h.last); D.had[i] = true;
+        });
+        // a spring back to rest open, damping, and hard stops
+        D.vel += (DOOR_REST - D.ang) * 6 * dt; D.vel *= Math.exp(-2.2 * dt);
+        D.ang += D.vel * dt;
+        if (D.ang < DOOR_MIN || D.ang > DOOR_MAX) {
+          D.ang = THREE.MathUtils.clamp(D.ang, DOOR_MIN, DOOR_MAX);
+          if (Math.abs(D.vel) > 0.8) { camera.getWorldPosition(_dCam); gameAudio.clink?.(1); }
+          D.vel *= -0.3;
+        }
+        D.creakT = Math.max(0, D.creakT - dt);
+        if (Math.abs(D.vel) > 0.6 && D.creakT <= 0) { D.creakT = 1.1; camera.getWorldPosition(_dCam); cabinAudio.creak(_dCam.distanceTo(D.pivot.position)); }
+        applyDoor(D);
+      }
+    }
+
+    // ---------- every escape boat: grab the tiller with Grip and swing it to steer ----------
+    // (the camp boat already had this; the graveyard and mine boats get the same: your hand on the tiller handle turns
+    // the outboard and the boat; Trigger is still the throttle, and the desktop arrow keys still work)
+    for (const b of Object.values(escapeBoats)) { b.tillerHand = -1; b.tillerSwing = 0; b.tillerSteer = 0; b.tillerTilt = 0; }
+    const tillerPrevGrip = [false, false];
+    const _tgW = new THREE.Vector3(), _tgL = new THREE.Vector3();
+    {
+      const baseEsc = updateEscapeBoats;
+      updateEscapeBoats = function (dt) {
+        const vr = renderer.xr.isPresenting;
+        const grips = controllers.map((c) => vr && btn(c, 1)), edges = grips.map((g, i) => g && !tillerPrevGrip[i]);
+        grips.forEach((g, i) => { tillerPrevGrip[i] = g; });
+        for (const b of Object.values(escapeBoats)) {
+          const here = b.map === currentMap && vr && playerRole !== 'monster' && !caught && !ending;
+          const grip = b.cl(tillerGrip), mg = b.cl(motorGroup);
+          if (!grip || !mg) continue;
+          b.group.updateMatrixWorld(true); grip.getWorldPosition(_tgW);
+          for (let i = 0; i < hands.length; i++) {
+            const c = controllers[i], g = here && grips[i], edge = here && edges[i];
+            if (!here) { if (b.tillerHand === i) b.tillerHand = -1; continue; }
+            if (b.tillerHand === i && (!g || hands[i].last.distanceTo(_tgW) > 0.5)) b.tillerHand = -1;
+            if (edge && b.tillerHand < 0 && hands[i].last.distanceTo(_tgW) < 0.22 && escapeBoatAboard()) {
+              b.tillerHand = i; pulse(c, 0.4, 40);
+              if (b.t < 0) startEscapeBoat(b);                                        // taking the tiller starts the engine
+            }
+          }
+          if (b.tillerHand >= 0) {
+            b.group.worldToLocal(_tgL.copy(hands[b.tillerHand].last));
+            const ax = _tgL.x - motorGroup.position.x, az = _tgL.z;
+            const swing = THREE.MathUtils.clamp(Math.atan2(-az, ax), -TILLER_MAX, TILLER_MAX);
+            const reach = Math.max(0.05, Math.hypot(ax, az) - tillerPivot.position.x);
+            const tilt = THREE.MathUtils.clamp(Math.atan2(_tgL.y - motorGroup.position.y - tillerPivot.position.y, reach), -0.25, 0.55);
+            b.tillerSwing += (swing - b.tillerSwing) * Math.min(1, dt * 12);
+            b.tillerTilt += (tilt - b.tillerTilt) * Math.min(1, dt * 12);
+            if (Math.random() < dt * 4 && b.t >= 0) pulse(controllers[b.tillerHand], 0.08 + Math.abs(b.speed) * 0.04, 30);   // the engine through the handle
+          } else { b.tillerSwing *= Math.exp(-3 * dt); b.tillerTilt *= Math.exp(-4 * dt); }
+          b.tillerSteer = THREE.MathUtils.clamp(-b.tillerSwing / TILLER_MAX, -1, 1);   // same feel as the camp boat
+        }
+        baseEsc(dt);
+        for (const b of Object.values(escapeBoats)) {
+          const mg = b.cl(motorGroup), tp = b.cl(tillerPivot);
+          if (b.tillerHand >= 0 || Math.abs(b.tillerSwing) > 0.01) { if (mg) mg.rotation.y = b.tillerSwing; }
+          if (tp) tp.rotation.z = b.tillerTilt;
+        }
+      };
+    }
+
+    // ---------- the monster in the mine: a waypoint graph down the middle of the tunnels ----------
+    // Hand-placed nodes on the tunnel centre lines, at the junctions, in each cavern, at the foot and the top of both
+    // scaffold stairs and on the decks. Long routes go node to node (keeping it off the walls and the support beams);
+    // the feelers still steer it round anything in the way, and if it ever stalls it backs off to the nearest node.
+    const MINE_WP = [
+      ['Y1', 12, 0], ['Y2', 12, 5], ['Y3', 12, -5], ['A0', 7, 0], ['A1', 2.5, 0], ['A2', -2.5, 0], ['A3', -6, 0], ['H', -11, 0], ['HW', -14.5, 0], ['HN', -13.5, 1.3],
+      ['N1', -2.5, 7], ['N2', -2.5, 13.5], ['N3', -3, 15], ['N4', -5.2, 15.25], ['N5', 0.5, 15.5],
+      ['S1', 2.5, -7], ['S2', 2.5, -13.5], ['S3', 4.0, -15.8], ['S4', 6, -17], ['S5', -0.8, -15.6],
+      ['W1', -13.5, 3.6], ['W2', -14.5, 9], ['C1', -14.5, 12], ['C2', -17.5, 12.5], ['C3', -20.5, 12], ['C4', -20.5, 15.5],
+      ['ST0', -14.55, 14.5], ['ST1', -14.55, 16.2], ['DK1', -14.55, 18.4], ['DK2', -16.3, 18.5], ['DK3', -18.1, 18.3], ['DK4', -19.8, 18.4], ['DK5', -21.2, 18.2],
+      ['SW1', -10.5, -3.5], ['SW2', -10.5, -9], ['SW3', -10.5, -14], ['O1', -10.5, -16.2], ['O2', -15, -16.2], ['O3', -19.5, -16.2], ['O4', -15, -20],
+      ['OT1', -18.5, 0], ['OT2', -21.5, 0], ['DC1', -25, 0], ['DC2', -24.8, -8], ['DC3', -24.8, 8], ['DC4', -29.5, 0], ['DC5', -38, 12.2], ['DC6', -38, -12.2], ['DC7', -46, 12.2], ['DC8', -46, -12.2], ['DC9', -26.5, 11.8], ['DC10', -26.5, -11.8],
+    ].map(([id, x, z]) => ({ id, p: new THREE.Vector3(MINE.x + x, 0, MINE.z + z) }));
+    for (const w of MINE_WP) w.p.y = mineFloorAt(w.p.x, w.p.z);
+    const WP_EDGES = [
+      'Y1-Y2', 'Y1-Y3', 'Y1-A0', 'Y2-A0', 'Y3-A0', 'A0-A1', 'A1-A2', 'A2-A3', 'A3-H', 'H-HW', 'A2-N1', 'N1-N2', 'N2-N3', 'N3-N4', 'N3-N5', 'N2-N5', 'N2-N4',
+      'A1-S1', 'S1-S2', 'S2-S3', 'S3-S4', 'S3-S5', 'S2-S5', 'H-HN', 'HW-HN', 'HN-W1', 'W1-W2', 'W2-C1', 'C1-C2', 'C2-C3', 'C3-C4', 'C1-ST0', 'C2-ST0', 'ST0-ST1', 'ST1-DK1',
+      'DK1-DK2', 'DK2-DK3', 'DK3-DK4', 'DK4-DK5', 'H-SW1', 'SW1-SW2', 'SW2-SW3', 'SW3-O1', 'O1-O2', 'O2-O3', 'O2-O4', 'O1-O4',
+      'HW-OT1', 'OT1-OT2', 'OT2-DC1', 'DC1-DC2', 'DC1-DC3', 'DC1-DC4', 'DC2-DC4', 'DC3-DC4', 'DC3-DC9', 'DC9-DC5', 'DC2-DC10', 'DC10-DC6', 'DC5-DC7', 'DC6-DC8',
+    ].map((e) => e.split('-').map((id) => MINE_WP.findIndex((w) => w.id === id)));
+    let wpNav = null, wpAdj = null;
+    function wpGraph() {
+      const nav = NAV.mine;
+      if (!nav) return null;
+      if (wpNav === nav && wpAdj) return wpAdj;                                       // rebuilt whenever the grid is (e.g. the rock fall cleared)
+      wpNav = nav; wpAdj = MINE_WP.map(() => []);
+      for (const [a, b] of WP_EDGES) {
+        if (a < 0 || b < 0) continue;
+        const A = MINE_WP[a].p, B = MINE_WP[b].p;
+        if (!segmentWalkable(nav, A, B)) continue;
+        const d = A.distanceTo(B);
+        wpAdj[a].push([b, d]); wpAdj[b].push([a, d]);
+      }
+      return wpAdj;
+    }
+    // the nodes you can walk straight to from a point (nearest first)
+    function wpReachable(nav, p, max = 4) {
+      return MINE_WP.map((w, i) => [i, Math.hypot(w.p.x - p.x, w.p.z - p.z)]).sort((a, b) => a[1] - b[1]).slice(0, 8)
+        .filter(([i, d]) => d < 0.4 || segmentWalkable(nav, p, MINE_WP[i].p)).slice(0, max);
+    }
+    function mineWaypointPath(from, to) {
+      const nav = NAV.mine, adj = wpGraph(); if (!nav || !adj) return null;
+      const starts = wpReachable(nav, from), ends = wpReachable(nav, to);
+      if (!starts.length || !ends.length) return null;
+      const N = MINE_WP.length, dist = new Float32Array(N).fill(Infinity), prev = new Int32Array(N).fill(-1), done = new Uint8Array(N);
+      for (const [i, d] of starts) dist[i] = Math.min(dist[i], d);
+      for (;;) {                                                                       // Dijkstra (a few dozen nodes)
+        let u = -1, best = Infinity;
+        for (let i = 0; i < N; i++) if (!done[i] && dist[i] < best) { best = dist[i]; u = i; }
+        if (u < 0) break;
+        done[u] = 1;
+        for (const [v, w] of adj[u]) if (dist[u] + w < dist[v]) { dist[v] = dist[u] + w; prev[v] = u; }
+      }
+      let bestEnd = -1, bestCost = Infinity;
+      for (const [i, d] of ends) if (dist[i] + d < bestCost) { bestCost = dist[i] + d; bestEnd = i; }
+      if (bestEnd < 0) return null;
+      const out = [];
+      for (let n = bestEnd; n >= 0; n = prev[n]) out.push(MINE_WP[n].p.clone());
+      out.reverse();
+      return { path: out, cost: bestCost };
+    }
+    {
+      const baseGoToward = goToward;
+      goToward = function (p, state) {
+        baseGoToward(p, state);
+        if (ai.map !== 'mine' || !ai.path.length) return;
+        const end = ai.path[ai.path.length - 1];
+        if (Math.hypot(end.x - ai.pos.x, end.z - ai.pos.z) < 5) return;               // short hops: the grid path is fine
+        let gridLen = 0, q = ai.pos;
+        for (const v of ai.path) { gridLen += Math.hypot(v.x - q.x, v.z - q.z); q = v; }
+        const wp = mineWaypointPath(ai.pos, end);
+        if (!wp || wp.cost > gridLen * 1.35 + 2) return;                               // only when it isn't a detour
+        wp.path.push(end.clone());
+        ai.path = wp.path;
+      };
+    }
+    // stalls: back off to the nearest node it can reach, then carry on
+    let wpStallT = 0, wpCool = 0;
+    const _wpLast = new THREE.Vector3();
+    function updateMineAI(dt) {
+      wpCool = Math.max(0, wpCool - dt);
+      if (!ai.active || ai.map !== 'mine' || caught || !ai.path.length || ['look', 'stare', 'catch', 'stunned'].includes(ai.state)) { wpStallT = 0; _wpLast.copy(ai.pos); return; }
+      const moved = Math.hypot(ai.pos.x - _wpLast.x, ai.pos.z - _wpLast.z);
+      _wpLast.copy(ai.pos);
+      if (moved < dt * 0.25) wpStallT += dt; else wpStallT = Math.max(0, wpStallT - dt * 2);
+      if (wpStallT > 0.8 && wpCool <= 0) {
+        wpStallT = 0; wpCool = 1.5;
+        const nav = NAV.mine; if (!nav) return;
+        const near = MINE_WP.map((w) => [w, Math.hypot(w.p.x - ai.pos.x, w.p.z - ai.pos.z)]).filter(([, d]) => d > 0.6).sort((a, b) => a[1] - b[1]).slice(0, 6)
+          .find(([w]) => segmentWalkable(nav, ai.pos, w.p));
+        if (near) ai.path.unshift(near[0].p.clone());
+        else { ai.heading += Math.PI * (0.5 + Math.random() * 0.5); ai.pathT = 0; }   // nothing in reach: turn away and replan
+      }
+    }
+
+    // ---------- the lobby's PLAY button is never covered ----------
+    // The curved lobby panel, its header and the PLAY highlight draw over anything else in the scene (nothing from a
+    // map can show through them), the lobby's pointers and hands draw over the panel, and on the desktop a click
+    // anywhere over PLAY counts even if a page overlay sits on top of the canvas.
+    titleGroup.traverse((o) => {
+      if (!o.material || !(o.renderOrder >= 2)) return;
+      o.material.depthTest = false; o.renderOrder += 9000;
+    });
+    for (const P of lobbyPointers) for (const o of [P.pointer, P.reticle]) o.traverse((k) => { if (k.isMesh || k.isLine) { k.renderOrder = 9050; if (k.material) k.material.depthTest = false; } });
+    let updateLobbyOrder = null;
+    {
+      const handOrder = (on) => { for (const H of monkeyHands) for (const m of H.mine) m.renderOrder = on ? 9100 : 0; for (const h of hands) for (const m of h.model.meshes) m.renderOrder = on ? 9100 : 0; };
+      handOrder(true);
+      let wasTitle = true;
+      updateLobbyOrder = () => { if (titleActive !== wasTitle) { wasTitle = titleActive; handOrder(titleActive); } };
+      window.addEventListener('pointermove', (e) => {
+        if (!titleActive || renderer.xr.isPresenting || e.target === renderer.domElement) return;
+        const r = renderer.domElement.getBoundingClientRect();
+        _mouseNDC.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+      }, true);
+      window.addEventListener('click', (e) => {
+        if (!titleActive || renderer.xr.isPresenting || e.target === renderer.domElement) return;
+        if (e.target.closest && e.target.closest('button, a, input')) return;             // real buttons (ENTER VR) still work
+        if (deskHover) { titleAudio.unlock(); pressPlay(false); }
+      }, true);
+      const diag = document.getElementById('diag');
+      if (diag) diag.style.pointerEvents = 'none';
+      for (const el of diag ? diag.querySelectorAll('a') : []) el.style.pointerEvents = 'auto';
+    }
+
+    function updateSurvivorExtras(dt) {
+      updateLobbyOrder?.();
+      updateBreakerDoors(dt);
+      updateMineAI(dt);
+    }
+
     // ---------- XR session hooks ----------
     renderer.xr.addEventListener('sessionstart', () => {
       if (!titleActive) horrorAudio.start(); // backup in case the click handler didn't get to run (on the title screen PLAY starts it)
@@ -15126,6 +15654,7 @@
         updateCharmSwing(dt); // wrist and necklace charms swinging on their chains, the compass needle, shop display
         updateMapsAndRun(dt); // only the current map stays loaded (others freed); the sunrise boat-run minigame
         updateMenuAndPerf(dt); // live objectives + map in the menu; per-map far plane / shadow size; mine spark cues
+        updateSurvivorExtras(dt); // hinged breaker doors, the monster's mine waypoints, lobby PLAY always on top
       } catch (err) {
         if (!loopErrorReported) {
           loopErrorReported = true;
