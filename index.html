@@ -2048,7 +2048,7 @@
           playerRig.updateMatrixWorld(true); // so the rays use this frame's rig position
         }
 
-        pollAButton();
+        pollAButton()
         updateGenerator(dt);
         horrorAudio.setGeneratorDistance(_camWorld.distanceTo(_genSound));
         controllers.forEach(updatePointer);
