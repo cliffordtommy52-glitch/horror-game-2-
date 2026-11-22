@@ -35,7 +35,7 @@
     <b>A</b> (right controller) toggles the flashlight; grip moves it to that hand.<br />
     Right thumbstick left/right: 45° snap turn.<br />
     Desktop: drag to orbit, <b>F</b> toggles the flashlight (no locomotion).<br />
-    Generator: hold Trigger or Grip on its yellow handle, then hit each skill check with the other Trigger (or A / X). Beat 3 to power the floodlights.<br />
+    Generator: hold Trigger or Grip on its yellow handle, then hit each skill check with the other Trigger (or A / X). Beat 5 to power the floodlights.<br />
     Ambient horror music starts when you press ENTER VR (headphones recommended).
   </div>
   <div id="diag"></div>
@@ -705,9 +705,12 @@
     // =====================================================================
     //  Old metal generator: grab the handle, beat 3 skill checks, power the floodlights
     // =====================================================================
-    const GEN_CHECKS_NEEDED = 3;
-    const NEEDLE_TURN_TIME  = 1.4;                       // seconds for the needle to sweep the full dial once
-    const SUCCESS_ZONE      = THREE.MathUtils.degToRad(50);
+    const GEN_CHECKS_NEEDED = 5;
+    // Per check (1st..5th): each one is narrower and faster than the last
+    const NEEDLE_TURN_TIMES = [1.3, 1.15, 1.0, 0.9, 0.8];   // seconds for the needle to sweep the full dial once
+    const SUCCESS_ZONES     = [44, 37, 31, 26, 22].map((d) => THREE.MathUtils.degToRad(d)); // success arc width
+    const SUCCESS_ZONE      = SUCCESS_ZONES[0];
+    let zoneSize = SUCCESS_ZONES[0], needleTurnTime = NEEDLE_TURN_TIMES[0]; // values for the check in progress
     const GRAB_RADIUS       = 0.17;                      // how close (m) your hand must be to the handle to grab it
 
     const genGroup = new THREE.Group();
@@ -745,7 +748,7 @@
     genGroup.add(genGlow);
 
     // Progress pips on the panel (amber when a skill check is done)
-    const genPips = [-0.05, 0, 0.05].map((z) => {
+    const genPips = [-0.07, -0.035, 0, 0.035, 0.07].map((z) => {
       const pip = new THREE.Mesh(new THREE.SphereGeometry(0.011, 8, 6),
         new THREE.MeshStandardMaterial({ color: 0x111111, emissive: 0x000000 }));
       pip.position.set(0.252, 0.26, z - 0.03);
@@ -798,7 +801,7 @@
     needle.position.z = 0.002;
     checkGroup.add(needle);
     checkGroup.add(new THREE.Mesh(new THREE.CircleGeometry(0.012, 16), dialMat(0xdddddd, 1)));
-    const dialPips = [-1, 0, 1].map((k) => {
+    const dialPips = [-2, -1, 0, 1, 2].map((k) => {
       const pip = new THREE.Mesh(new THREE.CircleGeometry(0.012, 16), dialMat(0x444444, 1));
       pip.position.set(k * 0.035, -DIAL_R - 0.035, 0);
       checkGroup.add(pip);
@@ -838,9 +841,16 @@
     }
 
     function newCheck() {
-      gen.zoneStart = THREE.MathUtils.randFloat(0.35 * Math.PI, 2 * Math.PI - SUCCESS_ZONE - 0.15);
+      const step = Math.min(gen.progress, GEN_CHECKS_NEEDED - 1);
+      zoneSize = SUCCESS_ZONES[step];
+      needleTurnTime = NEEDLE_TURN_TIMES[step];
+      zone.children[0].geometry.dispose();
+      zone.children[0].geometry = new THREE.RingGeometry(DIAL_R * 0.84, DIAL_R, 24, 1, 0, zoneSize);
+      zone.children[1].geometry.dispose();
+      zone.children[1].geometry = new THREE.RingGeometry(DIAL_R, DIAL_R * 1.08, 24, 1, 0, zoneSize);
+      gen.zoneStart = THREE.MathUtils.randFloat(0.35 * Math.PI, 2 * Math.PI - zoneSize - 0.15);
       // dial angles are measured clockwise from the top; RingGeometry measures counter-clockwise from +x
-      zone.rotation.z = Math.PI / 2 - gen.zoneStart - SUCCESS_ZONE;
+      zone.rotation.z = Math.PI / 2 - gen.zoneStart - zoneSize;
       zone.visible = true;
       gen.angle = 0;
       needle.rotation.z = 0;
@@ -857,7 +867,7 @@
       dialPips.forEach((p, i) => p.material.color.setHex(i < gen.progress ? 0xffffff : 0x444444));
     }
     function hitCheck() {
-      const inZone = gen.angle >= gen.zoneStart && gen.angle <= gen.zoneStart + SUCCESS_ZONE;
+      const inZone = gen.angle >= gen.zoneStart && gen.angle <= gen.zoneStart + zoneSize;
       gen.active = false;
       if (inZone) {
         gen.progress++;
@@ -928,7 +938,7 @@
           } else {
             const hitPressed = pressedNow(o, 0) || pressedNow(0, 2) || pressedNow(1, 2); // other trigger, or A / X
             if (gen.active) {
-              gen.angle += (Math.PI * 2 / NEEDLE_TURN_TIME) * dt;
+              gen.angle += (Math.PI * 2 / needleTurnTime) * dt;
               needle.rotation.z = -gen.angle;
               if (hitPressed) hitCheck();
               else if (gen.angle >= Math.PI * 2) missCheck(); // the needle went all the way round
@@ -2048,7 +2058,7 @@
           playerRig.updateMatrixWorld(true); // so the rays use this frame's rig position
         }
 
-        pollAButton()
+        pollAButton();
         updateGenerator(dt);
         horrorAudio.setGeneratorDistance(_camWorld.distanceTo(_genSound));
         controllers.forEach(updatePointer);
