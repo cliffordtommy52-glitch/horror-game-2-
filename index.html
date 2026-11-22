@@ -243,12 +243,21 @@
     // The ground is a thick box whose top face sits at y = 0
     colliders.push({ box: new THREE.Box3(new THREE.Vector3(-50, -10, -50), new THREE.Vector3(50, 0, 50)) });
 
-    // Invisible walls just inside the dense tree line, so you can never leave the forest
+    // Invisible walls just inside the dense tree line, so you can never leave the forest - except along the water
+    // channel that carries the lake out east to the edge of the map (walled in on both banks and at its far end)
     const WORLD_HALF = 32;   // expanded campground (was 19.3)
+    const CH = { z: -5.6, hw: 2.0, bw: 1.4, x1: 54.5, depth: 1.6 };   // the escape channel: centre line z, water half-width, beach width, far end
     addBoxCollider(0, -1, -WORLD_HALF - 0.5, 2 * WORLD_HALF + 4, 41, 1);
     addBoxCollider(0, -1,  WORLD_HALF + 0.5, 2 * WORLD_HALF + 4, 41, 1);
     addBoxCollider(-WORLD_HALF - 0.5, -1, 0, 1, 41, 2 * WORLD_HALF + 4);
-    addBoxCollider( WORLD_HALF + 0.5, -1, 0, 1, 41, 2 * WORLD_HALF + 4);
+    {
+      const zN = CH.z - CH.hw - 0.3, zS = CH.z + CH.hw + 0.3, e0 = -WORLD_HALF - 2, e1 = WORLD_HALF + 2;
+      addBoxCollider(WORLD_HALF + 0.5, -4, (e0 + zN) / 2, 1, 44, zN - e0);           // east wall, north of the channel
+      addBoxCollider(WORLD_HALF + 0.5, -4, (zS + e1) / 2, 1, 44, e1 - zS);           // east wall, south of the channel
+      addBoxCollider((WORLD_HALF + CH.x1) / 2 + 0.5, -4, zN - 0.5, CH.x1 - WORLD_HALF + 1, 44, 1);   // the channel's banks
+      addBoxCollider((WORLD_HALF + CH.x1) / 2 + 0.5, -4, zS + 0.5, CH.x1 - WORLD_HALF + 1, 44, 1);
+      addBoxCollider(CH.x1 + 0.6, -4, CH.z, 1, 44, zS - zN + 2);                    // and its far end
+    }
 
     // Seeded random so the forest is the same every visit
     function mulberry32(a) {
@@ -676,7 +685,17 @@
     }
     const smooth01 = (t) => t * t * (3 - 2 * t);
     // Terrain height: 0 on the forest floor, a sandy beach sloping gently down to the water, then the lakebed
-    function lakeHeight(x, z) {
+    // the channel cut: a deep middle, then a sloping sandy bank up to the forest floor
+    function channelHeight(x, z) {
+      if (x < LAKE_C.x || x > CH.x1 + 1) return 0;
+      const d = Math.abs(z - CH.z);
+      if (d >= CH.hw + CH.bw) return 0;
+      if (d >= CH.hw) return WATER_LEVEL * (1 - smooth01((d - CH.hw) / CH.bw));
+      return WATER_LEVEL - CH.depth * smooth01(Math.min(1, (CH.hw - d) / 1.1));
+    }
+    const inChannelArea = (x, z, m = 0) => x > LAKE_C.x && x < CH.x1 + 1 + m && Math.abs(z - CH.z) < CH.hw + CH.bw + m;
+    function lakeHeight(x, z) { return Math.min(radialLakeHeight(x, z), channelHeight(x, z)); }
+    function radialLakeHeight(x, z) {
       const dx = x - LAKE_C.x, dz = z - LAKE_C.z, r = Math.hypot(dx, dz), a = Math.atan2(dz, dx);
       const rs = lakeTab(lakeShoreTab, a), rb = lakeTab(lakeBeachTab, a);
       if (r >= rb) return 0;
@@ -685,10 +704,11 @@
       return WATER_LEVEL - LAKE_DEPTH * smooth01(d) + 0.08 * Math.sin(x * 1.1) * Math.sin(z * 0.9) * d;  // lumpy bed
     }
     // inside the beach's outer edge (plus a margin)
-    function inLakeArea(x, z, m = 0) {
+    function inRadialLake(x, z, m = 0) {
       const dx = x - LAKE_C.x, dz = z - LAKE_C.z;
       return Math.hypot(dx, dz) < lakeTab(lakeBeachTab, Math.atan2(dz, dx)) + m;
     }
+    function inLakeArea(x, z, m = 0) { return inRadialLake(x, z, m) || inChannelArea(x, z, m); }
 
     // Bare trampled dirt around the fire
     const clearing = new THREE.Mesh(new THREE.CircleGeometry(5.5 * S, 48),
@@ -707,6 +727,7 @@
       { x: GEN_POS.x, z: GEN_POS.z, r: 0.9 },    // generator
       ...FLOOD_POS.map(([x, z]) => ({ x, z, r: 0.4 })), // floodlight poles
       { x: LAKE_C.x, z: LAKE_C.z, r: lakeBeachMax + 0.4 },  // lake + beach: keep trees/rocks/logs out (was r 7.2 round the walled pool)
+      ...Array.from({ length: 22 }, (_, k) => ({ x: LAKE_C.x + 6 + k * 1.6, z: CH.z, r: CH.hw + CH.bw + 0.9 })),   // the channel out east
       { x: (DOCK.x0 + DOCK.x1) / 2 - 1, z: (DOCK.z0 + DOCK.z1) / 2, r: 1.6 }, // dock steps
       ...Object.values(REPAIR_SPOTS).map(([x, z]) => ({ x, z, r: 0.5 })), // boat repair parts
       ...CABINS.map((c) => ({ x: c.x, z: c.z, r: 3.3 })),                         // the four new cabins (with porches)
@@ -4079,7 +4100,8 @@
     const lakeW = LAKE.x1 - LAKE.x0, lakeD = LAKE.z1 - LAKE.z0;
     const _UPY = new THREE.Vector3(0, 1, 0);
     const lkRand = (a, b) => a + Math.random() * (b - a);
-    const inLake = (x, z, m = 0) => x > LAKE.x0 + m && x < LAKE.x1 - m && z > LAKE.z0 + m && z < LAKE.z1 - m;
+    const inLake = (x, z, m = 0) => (x > LAKE.x0 + m && x < LAKE.x1 - m && z > LAKE.z0 + m && z < LAKE.z1 - m) ||
+      (x > LAKE.x1 - 2 && x < CH.x1 - m && Math.abs(z - CH.z) < CH.hw - m);      // ...and the channel out east
 
     // ---------- Natural lake: sunken basin, sloping sandy beach, lakebed, water ----------
     // The lake is sunk into the forest floor: the beach slopes gently down from the grass to the water's edge
@@ -4093,6 +4115,7 @@
       lkX0 = Math.min(lkX0, LAKE_C.x + r * Math.cos(a)); lkX1 = Math.max(lkX1, LAKE_C.x + r * Math.cos(a));
       lkZ0 = Math.min(lkZ0, LAKE_C.z + r * Math.sin(a)); lkZ1 = Math.max(lkZ1, LAKE_C.z + r * Math.sin(a));
     }
+    lkX1 = Math.max(lkX1, CH.x1 + 0.6); lkZ0 = Math.min(lkZ0, CH.z - CH.hw - CH.bw - 0.5); lkZ1 = Math.max(lkZ1, CH.z + CH.hw + CH.bw + 0.5);
     lkX0 = Math.floor(lkX0 - 0.5); lkZ0 = Math.floor(lkZ0 - 0.5);
     const lkNX = Math.ceil((lkX1 + 0.5 - lkX0) / LAKE_GRID), lkNZ = Math.ceil((lkZ1 + 0.5 - lkZ0) / LAKE_GRID);
     lkX1 = lkX0 + lkNX * LAKE_GRID; lkZ1 = lkZ0 + lkNZ * LAKE_GRID;
@@ -4101,7 +4124,7 @@
     {
       const g = colliders.find((c) => c.box.min.x === -50 && c.box.max.x === 50 && c.box.max.y === 0) || colliders[0]; // (the ground slab is the first collider)
       g.box.max.x = lkX0;                                                                              // west of the lake area
-      colliders.push({ box: new THREE.Box3(new THREE.Vector3(lkX1, -10, -50), new THREE.Vector3(50, 0, 50)) });       // east
+      if (lkX1 < 50) colliders.push({ box: new THREE.Box3(new THREE.Vector3(lkX1, -10, -50), new THREE.Vector3(50, 0, 50)) });       // east
       colliders.push({ box: new THREE.Box3(new THREE.Vector3(lkX0, -10, -50), new THREE.Vector3(lkX1, 0, lkZ0)) });   // north
       colliders.push({ box: new THREE.Box3(new THREE.Vector3(lkX0, -10, lkZ1), new THREE.Vector3(lkX1, 0, 50)) });    // south
     }
@@ -4145,11 +4168,18 @@
       const sq = new THREE.Shape();
       sq.moveTo(-55, -55); sq.lineTo(55, -55); sq.lineTo(55, 55); sq.lineTo(-55, 55); sq.closePath();
       const hole = new THREE.Path();
+      const band = CH.hw + CH.bw, outline = [];
+      let cut = false;
       for (let i = 0; i < LAKE_N; i += 3) {
         const a = -Math.PI + (2 * Math.PI * i) / LAKE_N, r = lakeBeachTab[i];
         const x = LAKE_C.x + r * Math.cos(a), z = LAKE_C.z + r * Math.sin(a);
-        if (i === 0) hole.moveTo(x, -z); else hole.lineTo(x, -z);      // the ground plane is rotated: its local y is -z
+        if (Math.cos(a) > 0 && Math.abs(z - CH.z) < band) {       // the channel's mouth: run out along its banks to the far end and back
+          if (!cut) { cut = true; outline.push([x, CH.z - band], [CH.x1 + 0.4, CH.z - band], [CH.x1 + 0.4, CH.z + band], [x, CH.z + band]); }
+          continue;
+        }
+        outline.push([x, z]);
       }
+      outline.forEach(([x, z], k) => { if (k === 0) hole.moveTo(x, -z); else hole.lineTo(x, -z); });   // the ground plane is rotated: its local y is -z
       hole.closePath();
       sq.holes.push(hole);
       const geo = new THREE.ShapeGeometry(sq);
@@ -4227,6 +4257,32 @@
       const terrain = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ map: sandTex, vertexColors: true, roughness: 0.95 }));
       terrain.receiveShadow = true;
       scene.add(terrain);
+      // the channel: a grid from where the basin's sand ends out to the edge (quads inside the basin are left out)
+      {
+        const STEP = 0.45, band = CH.hw + CH.bw + 0.2, z0 = CH.z - band, x0 = LAKE_C.x, x1 = CH.x1 + 0.4;
+        const nx = Math.ceil((x1 - x0) / STEP), nz = Math.ceil((2 * band) / STEP);
+        const cp = [], cc = [], cu = [], ci = [];
+        for (let i = 0; i <= nx; i++) for (let j = 0; j <= nz; j++) {
+          const x = x0 + i * STEP, z = z0 + j * STEP, h = lakeHeight(x, z);
+          cp.push(x, h, z); cu.push(x * 0.45, z * 0.45);
+          const t = h < WATER_LEVEL ? Math.min(1, (WATER_LEVEL - h) / CH.depth) : 0;
+          const colr = h < WATER_LEVEL - 0.02 ? mix(cWet, cDeep, smooth01(t)) : h < -0.05 ? mix(cWet, cDry, (h - WATER_LEVEL) / (-0.05 - WATER_LEVEL)) : mix(cDry, cSoil, 0.6);
+          const n = 0.9 + 0.2 * lakeRng(); cc.push(colr[0] * n, colr[1] * n, colr[2] * n);
+        }
+        for (let i = 0; i < nx; i++) for (let j = 0; j < nz; j++) {
+          const xa = x0 + i * STEP, xb = xa + STEP, za = z0 + j * STEP, zb = za + STEP;
+          if (inRadialLake(xa, za, -0.3) && inRadialLake(xb, za, -0.3) && inRadialLake(xa, zb, -0.3) && inRadialLake(xb, zb, -0.3)) continue;
+          const a = i * (nz + 1) + j, b = (i + 1) * (nz + 1) + j;
+          ci.push(a, a + 1, b, b, a + 1, b + 1);
+        }
+        const cg = new THREE.BufferGeometry();
+        cg.setAttribute('position', new THREE.Float32BufferAttribute(cp, 3));
+        cg.setAttribute('color', new THREE.Float32BufferAttribute(cc, 3));
+        cg.setAttribute('uv', new THREE.Float32BufferAttribute(cu, 2));
+        cg.setIndex(ci); cg.computeVertexNormals();
+        const chTerrain = new THREE.Mesh(cg, terrain.material);
+        chTerrain.receiveShadow = true; scene.add(chTerrain);
+      }
     }
 
     // Water: a polar grid shaped like the shoreline, reaching a little under the sand so the edge is wherever water meets beach.
@@ -4280,6 +4336,17 @@
     water.receiveShadow = true;
     water.renderOrder = 1;
     scene.add(water);
+
+    // the channel's water, from the lake's shore out to the edge of the map
+    const campChannelWater = (() => {
+      const za = Math.abs(CH.z - LAKE_C.z), rs = lakeTab(lakeShoreTab, Math.atan2(CH.z - LAKE_C.z, Math.sqrt(Math.max(1, 81 - za * za))));
+      const xw0 = LAKE_C.x + Math.sqrt(Math.max(0, rs * rs - za * za)) - 0.25, w = CH.x1 + 0.4 - xw0, d = 2 * (CH.hw + 0.45);
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d, Math.max(2, Math.round(w)), 4),
+        new THREE.MeshStandardMaterial({ color: 0x0e1a20, roughness: 0.1, metalness: 0.3, transparent: true, opacity: 0.86, depthWrite: false }));
+      m.rotation.x = -Math.PI / 2; m.position.set(xw0 + w / 2, WATER_LEVEL, CH.z); m.renderOrder = 1;
+      scene.add(m);
+      return m;
+    })();
 
     // A faint band of foam where the water laps the sand
     const foamMat = new THREE.MeshBasicMaterial({ color: 0xd8dcd4, vertexColors: true, transparent: true, depthWrite: false, opacity: 0.5,
@@ -4463,6 +4530,7 @@
         if (!k || renderer.xr.isPresenting || titleActive) return;
         e.preventDefault();
         deskBoat[k] = on;
+        if (currentMap !== 'camp') return;
         if (on && !deskBoat.engaged) {               // first press: bring the camera to the boat
           deskBoat.engaged = true;
           orbit.target.set(boat.pos.x, WATER_LEVEL + 0.3, boat.pos.z);
@@ -5444,10 +5512,21 @@
       // ---- shoreline and dock bounds ----
       const m = BOAT_L / 2 + 0.1;
       let bumped = false;
+      // the lake, plus the channel running out east: in the channel the boat keeps to its lane
+      const laneZ = CH.hw - BOAT_W / 2 - 0.1, inLane = Math.abs(boat.pos.z - CH.z) <= laneZ;
       if (boat.pos.x < LAKE.x0 + m) { boat.pos.x = LAKE.x0 + m; bumped = true; }
-      if (boat.pos.x > LAKE.x1 - m) { boat.pos.x = LAKE.x1 - m; bumped = true; }
-      if (boat.pos.z < LAKE.z0 + m) { boat.pos.z = LAKE.z0 + m; bumped = true; }
-      if (boat.pos.z > LAKE.z1 - m) { boat.pos.z = LAKE.z1 - m; bumped = true; }
+      if (boat.pos.x > LAKE.x1 - m) {
+        if (!inLane) {
+          if (boat.pos.x > LAKE.x1 - m + 0.6) { boat.pos.z = THREE.MathUtils.clamp(boat.pos.z, CH.z - laneZ, CH.z + laneZ); }
+          else boat.pos.x = LAKE.x1 - m;
+          bumped = true;
+        }
+        if (boat.pos.x > CH.x1 - m) { boat.pos.x = CH.x1 - m; bumped = true; }
+      }
+      if (boat.pos.x <= LAKE.x1 - m) {
+        if (boat.pos.z < LAKE.z0 + m) { boat.pos.z = LAKE.z0 + m; bumped = true; }
+        if (boat.pos.z > LAKE.z1 - m) { boat.pos.z = LAKE.z1 - m; bumped = true; }
+      }
       { // keep the boat's centre out of the dock (grown by the beam / half length)
         const x0 = DOCK.x0 - m, x1 = DOCK.x1 + m, z0 = DOCK.z0 - 0.6, z1 = DOCK.z1 + 0.6;
         if (boat.pos.x > x0 && boat.pos.x < x1 && boat.pos.z > z0 && boat.pos.z < z1) {
@@ -6083,6 +6162,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'UPDATE', date: '22/11/26', title: 'WALLED MAPS, DRIVE-OUT ESCAPES, RAGDOLL STUN, SMARTER AI, NEW CHARMS',
+        text: 'Lakes to the map edge, one boat everywhere, a hidden shotgun, and chain-link charms at THE TRADER.' },
       { tag: 'UPDATE', date: '22/11/26', title: 'REALISTIC WATER SPLASHES',
         text: 'Ripple rings, arcing droplets and foam bursts scaled to impact speed, splash sounds and haptic ticks.' },
       { tag: 'UPDATE', date: '22/11/26', title: 'BOAT RUN MINIGAME, ONE MAP AT A TIME, NEW FURNITURE & TREES',
@@ -7527,7 +7608,8 @@
     const GH = 28;                                                    // half the graveyard's size
     const gp = (x, z) => new THREE.Vector3(GRAVE.x + x, 0, GRAVE.z + z);
     const GY = {
-      lake: { x0: GRAVE.x + 8, x1: GRAVE.x + 25, z0: GRAVE.z - 25, z1: GRAVE.z - 9, level: -0.12, bed: -1.4 },
+      lake: { x0: GRAVE.x + 8, x1: GRAVE.x + 50, z0: GRAVE.z - 25, z1: GRAVE.z - 9, level: -0.12, bed: -1.4 },   // runs out east through the wall to the edge
+      edgeX: GRAVE.x + 45,                                             // drive the boat past here to escape
       gens: [
         { name: 'WEST WALL', pos: gp(-25, 12), rot: 0, floods: [[GRAVE.x - 25.6, GRAVE.z + 8.5], [GRAVE.x - 25.6, GRAVE.z + 15.5]], aim: [GRAVE.x - 20, GRAVE.z + 12], realLights: 0 },
         { name: 'EAST WALL', pos: gp(25, 14), rot: Math.PI, floods: [[GRAVE.x + 25.6, GRAVE.z + 10.5], [GRAVE.x + 25.6, GRAVE.z + 17.5]], aim: [GRAVE.x + 20, GRAVE.z + 14], realLights: 0 },
@@ -7536,7 +7618,7 @@
       skulls: [[-15, 0.06, 19.6], [-4, 0.06, -14.3], [4.5, 0, -24.2]].map(([x, y, z]) => new THREE.Vector3(GRAVE.x + x, y, GRAVE.z + z)),
       altar: gp(0, 3.6),
       crypt: gp(0, -2.2),
-      boatStart: gp(12.4, -17), boatEnd: gp(22.6, -17),
+      boatStart: gp(9.7, -15.72), boatEnd: gp(48, -17), boatYaw: 0,
       dock: { x0: GRAVE.x + 5.4, x1: GRAVE.x + 11.2, z0: GRAVE.z - 17.6, z1: GRAVE.z - 16.4 },
       plots: [{ x: -15, z: 19, w: 7, d: 5, gate: 'S' }, { x: 16, z: 21, w: 7, d: 5, gate: 'S' }, { x: -12, z: -7, w: 6, d: 6, gate: 'E' }, { x: -4, z: -14, w: 6, d: 5, gate: 'N' }],
     };
@@ -7544,14 +7626,44 @@
       const G = GRAVE, gb = makeBatch();
       const gMat = new THREE.MeshStandardMaterial({ map: graveGroundTex, color: 0x9aa098, roughness: 1 });
       graveGroundTex.repeat.set(1, 1);
-      groundWithLake(gMat, G.x - GH - 8, G.x + GH + 8, G.z - GH - 8, G.z + GH + 8, GY.lake, 'graveyard', 0x1a2422);
-      for (const [x, z, w, d] of [[0, -GH - 1, GH * 2 + 4, 0.4], [0, GH + 1, GH * 2 + 4, 0.4], [-GH - 1, 0, 0.4, GH * 2 + 4], [GH + 1, 0, 0.4, GH * 2 + 4]]) {
-        addBoxCollider(G.x + x, -1, G.z + z, w, 6, d);                                        // invisible boundary
+      groundWithLake(gMat, G.x - GH - 10, G.x + 54, G.z - GH - 10, G.z + GH + 10, GY.lake, 'graveyard', 0x1a2422);
+      // the boundary: solid all round just outside the cemetery fence, open only where the lake runs out east (a walled
+      // water channel between cliffs, closed off at the far edge), tall enough that you can't climb over
+      {
+        const L = GY.lake, BH = 12;
+        addBoxCollider(G.x, -1, G.z - GH - 1, GH * 2 + 4, BH, 0.4);                                  // north
+        addBoxCollider(G.x, -1, G.z + GH + 1, GH * 2 + 4, BH, 0.4);                                  // south
+        addBoxCollider(G.x - GH - 1, -1, G.z, 0.4, BH, GH * 2 + 4);                                  // west
+        addBoxCollider(G.x + GH + 1, -1, (G.z - GH - 1 + L.z0 - 0.2) / 2, 0.4, BH, L.z0 - 0.2 - (G.z - GH - 1));   // east, north of the lake
+        addBoxCollider(G.x + GH + 1, -1, (L.z1 + 0.2 + G.z + GH + 1) / 2, 0.4, BH, G.z + GH + 1 - (L.z1 + 0.2));   // east, south of the lake
+        addBoxCollider((G.x + GH + 1 + L.x1) / 2, -2, L.z0 - 0.2, L.x1 - (G.x + GH + 1), BH, 0.4);    // the channel's banks
+        addBoxCollider((G.x + GH + 1 + L.x1) / 2, -2, L.z1 + 0.2, L.x1 - (G.x + GH + 1), BH, 0.4);
+        addBoxCollider(L.x1 - 0.2, -2, (L.z0 + L.z1) / 2, 0.4, BH, L.z1 - L.z0);                     // the far edge
       }
       const dirtMat = new THREE.MeshStandardMaterial({ color: 0x2a2219, roughness: 1, flatShading: true });
       const mossStone = new THREE.MeshStandardMaterial({ color: 0x4d524a, roughness: 0.95, flatShading: true });
       const flagMat = new THREE.MeshStandardMaterial({ color: 0x6a6c66, roughness: 0.95, flatShading: true });
       const rng2 = mulberry32(1313);
+      // weathered headstone faces: a bevelled border, an engraved cross or RIP and name lines, lichen and moss creeping up
+      const graveMats = [0, 1, 2, 3].map((v) => {
+        const tex = canvasTexture(128, (g, S) => {
+          const base = [92, 98, 104, 86][v];
+          g.fillStyle = `rgb(${base},${base + 2},${base - 2})`; g.fillRect(0, 0, S, S);
+          for (let k = 0; k < 500; k++) { const c = base - 30 + Math.random() * 60; g.fillStyle = `rgba(${c},${c},${c - 4},0.35)`; g.fillRect(Math.random() * S, Math.random() * S, 1 + Math.random() * 3, 1 + Math.random() * 3); }
+          g.strokeStyle = 'rgba(30,30,28,0.55)'; g.lineWidth = 3; g.strokeRect(10, 10, S - 20, S - 20);             // bevelled border
+          g.strokeStyle = 'rgba(200,200,190,0.25)'; g.lineWidth = 1; g.strokeRect(12, 12, S - 24, S - 24);
+          g.fillStyle = 'rgba(24,24,22,0.75)';
+          if (v % 2 === 0) { g.fillRect(S / 2 - 3, 22, 6, 34); g.fillRect(S / 2 - 13, 32, 26, 6); }               // carved cross
+          else { g.font = 'bold 26px Georgia, serif'; g.textAlign = 'center'; g.fillText('R.I.P', S / 2, 46); }
+          for (let k = 0; k < 3; k++) g.fillRect(28 + (k % 2) * 6, 66 + k * 12, S - 56 - (k % 2) * 12, 3);           // worn name and dates
+          for (let k = 0; k < 7; k++) {                                                                             // moss and lichen
+            const r = g.createRadialGradient(Math.random() * S, S - Math.random() * 40, 2, Math.random() * S, S, 20 + Math.random() * 30);
+            r.addColorStop(0, 'rgba(70,96,46,0.75)'); r.addColorStop(1, 'rgba(70,96,46,0)'); g.fillStyle = r; g.fillRect(0, 0, S, S);
+          }
+          for (let k = 0; k < 6; k++) { g.fillStyle = 'rgba(190,190,140,0.35)'; g.beginPath(); g.arc(Math.random() * S, Math.random() * S, 2 + Math.random() * 4, 0, 6.3); g.fill(); }
+        });
+        return new THREE.MeshStandardMaterial({ map: tex, bumpMap: tex, bumpScale: 2.5, roughness: 0.95 });
+      });
       // winding flagstone paths (centre lines, kept clear of everything else)
       const pathLines = [
         [[0, 28], [0, 22], [-3, 16], [0, 10], [0, 5]],
@@ -7593,14 +7705,76 @@
         for (const y of [0.25, h - 0.15]) gb.add(UNIT_BOX, ironMat, G.x + (x0 + x1) / 2, y, G.z + (z0 + z1) / 2, 0, ry, 0, 0.025, 0.03, len);
         if (footing) gb.add(UNIT_BOX, stoneMat, G.x + (x0 + x1) / 2, 0.06, G.z + (z0 + z1) / 2, 0, ry, 0, 0.18, 0.12, len);
       };
-      fenceAt(-GH, -GH, GH, -GH); fenceAt(-GH, -GH, -GH, GH); fenceAt(GH, -GH, GH, GH);
-      fenceAt(-GH, GH, -1.3, GH); fenceAt(1.3, GH, GH, GH);
-      for (const s of [-1, 1]) {                                                              // gate pillars with stone urns
-        gb.add(UNIT_BOX, stoneMat, G.x + s * 1.5, 0.9, G.z + GH, 0, 0, 0, 0.45, 1.8, 0.45);
-        gb.add(new THREE.CylinderGeometry(0.14, 0.1, 0.25, 10), stoneMat, G.x + s * 1.5, 1.93, G.z + GH);
-        addBoxCollider(G.x + s * 1.5, 0, G.z + GH, 0.45, 1.8, 0.45);
+      // the cemetery wall: tall wrought-iron railings (spear tips, twin rails, scrollwork) between stone pillars with caps
+      // and ball finials, on a low stone plinth; solid colliders, and a gap only where the lake flows out east
+      const pillarCap = new THREE.CylinderGeometry(0.2, 0.26, 0.12, 4);
+      const tallFence = (x0, z0, x1, z1) => {
+        const len = Math.hypot(x1 - x0, z1 - z0), ry = Math.atan2(x1 - x0, z1 - z0), FH = 2.3;
+        const nP = Math.max(1, Math.round(len / 3.6));
+        for (let p = 0; p <= nP; p++) {                                                      // pillars
+          const t = p / nP, x = x0 + (x1 - x0) * t, z = z0 + (z1 - z0) * t;
+          gb.add(UNIT_BOX, p % 2 ? stoneMat : mossStone, G.x + x, 1.3, G.z + z, 0, ry, 0, 0.46, 2.6, 0.46);
+          gb.add(pillarCap, stoneMat, G.x + x, 2.66, G.z + z, 0, Math.PI / 4 + ry, 0);
+          gb.add(new THREE.SphereGeometry(0.13, 10, 8), stoneMat, G.x + x, 2.84, G.z + z);
+          addBoxCollider(G.x + x, 0, G.z + z, 0.48, 2.95, 0.48);
+        }
+        const n = Math.round(len / 0.13);
+        for (let k = 0; k <= n; k++) {                                                        // bars with spear tips
+          const t = k / n, x = x0 + (x1 - x0) * t, z = z0 + (z1 - z0) * t;
+          gb.add(new THREE.CylinderGeometry(0.011, 0.011, FH - 0.35, 5), ironMat, G.x + x, 0.35 + (FH - 0.35) / 2, G.z + z);
+          gb.add(new THREE.ConeGeometry(0.022, 0.09, 4), ironMat, G.x + x, FH + 0.04, G.z + z);
+          if (k % 3 === 1) gb.add(new THREE.TorusGeometry(0.05, 0.007, 4, 12), ironMat, G.x + x, FH - 0.3, G.z + z, 0, ry + Math.PI / 2, 0);   // scrolls
+        }
+        for (const y of [0.55, FH - 0.18]) gb.add(UNIT_BOX, ironMat, G.x + (x0 + x1) / 2, y, G.z + (z0 + z1) / 2, 0, ry, 0, 0.03, 0.035, len);
+        gb.add(UNIT_BOX, stoneMat, G.x + (x0 + x1) / 2, 0.17, G.z + (z0 + z1) / 2, 0, ry, 0, 0.3, 0.34, len);   // plinth
+        addBoxCollider(G.x + (x0 + x1) / 2, 0, G.z + (z0 + z1) / 2, Math.abs(x1 - x0) + 0.12, FH + 0.6, Math.abs(z1 - z0) + 0.12);
+      };
+      const LZ0 = GY.lake.z0 - G.z, LZ1 = GY.lake.z1 - G.z;
+      tallFence(-GH, -GH, GH, -GH); tallFence(-GH, -GH, -GH, GH);
+      tallFence(GH, -GH, GH, LZ0 - 0.3); tallFence(GH, LZ1 + 0.3, GH, GH);                    // east: open where the lake flows out
+      tallFence(-GH, GH, -1.6, GH); tallFence(1.6, GH, GH, GH);
+      // the ornate main gate (chained shut): two leaves of bars under a scrolled arch, finials, a padlock
+      {
+        for (const sd of [-1, 1]) {
+          gb.add(UNIT_BOX, mossStone, G.x + sd * 1.75, 1.5, G.z + GH, 0, 0, 0, 0.6, 3.0, 0.6);
+          gb.add(pillarCap, stoneMat, G.x + sd * 1.75, 3.06, G.z + GH, 0, Math.PI / 4, 0, 1.3, 1, 1.3);
+          gb.add(new THREE.CylinderGeometry(0.16, 0.11, 0.3, 10), stoneMat, G.x + sd * 1.75, 3.27, G.z + GH);   // urns
+          for (let k = 0; k < 9; k++) {                                                        // gate bars, rising to the middle
+            const x = sd * (0.12 + k * 0.165), h = 2.2 + 0.35 * Math.cos((k / 8) * Math.PI / 2) ** 2;
+            gb.add(new THREE.CylinderGeometry(0.012, 0.012, h, 6), ironMat, G.x + x, h / 2 + 0.05, G.z + GH);
+            gb.add(new THREE.ConeGeometry(0.026, 0.1, 4), ironMat, G.x + x, h + 0.1, G.z + GH);
+          }
+          for (const y of [0.4, 1.2, 2.0]) gb.add(UNIT_BOX, ironMat, G.x + sd * 0.78, y, G.z + GH, 0, 0, 0, 1.4, 0.04, 0.035);
+          for (let k = 0; k < 4; k++) gb.add(new THREE.TorusGeometry(0.11, 0.009, 5, 16), ironMat, G.x + sd * (0.35 + k * 0.33), 1.6, G.z + GH);   // scrollwork rings
+        }
+        gb.add(new THREE.TorusGeometry(1.55, 0.03, 6, 32, Math.PI), ironMat, G.x, 2.55, G.z + GH);            // arch
+        gb.add(new THREE.TorusGeometry(1.35, 0.018, 6, 28, Math.PI), ironMat, G.x, 2.55, G.z + GH);
+        gb.add(new THREE.TorusGeometry(0.16, 0.014, 6, 16), ironMat, G.x, 3.7, G.z + GH);                       // a ring at the top of the arch
+        for (let k = 0; k < 7; k++) gb.add(new THREE.TorusGeometry(0.025, 0.007, 4, 8), ironMat, G.x - 0.09 + k * 0.03, 1.15 + (k % 2) * 0.01, G.z + GH + 0.03, 0, k % 2 ? Math.PI / 2 : 0, 0);   // chain
+        gb.add(UNIT_BOX, ironMat, G.x, 1.08, G.z + GH + 0.05, 0, 0, 0, 0.07, 0.08, 0.03);                     // padlock
+        addBoxCollider(G.x, 0, G.z + GH, 3.0, 3.0, 0.2);
       }
-      gb.add(UNIT_BOX, ironMat, G.x, 2.05, G.z + GH, 0, 0, 0, 3.2, 0.05, 0.05);                 // the arch bar over the gate
+      // steep cliffs outside the wall (and lining the water channel out east), so the world simply ends in rock
+      {
+        const cliffMat = new THREE.MeshStandardMaterial({ color: 0x34383a, roughness: 1, flatShading: true });
+        const cliffMat2 = new THREE.MeshStandardMaterial({ color: 0x2a2e2c, roughness: 1, flatShading: true });
+        const rock = new THREE.DodecahedronGeometry(1, 0);
+        const cliffLine = (x0, z0, x1, z1, out) => {          // out: unit vector pointing away from the playable area
+          const len = Math.hypot(x1 - x0, z1 - z0), n = Math.ceil(len / 2.4);
+          for (let k = 0; k <= n; k++) {
+            const t = k / n, x = x0 + (x1 - x0) * t, z = z0 + (z1 - z0) * t;
+            for (let layer = 0; layer < 3; layer++) {
+              const h = 4.5 + rng2() * 4 - layer * 1.2, w = 1.8 + rng2() * 1.4, o = 1.2 + layer * 1.7 + rng2() * 0.6;
+              gb.add(rock, layer % 2 ? cliffMat2 : cliffMat, G.x + x + out[0] * o, h * 0.42 - layer * 0.3, G.z + z + out[1] * o, rng2() * 0.4, rng2() * 6, rng2() * 0.4, w, h, w * 0.8);
+            }
+          }
+        };
+        const E = GH + 2.2;
+        cliffLine(-E, -E, E, -E, [0, -1]); cliffLine(-E, E, E, E, [0, 1]); cliffLine(-E, -E, -E, E, [-1, 0]);
+        cliffLine(E, -E, E, LZ0 - 1.2, [1, 0]); cliffLine(E, LZ1 + 1.2, E, E, [1, 0]);
+        cliffLine(GH + 1.5, LZ0 - 1.0, GY.lake.x1 - G.x + 2, LZ0 - 1.0, [0, -1]);              // cliffs along both banks of the channel
+        cliffLine(GH + 1.5, LZ1 + 1.0, GY.lake.x1 - G.x + 2, LZ1 + 1.0, [0, 1]);
+      }
       // fenced family plots: low railings with an opening, a stone kerb, headstones in tidy rows inside
       for (const P of GY.plots) {
         const x0 = P.x - P.w / 2, x1 = P.x + P.w / 2, z0 = P.z - P.d / 2, z1 = P.z + P.d / 2, gap = 1.3;
@@ -7617,7 +7791,7 @@
           const x = G.x + x0 + 1.0 + c * 1.3 + (rng2() - 0.5) * 0.15, z = G.z + z0 + 0.9 + r * 1.5;
           if (keepClear.some(([cx, cz, rr]) => Math.hypot(x - cx, z - cz) < rr)) continue;
           if (rng2() < 0.15) continue;
-          const h = 0.5 + rng2() * 0.3, lean = (rng2() - 0.5) * 0.2, mat = rng2() < 0.5 ? mossStone : stoneMat;
+          const h = 0.5 + rng2() * 0.3, lean = (rng2() - 0.5) * 0.2, mat = graveMats[(rng2() * 4) | 0];
           gb.add(UNIT_BOX, mat, x, h / 2, z, lean, 0, 0, 0.4, h, 0.09);
           gb.add(new THREE.CylinderGeometry(0.2, 0.2, 0.09, 12, 1, false, 0, Math.PI), mat, x, h, z, Math.PI / 2 + lean, Math.PI / 2, 0);
           gb.add(new THREE.SphereGeometry(1, 8, 5, 0, Math.PI * 2, 0, Math.PI / 2), dirtMat, x, 0, z + 0.62, 0, 0, 0, 0.3, 0.08, 0.55);
@@ -7629,7 +7803,7 @@
         if (rng2() < 0.42) continue;
         const x = G.x - 25 + col * 2.2 + (rng2() - 0.5) * 0.7, z = G.z - 25 + row * 2.2 + (rng2() - 0.5) * 0.6;
         if (blocked(x, z) || blocked(x, z + 0.65) || inPlot(x, z, 1.0)) continue;
-        const kind = rng2(), mat = rng2() < 0.4 ? mossStone : stoneMat;
+        const kind = rng2(), mat = kind < 0.5 ? graveMats[(rng2() * 4) | 0] : rng2() < 0.4 ? mossStone : stoneMat;
         const lean = (rng2() - 0.5) * 0.35, twist = (rng2() - 0.5) * 0.3;
         if (kind < 0.5) {
           const h = 0.45 + rng2() * 0.35;
@@ -7656,9 +7830,35 @@
       {
         const c = GY.crypt;
         const solid = (mat, x, y0, z, w, h, d) => { gb.add(UNIT_BOX, mat, c.x + x, y0 + h / 2, c.z + z, 0, 0, 0, w, h, d); addBoxCollider(c.x + x, y0, c.z + z, w, h, d); };
+        // weathered ashlar blocks, darker and greener towards the ground where the moss has crept up
+        const cryptTex = canvasTexture(256, (g, S) => {
+          g.fillStyle = '#5a5c58'; g.fillRect(0, 0, S, S);
+          for (let row = 0; row < 8; row++) for (let col = 0; col < 4; col++) {
+            const x = col * 64 + (row % 2) * 32, y = row * 32, c = 78 + Math.random() * 26;
+            g.fillStyle = `rgb(${c},${c + 2},${c - 3})`; g.fillRect(x + 2, y + 2, 60, 28);
+            g.fillStyle = 'rgba(0,0,0,0.25)'; g.fillRect(x + 2, y + 27, 60, 3);
+          }
+          const moss = g.createLinearGradient(0, S * 0.45, 0, S); moss.addColorStop(0, 'rgba(60,90,40,0)'); moss.addColorStop(1, 'rgba(60,90,40,0.8)');
+          g.fillStyle = moss; g.fillRect(0, 0, S, S);
+          for (let k = 0; k < 40; k++) { g.fillStyle = `rgba(${50 + Math.random() * 30},${80 + Math.random() * 30},36,${0.3 + Math.random() * 0.4})`; g.beginPath(); g.arc(Math.random() * S, Math.random() * S, 3 + Math.random() * 10, 0, 6.3); g.fill(); }
+          for (let k = 0; k < 12; k++) { g.fillStyle = 'rgba(20,20,18,0.25)'; g.fillRect(Math.random() * S, 0, 2 + Math.random() * 3, S * (0.3 + Math.random() * 0.6)); }   // streaks
+        });
+        cryptTex.repeat.set(2, 1);
+        const cryptMat = new THREE.MeshStandardMaterial({ map: cryptTex, bumpMap: cryptTex, bumpScale: 3, roughness: 0.95 });
         solid(stoneMat, 0, 0, 0, 7.2, 0.25, 6);
-        solid(stoneMat, 0, 0.25, 0, 6.6, 0.15, 5.4);
-        solid(stoneMat, 0, 0.4, -0.4, 5.6, 2.6, 4.2);
+        solid(mossStone, 0, 0.25, 0, 6.6, 0.15, 5.4);
+        solid(cryptMat, 0, 0.4, -0.4, 5.6, 2.6, 4.2);
+        // moss cushions along the base and the roof edge, and ivy trailing down the walls
+        const mossMat = new THREE.MeshStandardMaterial({ color: 0x3c5a2a, roughness: 1 });
+        for (let k = 0; k < 26; k++) {
+          const sd = k % 4, t = rng2() - 0.5, along = sd < 2 ? 5.6 : 4.2;
+          const x = sd < 2 ? t * along : (sd === 2 ? -2.8 : 2.8), z = -0.4 + (sd < 2 ? (sd === 0 ? -2.1 : 2.1) : t * along);
+          gb.add(new THREE.SphereGeometry(1, 8, 6), mossMat, c.x + x, 0.42 + (k % 3 === 0 ? 2.55 : 0), c.z + z, 0, rng2() * 3, 0, 0.25 + rng2() * 0.3, 0.07, 0.18);
+        }
+        for (let k = 0; k < 10; k++) {
+          const x = -2.6 + rng2() * 5.2, len = 0.6 + rng2() * 1.6;
+          gb.add(UNIT_BOX, mossMat, c.x + x, 3.0 - len / 2, c.z + 1.71 + 0.01, 0, 0, (rng2() - 0.5) * 0.2, 0.05 + rng2() * 0.06, len, 0.012);
+        }
         solid(stoneMat, 0, 0, 3.25, 2.6, 0.12, 0.5);
         for (const s of [-2.1, -0.9, 0.9, 2.1]) solid(mossStone, s, 0.4, 2.2, 0.36, 2.6, 0.36);
         gb.add(UNIT_BOX, stoneMat, c.x, 3.12, c.z + 0.2, 0, 0, 0, 6.4, 0.25, 5.2);
@@ -7751,8 +7951,10 @@
       // foggy hills rolling away beyond the wall
       const hillMat = new THREE.MeshStandardMaterial({ color: 0x2a3230, roughness: 1, flatShading: true });
       for (let k = 0; k < 26; k++) {
-        const a = (k / 26) * Math.PI * 2 + rng2() * 0.2, r = GH + 6 + rng2() * 6;
-        const sx = 6 + rng2() * 8, sy = 1.2 + rng2() * 2.6;
+        const a = (k / 26) * Math.PI * 2 + rng2() * 0.2;
+        const sx = 6 + rng2() * 8, sy = 1.2 + rng2() * 2.6, r = GH + 8 + sx + rng2() * 6;   // never reaching back inside the cliffs
+        const hx = G.x + Math.cos(a) * r, hz = G.z + Math.sin(a) * r;
+        if (hx + sx > G.x + GH && hz + sx > GY.lake.z0 - 3 && hz - sx < GY.lake.z1 + 3) continue;       // keep the channel open
         gb.add(new THREE.SphereGeometry(1, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2), hillMat, G.x + Math.cos(a) * r, -0.05, G.z + Math.sin(a) * r, 0, rng2() * 3, 0, sx, sy, sx * 0.7);
       }
       gb.build(scene, { rayTarget: true });
@@ -7781,7 +7983,9 @@
     const mp = (x, z) => new THREE.Vector3(MINE.x + x, 0, MINE.z + z);
     const MN = {
       ex: MINE.x + 7,
-      lake: { x0: MINE.x - 47, x1: MINE.x - 31, z0: MINE.z - 10, z1: MINE.z + 10, level: -0.12, bed: -1.6 },
+      lake: { x0: MINE.x - 73.5, x1: MINE.x - 31, z0: MINE.z - 10, z1: MINE.z + 10, level: -0.12, bed: -1.6 },   // the cavern lake, and its channel out west
+      channel: { x0: MINE.x - 73.5, x1: MINE.x - 46, z0: MINE.z - 1.6, z1: MINE.z + 1.6 },
+      edgeX: MINE.x - 68,                                              // drive the boat past here (out of the mine) to escape
       gens: [
         { name: 'YARD', pos: mp(10.2, 5.6), rot: Math.PI / 2, floods: [[MINE.x + 8.4, MINE.z + 6.6], [MINE.x + 12.6, MINE.z + 6.6]], aim: [MINE.x + 8.5, MINE.z], realLights: 0 },
         { name: 'SOUTH CAVERN', pos: mp(5.5, -16.5), rot: Math.PI, floods: [[MINE.x + 6.6, MINE.z - 13.4], [MINE.x + 6.6, MINE.z - 19.4]], aim: [MINE.x + 2, MINE.z - 16], realLights: 0 },
@@ -7794,7 +7998,7 @@
       ],
       fuel: [mp(-6, 15.4), mp(-13, -19.8), mp(-20.5, 10)],
       cartStart: MINE.x + 1, cartStop: MINE.x - 21.4, rubbleX: MINE.x - 23,
-      boatStart: mp(-33.7, 0), boatEnd: mp(-45.6, 0),
+      boatStart: mp(-33.0, 1.27), boatEnd: mp(-73, 0), boatYaw: Math.PI,
       dock: { x0: MINE.x - 32.6, x1: MINE.x - 30.4, z0: MINE.z - 0.6, z1: MINE.z + 0.6 },
       scaffold: { x0: MINE.x - 21.9, x1: MINE.x - 14, z: MINE.z + 18.05, deck: 1.0, top: 1.85, split: MINE.x - 18.9, depth: 1.8 },
     };
@@ -7805,9 +8009,9 @@
       const timberMat = new THREE.MeshStandardMaterial({ map: woodTex, color: 0x6a5038, roughness: 0.95 });
       const dirtMat2 = new THREE.MeshStandardMaterial({ map: mineDirtTex, roughness: 1 });
       mineDirtTex.repeat.set(1, 1);
-      groundWithLake(dirtMat2, M.x - 52, M.x + 19, M.z - 26, M.z + 26, MN.lake, 'mine', 0x0c1416);
+      groundWithLake(dirtMat2, M.x - 77, M.x + 19, M.z - 26, M.z + 26, MN.lake, 'mine', 0x0c1416);
       // tunnel layout on a 1 m grid: open cells are tunnel; tall cells have a high ceiling (caverns)
-      const X0 = M.x - 50, Z0 = M.z - 24, NX = 58, NZ = 48;
+      const X0 = M.x - 75, Z0 = M.z - 24, NX = 83, NZ = 48;
       const open = [], tall = [];
       for (let i = 0; i < NX; i++) { open.push(new Array(NZ).fill(false)); tall.push(new Array(NZ).fill(false)); }
       const carve = (x0, x1, z0, z1, isTall = false) => { for (let i = 0; i < NX; i++) for (let j = 0; j < NZ; j++) { const x = X0 + i + 0.5, z = Z0 + j + 0.5; if (x > x0 && x < x1 && z > z0 && z < z1) { open[i][j] = true; if (isTall) tall[i][j] = true; } } };
@@ -7823,6 +8027,7 @@
       carve(M.x - 22, M.x - 8, M.z - 21, M.z - 14, true);  // the ore cavern
       carve(M.x - 23.01, M.x - 14, M.z - 1, M.z + 1);      // the old tunnel west (blocked by a rock fall at its end)
       carve(M.x - 49, M.x - 23, M.z - 13, M.z + 13, true); // the deep cavern with the underground lake
+      carve(M.x - 73.6, M.x - 48.9, M.z - 1.6, M.z + 1.6, true);   // the water channel out of the mountain
       const isOpen = (i, j) => i >= 0 && j >= 0 && i < NX && j < NZ && open[i][j];
       const WALL_H = 3.6, LOW = 2.0, HIGH = 3.4, WT = 0.4, WALL_LOW = -1.8;
       const runs = [];
@@ -7911,20 +8116,41 @@
         g.fillStyle = '#9a1a12'; g.font = 'bold 30px Georgia, serif'; g.fillText('KEEP OUT', s / 2, s * 0.62);
       });
       mb.add(new THREE.PlaneGeometry(1.4, 1.4), new THREE.MeshStandardMaterial({ map: signTex, transparent: true, alphaTest: 0.1, roughness: 0.9 }), ex + 1.36, 2.45, M.z, 0, Math.PI / 2, 0.05);
-      for (const [x, z, w, d] of [[ex + 9, M.z, 0.4, 16], [ex + 5, M.z - 7.8, 9, 0.4], [ex + 5, M.z + 7.8, 9, 0.4]]) addBoxCollider(x, -1, z, w, 6, d);
+      for (const [x, z, w, d] of [[ex + 9, M.z, 0.4, 16], [ex + 5, M.z - 7.8, 9, 0.4], [ex + 5, M.z + 7.8, 9, 0.4]]) addBoxCollider(x, -1, z, w, 12, d);
+      // the yard is closed in by sheer rock and heaps of fallen boulders (the solid walls above stop anyone climbing out)
+      for (const [x0, z0, x1, z1, ox, oz] of [[ex + 9.4, M.z - 8.2, ex + 9.4, M.z + 8.2, 1, 0], [ex + 0.8, M.z - 8.2, ex + 9.4, M.z - 8.2, 0, -1], [ex + 0.8, M.z + 8.2, ex + 9.4, M.z + 8.2, 0, 1]]) {
+        const len = Math.hypot(x1 - x0, z1 - z0), n = Math.ceil(len / 1.6);
+        for (let k = 0; k <= n; k++) {
+          const t = k / n, x = x0 + (x1 - x0) * t, z = z0 + (z1 - z0) * t;
+          const h = 3.5 + rr3() * 3, w = 1.4 + rr3();
+          mb.add(new THREE.DodecahedronGeometry(1, 0), darkRock, x + ox * (0.6 + rr3() * 0.5), h * 0.45, z + oz * (0.6 + rr3() * 0.5), rr3() * 0.5, rr3() * 6, rr3() * 0.5, w, h, w);
+          const b = 0.35 + rr3() * 0.45;
+          mb.add(new THREE.DodecahedronGeometry(1, 0), rockMat, x - ox * 0.3 + (rr3() - 0.5) * 0.6, b * 0.6, z - oz * 0.3 + (rr3() - 0.5) * 0.6, rr3() * 3, rr3() * 3, 0, b, b * 0.8, b);
+        }
+      }
       for (let k = 0; k < 22; k++) {
         const a = -Math.PI / 2 + (k / 21) * Math.PI, x = ex + 4.5 + Math.cos(a) * 4.6, z = M.z + Math.sin(a) * 7.2;
         const s = 0.5 + rr3() * 0.6;
         mb.add(new THREE.DodecahedronGeometry(1, 0), rockMat, x + 0.5, s * 0.5, z, rr3() * 3, rr3() * 3, 0, s, s * 0.9, s);
       }
       // timber supports along the tunnels
+      const boltMat = new THREE.MeshStandardMaterial({ color: 0x3a3c3e, roughness: 0.45, metalness: 0.85 });
       const support = (x, z, alongX) => {
         for (const s of [-1, 1]) {
           const px = alongX ? x : x + s * 0.9, pz = alongX ? z + s * 0.9 : z;
           mb.add(UNIT_BOX, timberMat, px, 0.95, pz, 0, 0, 0, 0.14, 1.9, 0.14);
           addBoxCollider(px, 0, pz, 0.14, 1.9, 0.14);
+          // the iron strap plate at the joint, with bolt heads, and an angled brace up to the cap beam
+          const ox = alongX ? 0.072 : 0, oz = alongX ? 0 : 0.072;
+          for (const f of [-1, 1]) {
+            mb.add(UNIT_BOX, boltMat, px + ox * f, 1.78, pz + oz * f, 0, 0, 0, alongX ? 0.006 : 0.13, 0.26, alongX ? 0.13 : 0.006);
+            for (const by of [1.7, 1.86]) mb.add(new THREE.CylinderGeometry(0.012, 0.012, 0.012, 6), boltMat, px + ox * f * 1.1, by, pz + oz * f * 1.1, alongX ? 0 : Math.PI / 2, 0, alongX ? Math.PI / 2 : 0);
+          }
+          const bx = alongX ? x : x + s * 0.62, bz = alongX ? z + s * 0.62 : z;
+          mb.add(UNIT_BOX, timberMat, bx, 1.68, bz, alongX ? -s * 0.8 : 0, 0, alongX ? 0 : s * 0.8, 0.07, 0.42, 0.07);
         }
         mb.add(UNIT_BOX, timberMat, x, 1.93, z, 0, 0, 0, alongX ? 0.18 : 2.0, 0.16, alongX ? 2.0 : 0.18);
+        for (const s of [-1, 1]) mb.add(new THREE.CylinderGeometry(0.014, 0.014, 0.2, 6), boltMat, alongX ? x : x + s * 0.9, 1.93, alongX ? z + s * 0.9 : z, alongX ? 0 : 0, 0, alongX ? Math.PI / 2 : 0);   // through-bolts in the cap beam
       };
       for (let x = M.x + 5; x > M.x - 8; x -= 3) support(x, M.z, true);
       for (let x = M.x - 15.5; x > M.x - 22; x -= 3) support(x, M.z, true);
@@ -7939,11 +8165,24 @@
         addBoxCollider(M.x + x, 0, M.z + z, 0.24, HIGH, 0.24);
       }
       // rails: the main line from the yard through the hub to the rock fall, and branches north, south and to the ore cavern
-      const railMat = new THREE.MeshStandardMaterial({ color: 0x4a3a30, roughness: 0.5, metalness: 0.8 });
+      const railMat = new THREE.MeshStandardMaterial({ color: 0x6a6e72, roughness: 0.35, metalness: 0.9 });     // worn steel, polished on top
+      const railRust = new THREE.MeshStandardMaterial({ color: 0x5a3a28, map: grimeTex, roughness: 0.7, metalness: 0.6 });
       const rails = (x0, z0, x1, z1) => {
         const len = Math.hypot(x1 - x0, z1 - z0), ry = Math.atan2(x1 - x0, z1 - z0), nx = Math.cos(ry), nz = -Math.sin(ry);
-        for (const s of [-1, 1]) mb.add(UNIT_BOX, railMat, (x0 + x1) / 2 + nx * s * 0.3, 0.05, (z0 + z1) / 2 + nz * s * 0.3, 0, ry, 0, 0.04, 0.05, len);
-        for (let k = 0; k < len / 0.5; k++) { const t = (k + 0.5) / (len / 0.5); mb.add(UNIT_BOX, timberMat, x0 + (x1 - x0) * t, 0.015, z0 + (z1 - z0) * t, 0, ry, 0, 0.9, 0.03, 0.14); }
+        for (const s of [-1, 1]) {
+          const cx = (x0 + x1) / 2 + nx * s * 0.3, cz = (z0 + z1) / 2 + nz * s * 0.3;
+          mb.add(UNIT_BOX, railMat, cx, 0.083, cz, 0, ry, 0, 0.034, 0.018, len);     // head
+          mb.add(UNIT_BOX, railRust, cx, 0.06, cz, 0, ry, 0, 0.012, 0.035, len);     // web
+          mb.add(UNIT_BOX, railRust, cx, 0.037, cz, 0, ry, 0, 0.06, 0.01, len);      // foot
+        }
+        for (let k = 0; k < len / 0.5; k++) {
+          const t = (k + 0.5) / (len / 0.5), tx = x0 + (x1 - x0) * t, tz = z0 + (z1 - z0) * t;
+          mb.add(UNIT_BOX, timberMat, tx, 0.016, tz, 0, ry + (rr3() - 0.5) * 0.05, 0, 0.9, 0.032, 0.14);   // wooden tie
+          for (const s of [-1, 1]) {
+            mb.add(UNIT_BOX, railRust, tx + nx * s * 0.3, 0.034, tz + nz * s * 0.3, 0, ry, 0, 0.1, 0.006, 0.12);    // tie plate
+            for (const e of [-1, 1]) mb.add(UNIT_BOX, boltMat, tx + nx * (s * 0.3 + e * 0.04), 0.04, tz + nz * (s * 0.3 + e * 0.04), 0, ry, 0, 0.012, 0.014, 0.012);   // spikes
+          }
+        }
       };
       rails(M.x + 9, M.z, M.x - 22.4, M.z);
       rails(M.x - 3, M.z + 0.8, M.x - 3, M.z + 15);
@@ -7955,6 +8194,17 @@
       const oreCart = (x, z, ry) => {
         mb.add(new THREE.CylinderGeometry(0.42, 0.3, 0.4, 4, 1, true), hullMat, x, 0.4, z, 0, Math.PI / 4 + ry, 0, 1.3, 1, 0.9);
         mb.add(UNIT_BOX, hullMat, x, 0.2, z, 0, ry, 0, 0.75, 0.04, 0.5);
+        mb.add(new THREE.TorusGeometry(0.4, 0.012, 4, 4), boltMat, x, 0.6, z, Math.PI / 2, 0, Math.PI / 4 + ry, 1.3, 0.9, 1);   // rolled rim
+        const cs = Math.cos(ry), sn = Math.sin(ry);
+        for (const ax of [-0.25, 0.25]) {                                  // two axles, four flanged wheels
+          const axx = x + ax * cs, axz = z - ax * sn;
+          mb.add(new THREE.CylinderGeometry(0.014, 0.014, 0.66, 6), boltMat, axx, 0.1, axz, Math.PI / 2, ry, 0);
+          for (const sd of [-0.3, 0.3]) {
+            const wx = axx + sd * sn, wz = axz + sd * cs;
+            mb.add(new THREE.CylinderGeometry(0.1, 0.1, 0.035, 14), railMat, wx, 0.1, wz, Math.PI / 2, ry, 0);
+            mb.add(new THREE.CylinderGeometry(0.115, 0.115, 0.01, 14), boltMat, wx - sd * sn * 0.08, 0.1, wz - sd * cs * 0.08, Math.PI / 2, ry, 0);   // flange
+          }
+        }
         for (let k = 0; k < 7; k++) mb.add(new THREE.DodecahedronGeometry(1, 0), rockMat, x + (rr3() - 0.5) * 0.4, 0.5, z + (rr3() - 0.5) * 0.25, rr3() * 3, rr3() * 3, 0, 0.1, 0.08, 0.1);
         addBoxCollider(x, 0, z, 0.9, 0.6, 0.7);
       };
@@ -7995,10 +8245,17 @@
           addBoxCollider(x, S.deck, S.z + 0.25, 0.4, h - S.deck, 1.1);
         }
       }
-      // the dark water tunnel in the deep cavern's west wall (where the escape boat goes)
-      const arch = new THREE.Mesh(new THREE.CircleGeometry(1.2, 20, 0, Math.PI), new THREE.MeshBasicMaterial({ color: 0x000000 }));
-      arch.position.set(M.x - 48.99, MN.lake.level, M.z); arch.rotation.y = Math.PI / 2; scene.add(arch);
-      for (let k = 0; k < 9; k++) { const a = (k / 8) * Math.PI; mb.add(new THREE.DodecahedronGeometry(1, 0), rockMat, M.x - 48.9, MN.lake.level + Math.sin(a) * 1.25, M.z + Math.cos(a) * 1.25, rr3() * 3, rr3() * 3, 0, 0.2, 0.16, 0.2); }
+      // the channel's mouth in the cavern wall (a rough rock arch), and the grey light of the world outside at its far end
+      for (let k = 0; k < 11; k++) { const a = (k / 10) * Math.PI; mb.add(new THREE.DodecahedronGeometry(1, 0), rockMat, M.x - 48.9, MN.lake.level + Math.sin(a) * 1.75, M.z + Math.cos(a) * 1.75, rr3() * 3, rr3() * 3, 0, 0.32, 0.26, 0.32); }
+      {
+        const dayMat = new THREE.MeshBasicMaterial({ color: 0x9aa8b4, fog: false });
+        const day = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 3.4), dayMat);
+        day.position.set(M.x - 73.55, 1.6, M.z); day.rotation.y = Math.PI / 2; scene.add(day);
+        const dg = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xc8d8e8, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+        dg.scale.set(7, 5, 1); dg.position.set(M.x - 72.6, 1.5, M.z); scene.add(dg);
+        for (let x = M.x - 52; x > M.x - 72; x -= 4) { mb.add(UNIT_BOX, timberMat, x, 3.2, M.z, 0, 0, 0, 0.2, 0.18, 3.2); for (const s of [-1, 1]) { mb.add(UNIT_BOX, timberMat, x, 1.6, M.z + s * 1.5, 0, 0, 0, 0.18, 3.4, 0.18); mb.add(new THREE.CylinderGeometry(0.018, 0.018, 0.22, 8), ironMat, x, 3.2, M.z + s * 1.42, Math.PI / 2, 0, 0); } }   // old shoring along the channel
+        lightSources.push({ x: M.x - 71, y: 1.6, z: M.z, color: 0xb8c8d8, intensity: 3, distance: 9, weight: 1.5 });
+      }
       // the jetty on the lake
       {
         const D = MN.dock;
@@ -8007,18 +8264,52 @@
       }
       // breaker panels (one at each spot)
       const panelMat = new THREE.MeshStandardMaterial({ color: 0x3a4038, map: grimeTex, roughness: 0.6, metalness: 0.6 });
+      // detailed circuit breaker boxes: a steel cabinet with an open door on hinges, a frame, a DANGER label, a row of
+      // small breaker switches and the big lever's slot plate, a meter, and armoured conduit running up the rock
+      const dangerTex = canvasTexture(128, (g, S) => {
+        g.fillStyle = '#e8c020'; g.fillRect(0, 0, S, S * 0.6);
+        g.fillStyle = '#111'; g.beginPath(); g.moveTo(S / 2, 8); g.lineTo(S - 14, S * 0.52); g.lineTo(14, S * 0.52); g.closePath(); g.fill();
+        g.fillStyle = '#e8c020'; g.beginPath(); g.moveTo(S / 2, 22); g.lineTo(S - 28, S * 0.46); g.lineTo(28, S * 0.46); g.closePath(); g.fill();
+        g.fillStyle = '#111'; g.beginPath(); g.moveTo(S / 2 + 6, 26); g.lineTo(S / 2 - 8, 50); g.lineTo(S / 2 + 2, 50); g.lineTo(S / 2 - 6, 70); g.lineTo(S / 2 + 10, 44); g.lineTo(S / 2, 44); g.closePath(); g.fill();
+        g.fillStyle = '#b01010'; g.fillRect(0, S * 0.6, S, S * 0.4);
+        g.fillStyle = '#fff'; g.font = 'bold 20px Arial, sans-serif'; g.textAlign = 'center'; g.fillText('DANGER', S / 2, S * 0.75); g.font = 'bold 11px Arial, sans-serif'; g.fillText('HIGH VOLTAGE', S / 2, S * 0.9);
+      });
+      const dangerMat = new THREE.MeshStandardMaterial({ map: dangerTex, roughness: 0.7 });
+      const steelBox = new THREE.MeshStandardMaterial({ color: 0x5a6258, map: grimeTex, roughness: 0.55, metalness: 0.7 });
+      const switchMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.6 });
       for (const B of MN.breakers) {
-        const fx = Math.sin(B.yaw), fz = Math.cos(B.yaw);
-        mb.add(UNIT_BOX, panelMat, B.pos.x - fx * 0.06, B.pos.y, B.pos.z - fz * 0.06, 0, B.yaw, 0, 0.5, 0.45, 0.1);
-        mb.add(UNIT_BOX, ironMat, B.pos.x - fx * 0.08, B.pos.y + 0.26, B.pos.z - fz * 0.08, 0, B.yaw, 0, 0.55, 0.05, 0.14);
-        mb.add(new THREE.CylinderGeometry(0.025, 0.025, 1.0, 8), ironMat, B.pos.x - fx * 0.05 + Math.cos(B.yaw) * 0.2, B.pos.y + 0.75, B.pos.z - fz * 0.05 - Math.sin(B.yaw) * 0.2);
+        const fx = Math.sin(B.yaw), fz = Math.cos(B.yaw), rx = Math.cos(B.yaw), rz = -Math.sin(B.yaw);
+        const P = (a, b, c) => [B.pos.x + rx * a + fx * c, B.pos.y + b, B.pos.z + rz * a + fz * c];   // a: right, b: up, c: out from the wall
+        let p = P(0, 0, -0.08); mb.add(UNIT_BOX, steelBox, ...p, 0, B.yaw, 0, 0.52, 0.6, 0.14);                     // cabinet
+        for (const [a, b, w, h] of [[0, 0.29, 0.54, 0.03], [0, -0.29, 0.54, 0.03], [-0.255, 0, 0.03, 0.6], [0.255, 0, 0.03, 0.6]]) { p = P(a, b, -0.005); mb.add(UNIT_BOX, panelMat, ...p, 0, B.yaw, 0, w, h, 0.02); }   // frame
+        p = P(-0.42, 0, 0.06); mb.add(UNIT_BOX, steelBox, ...p, 0, B.yaw - 1.25, 0, 0.5, 0.56, 0.015);               // the door, swung open
+        for (const b of [0.2, -0.2]) { p = P(-0.27, b, 0.0); mb.add(new THREE.CylinderGeometry(0.012, 0.012, 0.06, 8), ironMat, ...p); }   // hinges
+        p = P(0.14, 0.2, 0.002); mb.add(new THREE.PlaneGeometry(0.16, 0.16), dangerMat, ...p, 0, B.yaw, 0);          // label
+        for (let k = 0; k < 6; k++) {                                                                                  // small breakers
+          p = P(-0.2 + k * 0.045, -0.2, 0.0); mb.add(UNIT_BOX, switchMat, ...p, 0, B.yaw, 0, 0.032, 0.07, 0.025);
+          p = P(-0.2 + k * 0.045, -0.19, 0.016); mb.add(UNIT_BOX, k % 3 ? steelBox : dangerMat, ...p, 0, B.yaw, 0, 0.012, 0.025, 0.012);
+        }
+        p = P(0, 0.02, 0.0); mb.add(UNIT_BOX, ironMat, ...p, 0, B.yaw, 0, 0.12, 0.34, 0.03);                          // the big lever's slot plate
+        p = P(-0.15, 0.17, 0.0); mb.add(new THREE.CylinderGeometry(0.045, 0.045, 0.02, 16), panelMat, ...p, Math.PI / 2, B.yaw, 0);   // meter
+        p = P(-0.15, 0.17, 0.011); mb.add(new THREE.CylinderGeometry(0.036, 0.036, 0.004, 16), new THREE.MeshStandardMaterial({ color: 0xe8e0c8, roughness: 0.5 }), ...p, Math.PI / 2, B.yaw, 0);
+        p = P(0.2, 0.75, -0.06); mb.add(new THREE.CylinderGeometry(0.025, 0.025, 0.9, 8), ironMat, ...p);           // conduit up the rock, with clamps
+        for (const b of [0.5, 0.9]) { p = P(0.2, b, -0.06); mb.add(new THREE.TorusGeometry(0.03, 0.006, 4, 10), boltMat, ...p, Math.PI / 2, 0, 0); }
+        p = P(-0.2, -0.55, -0.06); mb.add(new THREE.CylinderGeometry(0.02, 0.02, 0.5, 8), ironMat, ...p);           // and down to the floor
       }
       // breakable crates and a barricade
       for (const [x, z, s, ry] of [[-7, 16, 0.45, 0], [-6.4, 16.2, 0.4, 0.5], [1, 14, 0.45, 0.3], [1.5, -19.2, 0.45, 0], [-1, -19, 0.4, 0.8], [-21, -20, 0.45, 0.2],
                                    [-9, -20, 0.45, 0.4], [-22.2, 11, 0.45, 0.1], [-13.6, 2.4, 0.45, 0], [MN.ex + 7.6 - M.x, 3.2, 0.45, 0.2], [MN.ex + 7.9 - M.x, 2.6, 0.38, 0]]) {
         makeCrate('mine', M.x + x, 0, M.z + z, s, ry);
       }
-      makeBarricade('mine', M.x - 1, M.z + 13.4, 1.9, 1.1);          // half-boarded opening into the north chamber's side bay
+      makeBarricade('mine', M.x - 1, M.z + 13.4, 1.9, 1.1);
+      // collapsed boulder blockades heaped against the dead ends
+      for (const [bx, bz, along] of [[1.7, 15, 'z'], [7.7, -16.5, 'z'], [-21.7, -17.5, 'z'], [-8.3, -17.5, 'z']]) {
+        for (let k = 0; k < 14; k++) {
+          const s2 = 0.25 + rr3() * 0.5, y = Math.min(1.6, rr3() * rr3() * 1.9);
+          mb.add(new THREE.DodecahedronGeometry(1, 0), k % 2 ? darkRock : rockMat, M.x + bx - (rr3() * 0.5), y + s2 * 0.5, M.z + bz + (rr3() - 0.5) * 3, rr3() * 3, rr3() * 3, 0, s2, s2 * 0.8, s2);
+        }
+        addBoxCollider(M.x + bx - 0.25, 0, M.z + bz, 0.5, 1.5, 3);
+      }          // half-boarded opening into the north chamber's side bay
       for (const [x, z] of [[-1.5, 16.2], [0.5, -13.8], [-14.5, -15], [-24, 1.6], [-24, -1.8]]) {
         mb.add(new THREE.CylinderGeometry(0.2, 0.2, 0.55, 12), ironMat, M.x + x, 0.275, M.z + z);
         addBoxCollider(M.x + x, 0, M.z + z, 0.4, 0.55, 0.4);
@@ -9345,17 +9636,17 @@
         const on = generators.filter((g) => g.running).length;
         return [[`Power the generators  ${on}/${generators.length}`, on >= generators.length],
                 [`Repair and fuel the boat  ${Math.min(boat.parts, PARTS_NEEDED)}/${PARTS_NEEDED}`, boat.parts >= PARTS_NEEDED],
-                ['Steer the boat to the escape flare', quest.camp.escaped]];
+                ['Drive the boat out the channel, past the flare', quest.camp.escaped]];
       }
       if (map === 'graveyard') {
         const q = quest.graveyard, on = mapGens('graveyard').filter((g) => g.running).length, lit = q.braziers.filter(Boolean).length;
         return [[`Power the generators  ${on}/2`, on >= 2], [`Light the braziers  ${lit}/4`, lit >= 4], [`Skull relics on the altar  ${q.skulls}/3`, q.skulls >= 3],
-                ['Start the boat on the lake', q.escaped]];
+                ['Drive the boat out across the lake', q.escaped]];
       }
       const q = quest.mine, on = mapGens('mine').filter((g) => g.running).length, pulled = q.levers.filter(Boolean).length;
       return [[`Power the generators  ${on}/2`, on >= 2], [`Pull the breakers  ${pulled}/3`, pulled >= 3], [`Collect fuel canisters  ${q.fuel}/3`, q.fuel >= 3],
               ['Ram the cart through the rock fall', q.tunnel],
-              ['Take the boat on the underground lake', q.escaped]];
+              ['Drive the boat out of the mountain', q.escaped]];
     }
     const mapReady = (map) => objectiveLines(map).slice(0, -1).every(([, done]) => done);
     // a sign at each map's start with the objectives ticked off
@@ -9413,19 +9704,31 @@
     const braziers = GY.braziers.map((p, k) => {
       const group = new THREE.Group(); group.position.copy(p); scene.add(group);
       const bb = makeBatch();
-      bb.add(new THREE.CylinderGeometry(0.1, 0.14, 0.6, 8), stoneMat, 0, 0.3, 0);
-      bb.add(new THREE.CylinderGeometry(0.16, 0.16, 0.05, 10), stoneMat, 0, 0.62, 0);
-      bb.add(new THREE.CylinderGeometry(0.2, 0.12, 0.12, 12, 1, true), ironMat, 0, 0.7, 0);
-      bb.add(new THREE.TorusGeometry(0.2, 0.012, 6, 16), ironMat, 0, 0.76, 0, Math.PI / 2, 0, 0);
-      for (let i = 0; i < 4; i++) { const a = (i / 4) * Math.PI * 2; bb.add(new THREE.ConeGeometry(0.02, 0.1, 4), ironMat, Math.cos(a) * 0.2, 0.8, Math.sin(a) * 0.2); }
-      bb.add(new THREE.CylinderGeometry(0.17, 0.17, 0.03, 12), new THREE.MeshStandardMaterial({ color: 0x1a120c, roughness: 1 }), 0, 0.7, 0);   // coals
+      // a carved stone plinth, a wrought-iron tripod with curled feet, a riveted bowl with spiked rim, and a bed of coals
+      bb.add(new THREE.CylinderGeometry(0.2, 0.24, 0.08, 8), stoneMat, 0, 0.04, 0);
+      bb.add(new THREE.CylinderGeometry(0.09, 0.12, 0.42, 8), stoneMat, 0, 0.29, 0);
+      for (let i = 0; i < 3; i++) {
+        const a = (i / 3) * Math.PI * 2 + 0.3, c = Math.cos(a), sn = Math.sin(a);
+        bb.add(new THREE.CylinderGeometry(0.012, 0.015, 0.58, 6), ironMat, c * 0.13, 0.38, sn * 0.13, sn * 0.32, 0, -c * 0.32);   // leg
+        bb.add(new THREE.TorusGeometry(0.035, 0.008, 5, 10, Math.PI * 1.4), ironMat, c * 0.22, 0.06, sn * 0.22, 0, -a, 0);        // curled foot
+      }
+      bb.add(new THREE.CylinderGeometry(0.16, 0.16, 0.05, 10), stoneMat, 0, 0.53, 0);
+      bb.add(new THREE.SphereGeometry(0.22, 14, 8, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2), ironMat, 0, 0.78, 0, 0, 0, 0, 1, 0.65, 1);   // bowl
+      bb.add(new THREE.TorusGeometry(0.22, 0.014, 6, 20), ironMat, 0, 0.78, 0, Math.PI / 2, 0, 0);
+      for (let i = 0; i < 12; i++) { const a = (i / 12) * Math.PI * 2; bb.add(new THREE.SphereGeometry(0.008, 5, 4), ironMat, Math.cos(a) * 0.2, 0.7, Math.sin(a) * 0.2); }   // rivets
+      for (let i = 0; i < 6; i++) { const a = (i / 6) * Math.PI * 2; bb.add(new THREE.ConeGeometry(0.018, 0.12, 4), ironMat, Math.cos(a) * 0.22, 0.84, Math.sin(a) * 0.22); }
+      const coal = new THREE.MeshStandardMaterial({ color: 0x1a120c, roughness: 1, emissive: 0x401000, emissiveIntensity: 0.4 });
+      bb.add(new THREE.CylinderGeometry(0.19, 0.19, 0.03, 14), coal, 0, 0.77, 0);
+      for (let i = 0; i < 9; i++) bb.add(new THREE.DodecahedronGeometry(0.035, 0), coal, (Math.random() - 0.5) * 0.24, 0.79, (Math.random() - 0.5) * 0.24, Math.random() * 3, Math.random() * 3, 0);
       bb.build(group, { rayTarget: true });
       addBoxCollider(p.x, 0, p.z, 0.3, 0.8, 0.3);
       const flames = [0, 1, 2].map((i) => {
         const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: i ? 0xff8a20 : 0xffd060, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
         s.position.set(0, 0.85 + i * 0.07, 0); s.scale.set(0.3, 0.45, 1); group.add(s); return s;
       });
-      return { k, p, group, flames, lit: false, src: null, t: Math.random() * 10, bowl: new THREE.Vector3(p.x, 0.75, p.z) };
+      const embers = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xff5a10, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
+      embers.scale.set(0.7, 0.3, 1); embers.position.y = 0.8; group.add(embers);
+      return { k, p, group, flames, embers, coal, lit: false, src: null, t: Math.random() * 10, bowl: new THREE.Vector3(p.x, 0.75, p.z) };
     });
     function lightBrazier(b) {
       if (b.lit || monsterBlocked()) return;
@@ -9448,13 +9751,27 @@
       return mergeGeometries(parts, false);
     })();
     const altarSlots = [-0.28, 0, 0.28].map((dx) => ({ pos: new THREE.Vector3(GY.altar.x + dx, 0.455, GY.altar.z), skull: null }));
+    const skullSocketMat = new THREE.MeshBasicMaterial({ color: 0x050505 }), skullRuneMat = new THREE.MeshBasicMaterial({ color: 0x1a1612 });
     const skulls = GY.skulls.map((p) => {
       const group = new THREE.Group(); group.position.copy(p); group.rotation.y = Math.random() * 6; scene.add(group);
       const m = new THREE.Mesh(skullGeo, skullMat); m.castShadow = true; group.add(m);
-      for (const s of [-1, 1]) { const e = new THREE.Mesh(new THREE.SphereGeometry(0.016, 8, 6), new THREE.MeshBasicMaterial({ color: 0x050505 })); e.position.set(s * 0.024, 0.07, 0.058); group.add(e); }
+      const sb = makeBatch();
+      for (const s of [-1, 1]) {
+        sb.add(new THREE.SphereGeometry(0.019, 10, 8), skullSocketMat, s * 0.024, 0.07, 0.054);                                         // deep sockets
+        sb.add(new THREE.SphereGeometry(0.014, 8, 6), skullMat, s * 0.038, 0.052, 0.05, 0, 0, 0, 1, 0.6, 0.8);                        // cheekbones
+        sb.add(new THREE.TorusGeometry(0.022, 0.004, 5, 12, Math.PI), skullMat, s * 0.024, 0.074, 0.06, 0, 0, 0);                    // brow ridges
+      }
+      sb.add(new THREE.ConeGeometry(0.009, 0.018, 3), skullSocketMat, 0, 0.048, 0.064, -Math.PI / 2 + 0.3, 0, Math.PI);   // nose hole
+      for (let t = 0; t < 8; t++) sb.add(UNIT_BOX, skullMat, -0.021 + t * 0.006, 0.026, 0.056, 0, 0, 0, 0.0045, 0.012, 0.006);   // teeth
+      for (let t = 0; t < 5; t++) sb.add(UNIT_BOX, skullRuneMat, -0.03 + t * 0.015, 0.1 + (t % 2) * 0.01, 0.03, 0.3, 0.6 * (t - 2), 0, 0.003, 0.02, 0.002);   // carved runes
+      sb.build(group);
+      const eyeMat = new THREE.MeshBasicMaterial({ color: 0x70ff60, transparent: true, opacity: 0.9, fog: false });
+      for (const s of [-1, 1]) { const e = new THREE.Mesh(new THREE.SphereGeometry(0.008, 8, 6), eyeMat); e.position.set(s * 0.024, 0.07, 0.06); group.add(e); }
+      const eyeGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0x70ff60, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false }));
+      eyeGlow.scale.set(0.12, 0.06, 1); eyeGlow.position.set(0, 0.07, 0.07); group.add(eyeGlow);
       const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0x7cff6a, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false }));
       glow.scale.set(0.35, 0.35, 1); glow.position.y = 0.07; group.add(glow);
-      return { group, glow, held: -1, placed: false, vel: new THREE.Vector3(), falling: false, fly: null };
+      return { group, glow, eyeMat, eyeGlow, held: -1, placed: false, vel: new THREE.Vector3(), falling: false, fly: null };
     });
     function placeSkull(s, slot) {
       if (monsterBlocked()) { s.held = -1; s.falling = true; s.vel.set(0, 0, 0); s.fly = null; slot.reserved = false; return; }
@@ -9497,11 +9814,18 @@
     const fuelCans = MN.fuel.map((p, k) => {
       const group = new THREE.Group(); group.position.copy(p); group.rotation.y = k * 1.3; scene.add(group);
       const fb = makeBatch();
-      const red = new THREE.MeshStandardMaterial({ color: 0xb0201a, map: grimeTex, roughness: 0.5, metalness: 0.4 });
-      fb.add(UNIT_BOX, red, 0, 0.1, 0, 0, 0, 0, 0.13, 0.2, 0.08);
-      fb.add(UNIT_BOX, red, 0, 0.215, -0.02, 0, 0, 0, 0.1, 0.03, 0.04);                       // handle
-      fb.add(new THREE.CylinderGeometry(0.012, 0.014, 0.04, 8), ironMat, 0.045, 0.22, 0.02, 0.4, 0, -0.5);   // spout
-      fb.add(UNIT_BOX, new THREE.MeshStandardMaterial({ color: 0xe8d040, roughness: 0.6 }), 0, 0.11, 0.041, 0, 0, 0, 0.07, 0.07, 0.002);   // hazard label
+      const red = new THREE.MeshStandardMaterial({ color: 0xa01c16, map: grimeTex, roughness: 0.42, metalness: 0.65 });
+      const steelC = new THREE.MeshStandardMaterial({ color: 0x7a7e80, roughness: 0.35, metalness: 0.9 });
+      fb.add(bevelBox(0.14, 0.2, 0.085, 0.012), red, 0, 0.1, 0);                                                  // body, rounded edges
+      for (const f of [-1, 1]) for (const sd of [-1, 1]) fb.add(UNIT_BOX, red, sd * 0.025, 0.1, f * 0.044, 0, 0, sd * 0.62, 0.012, 0.2, 0.006);   // the embossed X ribs
+      for (const f of [-1, 1]) fb.add(UNIT_BOX, red, 0, 0.1, f * 0.044, 0, 0, 0, 0.12, 0.012, 0.006);
+      fb.add(UNIT_BOX, red, 0, 0.1, 0, 0, 0, 0, 0.145, 0.205, 0.004);                                                // welded seam round the middle
+      for (const x of [-0.03, 0, 0.03]) fb.add(UNIT_BOX, red, x, 0.225, -0.012, 0, 0, 0, 0.012, 0.045, 0.02);        // the triple handle
+      fb.add(UNIT_BOX, red, 0, 0.245, -0.012, 0, 0, 0, 0.085, 0.012, 0.02);
+      fb.add(new THREE.CylinderGeometry(0.014, 0.016, 0.03, 10), steelC, 0.046, 0.21, 0.022, 0.5, 0, -0.5);         // spout neck
+      fb.add(new THREE.CylinderGeometry(0.018, 0.018, 0.012, 10), steelC, 0.054, 0.224, 0.028, 0.5, 0, -0.5);       // cap
+      fb.add(UNIT_BOX, steelC, 0.03, 0.222, 0.015, 0, 0, 0.3, 0.03, 0.006, 0.008);                                   // cap lever
+      fb.add(new THREE.PlaneGeometry(0.06, 0.05), new THREE.MeshStandardMaterial({ color: 0xe8d040, roughness: 0.6 }), 0, 0.13, 0.0455);   // hazard label
       fb.build(group, { rayTarget: true });
       const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xff8030, transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending, depthWrite: false }));
       glow.scale.set(0.5, 0.5, 1); glow.position.y = 0.12; group.add(glow);
@@ -9533,36 +9857,57 @@
     }
 
     // ---------- escape boats on the graveyard lake and the underground lake ----------
-    function makeEscapeBoat(map, start, end, level) {
-      const group = new THREE.Group(); group.position.set(start.x, level - 0.04, start.z); scene.add(group);
-      const hb = makeBatch();
-      const hullWood = new THREE.MeshStandardMaterial({ map: woodTex, color: 0x7a5a3c, roughness: 0.85 });
-      hb.add(UNIT_BOX, hullWood, 0, 0.02, 0, 0, 0, 0, 1.4, 0.04, 0.66);
-      for (const s of [-1, 1]) hb.add(UNIT_BOX, hullWood, 0, 0.13, s * 0.34, s * 0.25, 0, 0, 1.4, 0.24, 0.04);
-      hb.add(UNIT_BOX, hullWood, -0.71, 0.13, 0, 0, 0, 0, 0.04, 0.24, 0.7);                     // transom
-      const bow = new THREE.ConeGeometry(0.36, 0.5, 4, 1, true); bow.rotateZ(-Math.PI / 2); bow.rotateX(Math.PI / 4); bow.scale(1, 0.55, 1);
-      hb.add(bow, hullWood, 0.95, 0.13, 0);
-      for (const x of [-0.25, 0.35]) hb.add(UNIT_BOX, trimMat, x, 0.18, 0, 0, 0, 0, 0.18, 0.03, 0.64);   // seats
-      hb.add(UNIT_BOX, darkMetal, -0.78, 0.22, 0, 0, 0, 0, 0.14, 0.16, 0.14);                  // little outboard
-      hb.add(new THREE.CylinderGeometry(0.02, 0.02, 0.4, 8), darkMetal, -0.8, 0.0, 0);
-      hb.add(new THREE.CylinderGeometry(0.035, 0.035, 0.03, 10), brassMat, -0.78, 0.31, 0);
-      hb.build(group);
+    // the very same boat as the camp's (hull, mechanical outboard, propeller, lantern, gauges), moored at each lake's
+    // jetty; once its map's tasks and repairs are done you start it and drive it out across the water to the edge
+    function makeEscapeBoat(map, start, end, level, yaw, lanes, dock) {
+      const group = new THREE.Group(); group.position.set(start.x, level, start.z); group.rotation.y = yaw; scene.add(group);
+      const vis = boatGroup.clone(true); vis.position.set(0, 0, 0); vis.rotation.set(0, 0, 0); group.add(vis);
+      const pairs = new Map(); { const a = [], b = []; boatGroup.traverse((o) => a.push(o)); vis.traverse((o) => b.push(o)); a.forEach((o, i) => pairs.set(o, b[i])); }
+      const cl = (o) => pairs.get(o);
+      for (const o of [zoneMarker, boatSpark, statusSprite, fuelLabel]) { const c = cl(o); if (c) c.visible = false; }
+      for (const p of parts) { const c = p.inst && cl(p.inst); if (c) c.visible = false; }                    // its parts are missing until you fit them
+      // its own fuel gauge
+      const fc = document.createElement('canvas'); fc.width = 256; fc.height = 128;
+      const ft = new THREE.CanvasTexture(fc); ft.colorSpace = THREE.SRGBColorSpace;
+      vis.traverse((o) => { if (o.isMesh && fuelGauge && o.material && o.material.map === fuelGauge.tex) o.material = new THREE.MeshBasicMaterial({ map: ft, fog: false }); });
       const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.035, 10, 8), new THREE.MeshStandardMaterial({ color: 0x220000, emissive: 0xff2010, emissiveIntensity: 1.5 }));
-      lamp.position.set(0.75, 0.33, 0); group.add(lamp);
-      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.12, 5), ironMat); post.position.set(0.75, 0.27, 0); group.add(post);
+      lamp.position.set(BOAT_L / 2 - 0.3, 0.5, 0); group.add(lamp);
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.2, 5), ironMat); post.position.set(BOAT_L / 2 - 0.3, 0.4, 0); group.add(post);
       const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xff2a1a, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false }));
       glow.scale.set(0.5, 0.5, 1); glow.position.copy(lamp.position); group.add(glow);
-      const col = addCol(start.x, level - 0.4, start.z, 1.3, 0.48, 0.6);                       // the floor you stand on
-      return { map, group, lamp, glow, col, start: start.clone(), end: end.clone(), level, t: -1, prev: new THREE.Vector3(start.x, 0, start.z) };
+      const col = addCol(start.x, level - 0.4, start.z, BOAT_L - 0.2, 0.48, BOAT_W - 0.2);       // the floor you stand on
+      const b = { map, group, vis, cl, lamp, glow, col, fc, ft, start: start.clone(), end: end.clone(), level, yaw0: yaw, yaw, speed: 0, t: -1, lanes, dock,
+                  prev: new THREE.Vector3(start.x, 0, start.z), repairs: { prop: false, plug: false }, fuelShown: -1 };
+      updateBoatCol(b);
+      return b;
     }
-    const escapeBoats = { graveyard: makeEscapeBoat('graveyard', GY.boatStart, GY.boatEnd, GY.lake.level), mine: makeEscapeBoat('mine', MN.boatStart, MN.boatEnd, MN.lake.level) };
-    escapeBoats.mine.group.rotation.y = Math.PI;                    // pointing west, at the water tunnel
+    function updateBoatCol(b) {                           // the floor collider: the boat's footprint as it turns (an axis-aligned box)
+      const p = b.group.position, c = Math.abs(Math.cos(b.yaw)), sn = Math.abs(Math.sin(b.yaw));
+      const hx = (BOAT_L / 2 - 0.1) * c + (BOAT_W / 2 - 0.1) * sn, hz = (BOAT_L / 2 - 0.1) * sn + (BOAT_W / 2 - 0.1) * c;
+      b.col.box.min.set(p.x - hx, b.level - 0.4, p.z - hz); b.col.box.max.set(p.x + hx, b.level + 0.08, p.z + hz);
+    }
+    function drawEscapeGauge(b, pct) {
+      if (Math.round(pct) === b.fuelShown) return;
+      b.fuelShown = Math.round(pct);
+      const g = b.fc.getContext('2d');
+      g.fillStyle = '#101418'; g.fillRect(0, 0, 256, 128);
+      g.fillStyle = pct >= 100 ? '#40e060' : '#e0a030'; g.fillRect(16, 76, 224 * pct / 100, 30);
+      g.strokeStyle = '#c8c8c8'; g.lineWidth = 3; g.strokeRect(16, 76, 224, 30);
+      g.fillStyle = '#e8e8e8'; g.font = 'bold 40px "Courier New", monospace'; g.textAlign = 'center'; g.fillText(`FUEL ${Math.round(pct)}%`, 128, 52);
+      b.ft.needsUpdate = true;
+    }
+    const escapeBoats = {
+      graveyard: makeEscapeBoat('graveyard', GY.boatStart, GY.boatEnd, GY.lake.level, GY.boatYaw,
+        [{ x0: GY.lake.x0, x1: GY.lake.x1, z0: GY.lake.z0, z1: GY.lake.z1 }], GY.dock),
+      mine: makeEscapeBoat('mine', MN.boatStart, MN.boatEnd, MN.lake.level, MN.boatYaw,
+        [{ x0: MINE.x - 49, x1: MN.lake.x1, z0: MN.lake.z0, z1: MN.lake.z1 }, MN.channel], MN.dock),
+    };
     const _ebL = new THREE.Vector3(), _ebHead = new THREE.Vector3();
     function escapeBoatAboard() {
       const b = escapeBoats[currentMap]; if (!b) return false;
       headWorld(_ebHead);
       b.group.worldToLocal(_ebL.copy(_ebHead));
-      return Math.abs(_ebL.x) < 0.75 && Math.abs(_ebL.z) < 0.4 && _ebL.y > -0.1 && _ebL.y < 1.2;
+      return Math.abs(_ebL.x) < BOAT_L / 2 + 0.05 && Math.abs(_ebL.z) < BOAT_W / 2 + 0.05 && _ebL.y > 0.1 && _ebL.y < 1.7;
     }
     function startEscapeBoat(b) {
       if (b.t >= 0 || ending) return;
@@ -9571,49 +9916,99 @@
         const left = objectiveLines(b.map).filter(([, done]) => !done).slice(0, 2).map(([l]) => l.replace(/\s+\d+\/\d+$/, ''));
         showToast('THE ENGINE WON\'T CATCH', left.join(' · ')); gameAudio.clunk(); return;
       }
-      b.t = 0;
+      b.t = 0; b.speed = 0;
+      showToast('THE ENGINE ROARS', renderer.xr.isPresenting ? 'Hold Trigger for throttle and look where you want to go: out past the edge!' : 'Arrow keys to drive: out past the edge of the lake!');
       b.lamp.material.emissive.setHex(0x30ff50); b.glow.material.color.setHex(0x40ff60);
       gameAudio.engine(true);
       controllers.forEach((c) => pulse(c, 0.6, 200));
-      if (!renderer.xr.isPresenting) { b.deskOff = camera.position.clone().sub(b.group.position); }
+      if (!renderer.xr.isPresenting) { b.deskOff = new THREE.Vector3(-Math.cos(b.yaw) * 3.2, 1.6, Math.sin(b.yaw) * 3.2); }
     }
-    const _ebD = new THREE.Vector3(), _ebPivot = new THREE.Vector3();
+    const _ebD = new THREE.Vector3(), _ebPivot = new THREE.Vector3(), _ebCam = new THREE.Vector3(), _ebQ = new THREE.Quaternion(), _ebUp = new THREE.Vector3(0, 1, 0);
+    function clampEscapeBoat(b) {
+      const p = b.group.position, mx = BOAT_L / 2 + 0.05, mz = BOAT_W / 2 + 0.05;
+      let best = null, bd = Infinity, bumped = false;
+      for (const L of b.lanes) {
+        const cx = THREE.MathUtils.clamp(p.x, L.x0 + mx, L.x1 - mx), cz = THREE.MathUtils.clamp(p.z, L.z0 + mz, L.z1 - mz);
+        const d = Math.hypot(p.x - cx, p.z - cz);
+        if (d < 1e-6) { best = null; bd = 0; break; }
+        if (d < bd) { bd = d; best = [cx, cz]; }
+      }
+      if (best) { p.x = best[0]; p.z = best[1]; bumped = true; }
+      const D = b.dock;                                     // keep clear of the jetty
+      if (D) {
+        const x0 = D.x0 - mx, x1 = D.x1 + mx, z0 = D.z0 - mz, z1 = D.z1 + mz;
+        if (p.x > x0 && p.x < x1 && p.z > z0 && p.z < z1) {
+          const pens = [[p.x - x0, 'x', x0], [x1 - p.x, 'x', x1], [p.z - z0, 'z', z0], [z1 - p.z, 'z', z1]].sort((a, c) => a[0] - c[0]);
+          p[pens[0][1]] = pens[0][2]; bumped = true;
+        }
+      }
+      if (bumped && Math.abs(b.speed) > 0.3) { b.speed *= 0.4; gameAudio.clunk(); controllers.forEach((c) => pulse(c, 0.5, 60)); }
+    }
+    function carryRig(pivot, dx, dz, dyaw) {             // move (and turn) you with the boat you're standing in
+      const pts = [playerRig.position, lastHeadPosition, lastPosition, ...hands.map((h) => h.last)];
+      for (const v of pts) {
+        v.x += dx; v.z += dz;
+        if (dyaw) { const rx = v.x - pivot.x, rz = v.z - pivot.z, c = Math.cos(dyaw), sn = Math.sin(dyaw); v.x = pivot.x + rx * c + rz * sn; v.z = pivot.z - rx * sn + rz * c; }
+      }
+      if (dyaw) playerRig.quaternion.premultiply(_ebQ.setFromAxisAngle(_ebUp, dyaw));
+    }
     function updateEscapeBoats(dt) {
       for (const b of Object.values(escapeBoats)) {
         const unlocked = quest[b.map].unlocked;
+        const fuelPct = b.map === 'mine' ? Math.min(100, quest.mine.fuel / 3 * 100) : 100;
+        drawEscapeGauge(b, fuelPct);
         if (b.t < 0) {
           b.glow.material.color.setHex(unlocked ? 0x40ff60 : 0xff2a1a);
           b.lamp.material.emissive.setHex(unlocked ? 0x30ff50 : 0xff2010);
-          b.group.position.y = b.level - 0.04 + 0.01 * Math.sin(performance.now() * 0.0016 + b.start.x);
+          b.group.position.y = b.level + 0.01 * Math.sin(performance.now() * 0.0016 + b.start.x);
+          updateBoatCol(b);
           continue;
         }
-        const DUR = 8;
-        b.t = Math.min(DUR, b.t + dt);
-        const f = b.t / DUR, e = f * f * (3 - 2 * f);
+        // running: Trigger is the throttle; it steers the way you look (desktop: the arrow keys)
+        b.t += dt;
+        const here = b.map === currentMap, vr = renderer.xr.isPresenting;
+        const aboard = here && vr && escapeBoatAboard();
+        let thr = 0, steer = 0;
+        if (aboard && playerRole !== 'monster') {
+          thr = controllers.some((c) => btn(c, 0)) ? 1 : 0;
+          camera.getWorldDirection(_ebCam);
+          if (Math.hypot(_ebCam.x, _ebCam.z) > 0.2) {
+            let d = Math.atan2(-_ebCam.z, _ebCam.x) - b.yaw; d = Math.atan2(Math.sin(d), Math.cos(d));
+            steer = THREE.MathUtils.clamp(d * 1.6, -1, 1);
+          }
+        } else if (here && !vr && b.deskOff) {
+          thr = deskBoat.up ? 1 : deskBoat.down ? -0.5 : 0;
+          steer = (deskBoat.left ? 1 : 0) - (deskBoat.right ? 1 : 0);
+        }
+        b.speed += thr * BOAT_ACCEL * dt;
+        b.speed *= Math.exp(-BOAT_DRAG * dt);
+        b.speed = THREE.MathUtils.clamp(b.speed, -BOAT_MAX_REV, BOAT_MAX_FWD);
+        const grip = Math.min(1, Math.abs(b.speed) / 0.8), prevYaw = b.yaw;
+        b.yaw += steer * BOAT_TURN * grip * Math.sign(b.speed) * dt;
         const prev = _ebPivot.copy(b.group.position);
-        b.group.position.set(b.start.x + (b.end.x - b.start.x) * e, b.level - 0.04, b.start.z + (b.end.z - b.start.z) * e);
-        _ebD.subVectors(b.group.position, prev); _ebD.y = 0;
-        b.col.box.min.set(b.group.position.x - 0.65, b.level - 0.4, b.group.position.z - 0.3);
-        b.col.box.max.set(b.group.position.x + 0.65, b.level + 0.08, b.group.position.z + 0.3);
-        if (renderer.xr.isPresenting && b.map === currentMap && escapeBoatAboard()) {      // carry you (and the physics' memory) along
-          playerRig.position.add(_ebD);
-          for (const h of hands) h.last.add(_ebD);
-          lastHeadPosition.add(_ebD); lastPosition.add(_ebD);
-        } else if (!renderer.xr.isPresenting && b.deskOff) {
+        b.group.position.x += Math.cos(b.yaw) * b.speed * dt;
+        b.group.position.z -= Math.sin(b.yaw) * b.speed * dt;
+        clampEscapeBoat(b);
+        b.group.position.y = b.level + 0.008 * Math.sin(b.t * 1.4);
+        b.group.rotation.set(0.015 * Math.sin(b.t * 1.1), b.yaw, 0.01 * Math.sin(b.t * 0.8) - b.speed * 0.01);
+        // the outboard swivels with the steering and its shaft spins
+        const mg = b.cl(motorGroup); if (mg) mg.rotation.y = -steer * 0.35;
+        if (engineParts.shaft) { const sh = b.cl(engineParts.shaft); if (sh) sh.rotation.x += (b.speed * 25 + 4) * dt; }
+        updateBoatCol(b);
+        _ebD.subVectors(b.group.position, prev);
+        if (aboard) carryRig(b.group.position, _ebD.x, _ebD.z, b.yaw - prevYaw);
+        else if (here && !vr && b.deskOff) {
+          b.deskOff.set(-Math.cos(b.yaw) * 3.2, 1.6, Math.sin(b.yaw) * 3.2);
           camera.position.copy(b.group.position).add(b.deskOff); orbit.target.copy(b.group.position); orbit.update();
         }
-        if (b.t >= DUR - 2.2 && !ending) beginEnding(b.map);
-        if (b.t >= DUR) { b.t = -2; gameAudio.engine(false); }
-      }
-      // keep the floor colliders under the moored boats
-      for (const b of Object.values(escapeBoats)) if (b.t === -1) {
-        b.col.box.min.set(b.group.position.x - 0.65, b.level - 0.4, b.group.position.z - 0.3);
-        b.col.box.max.set(b.group.position.x + 0.65, b.level + 0.08, b.group.position.z + 0.3);
+        // out past the edge of the map: the sunrise escape
+        const out = b.map === 'graveyard' ? b.group.position.x > GY.edgeX : b.group.position.x < MN.edgeX;
+        if (out && !ending && here && (aboard || !vr)) beginEnding(b.map);
       }
     }
 
     // ---------- the camp's escape flare on the far side of the lake ----------
-    const FLARE_POS = new THREE.Vector3(21.0, WATER_LEVEL, -4.0);
+    const FLARE_POS = new THREE.Vector3(CH.x1 - 5, WATER_LEVEL, CH.z);           // at the far end of the channel out of the lake
     const flare = (() => {
       const group = new THREE.Group(); group.position.copy(FLARE_POS); scene.add(group);
       const fb = makeBatch();
@@ -9636,7 +10031,7 @@
       flare.glow.scale.setScalar((ready ? 1.6 : 0.8) * (0.9 + 0.2 * Math.random()));
       flare.src.color = ready ? 0x60ff70 : 0xff3020;
       if (boat.parts !== campPartsShown) { campPartsShown = boat.parts; questChanged('camp'); }
-      if (ready && !ending && currentMap === 'camp' && playerRole !== 'monster' && boat.pos.distanceTo(_ebPivot.set(FLARE_POS.x, boat.pos.y, FLARE_POS.z)) < 1.8 &&
+      if (ready && !ending && currentMap === 'camp' && playerRole !== 'monster' && boat.pos.x > CH.x1 - 6 &&
           (boat.aboard || (!renderer.xr.isPresenting && deskBoat.engaged))) {
         quest.camp.escaped = true;
         beginEnding('camp');
@@ -9692,8 +10087,8 @@
       victoryGroup.visible = false;
       victoryEl.classList.remove('show');
       for (const b of Object.values(escapeBoats)) {             // the boats are back at their jetties for next time
-        b.t = -1; b.deskOff = null;
-        b.group.position.set(b.start.x, b.level - 0.04, b.start.z);
+        b.t = -1; b.deskOff = null; b.speed = 0; b.yaw = b.yaw0;
+        b.group.position.set(b.start.x, b.level, b.start.z); b.group.rotation.set(0, b.yaw0, 0); updateBoatCol(b);
       }
       gameAudio.engine(false);
       for (const m of ['camp', 'graveyard', 'mine']) { quest[m].escaped = false; questChanged(m); }
@@ -9860,8 +10255,13 @@
       // brazier flames
       for (const b of braziers) {
         b.t += dt;
+        // flickering: the flames, the coals' glow and the light it lends all waver together
+        const flick = 0.75 + 0.25 * Math.sin(b.t * 13) * Math.sin(b.t * 7.3 + 1) + 0.15 * Math.random();
+        b.embers.material.opacity = b.lit ? 0.5 * flick : 0;
+        b.coal.emissiveIntensity = b.lit ? 1.2 * flick : 0.15;
+        if (b.src) b.src.intensity = 4 * flick;
         for (const [i, s] of b.flames.entries()) {
-          s.material.opacity = b.lit ? 0.75 - i * 0.15 + 0.2 * Math.random() : 0;
+          s.material.opacity = b.lit ? (0.75 - i * 0.15) * flick + 0.15 * Math.random() : 0;
           s.scale.set(0.3 - i * 0.05 + 0.04 * Math.sin(b.t * 9 + i), 0.45 + 0.1 * Math.sin(b.t * 7 + i * 2), 1);
           s.position.y = 0.85 + i * 0.07 + 0.02 * Math.sin(b.t * 11 + i);
         }
@@ -9869,6 +10269,9 @@
       // skulls: glowing, flying to the altar (desktop), falling when dropped
       for (const s of skulls) {
         s.glow.material.opacity = (s.placed ? 0.7 : 0.45) + 0.15 * Math.sin(performance.now() * 0.004);
+        const eyeOn = 0.65 + 0.35 * Math.sin(performance.now() * 0.006 + s.group.position.x) * Math.sin(performance.now() * 0.011);   // the eyes pulse
+        s.eyeMat.color.setHex(s.placed ? 0xff4020 : 0x70ff60); s.eyeGlow.material.color.copy(s.eyeMat.color);
+        s.eyeMat.opacity = 0.5 + 0.5 * eyeOn; s.eyeGlow.material.opacity = 0.7 * eyeOn;
         if (s.fly) {
           s.fly.t = Math.min(1, s.fly.t + dt * 0.8);
           const e = s.fly.t * s.fly.t * (3 - 2 * s.fly.t);
@@ -10147,18 +10550,20 @@
       keys.forEach((cat, ci) => {
         const x = 30 + ci * colW;
         g.fillStyle = '#c8b894'; g.font = 'bold 22px "Courier New", monospace'; g.fillText(SHOP[cat].label, x + 4, 128);
+        const nItems = SHOP[cat].items.length, step = Math.min(92, (H - 160) / nItems), hh = step - 10;
         SHOP[cat].items.forEach(([id, name, price, col], k) => {
-          const y = 150 + k * 92, w = colW - 14, h = 80, key = `${cat}:${id}`;
+          const y = 146 + k * step, w = colW - 14, h = hh, key = `${cat}:${id}`;
           const owned = save.owned.includes(key), worn = save.equipped[cat] === id;
           const hov = uiButton(p, 'buy:' + key, x, y, w, h);
           roundRect(g, x, y, w, h, 10);
           g.fillStyle = worn ? 'rgba(40,90,40,0.92)' : hov ? 'rgba(70,60,48,0.95)' : 'rgba(30,26,22,0.92)'; g.fill();
           g.lineWidth = worn || hov ? 4 : 2; g.strokeStyle = worn ? '#8aff9a' : hov ? '#d8c8a0' : 'rgba(216,200,160,0.4)'; g.stroke();
-          if (col !== undefined) { g.fillStyle = '#' + col.toString(16).padStart(6, '0'); g.beginPath(); g.arc(x + 22, y + 28, 10, 0, Math.PI * 2); g.fill(); }
-          g.fillStyle = '#f0e6d0'; g.font = 'bold 19px "Courier New", monospace'; g.fillText(name, x + (col !== undefined ? 40 : 14), y + 28);
-          g.font = '17px "Courier New", monospace';
+          const ty = y + h * 0.36, by = y + h * 0.75;
+          if (col !== undefined) { g.fillStyle = '#' + col.toString(16).padStart(6, '0'); g.beginPath(); g.arc(x + 22, ty, 9, 0, Math.PI * 2); g.fill(); }
+          g.fillStyle = '#f0e6d0'; g.font = `bold ${h < 70 ? 16 : 19}px "Courier New", monospace`; g.fillText(name, x + (col !== undefined ? 38 : 14), ty);
+          g.font = `${h < 70 ? 15 : 17}px "Courier New", monospace`;
           g.fillStyle = worn ? '#8aff9a' : owned ? '#c8e0ff' : save.coins >= price ? '#ffd27a' : '#ff7a6a';
-          g.fillText(worn ? 'EQUIPPED' : owned ? 'OWNED · WEAR' : `${price} COINS`, x + 14, y + 58);
+          g.fillText(worn ? 'EQUIPPED' : owned ? 'OWNED · WEAR' : `${price} COINS`, x + 14, by);
         });
       });
       if (shopMsgT > 0) { g.fillStyle = '#ff8a6a'; g.font = 'bold 22px "Courier New", monospace'; g.textAlign = 'center'; g.fillText(shopMsg, W / 2, H - 22); g.textAlign = 'left'; }
@@ -10254,7 +10659,6 @@
       controllers.forEach((c, i) => {
         const left = c.userData.inputSource?.handedness === 'left';
         cosm[i].charmHook.visible = left && save.equipped.charm !== 'none';
-        cosm[i].charmHook.rotation.z = Math.sin(performance.now() * 0.004 + i) * 0.3;
       });
     }
 
@@ -11251,13 +11655,30 @@
       ai.state = state; ai.pathT = 0;
       if (!ai.path.length && state !== 'chase') { ai.state = 'look'; ai.lookT = 0.8 + Math.random(); ai.look0 = ai.heading; }   // nowhere to go: look round, then try again
     }
+    // where would they be by now? follow their last heading along open ground for a few metres
+    function predictEscape(nav) {
+      const v = ai.seenVel;
+      if (!v || v.lengthSq() < 0.09) return null;
+      const dir = v.clone().normalize(), dist = THREE.MathUtils.clamp(v.length() * 1.6, 2, 6);
+      let x = ai.lastSeen.x, z = ai.lastSeen.z, got = null;
+      for (let t = 0.5; t <= dist; t += 0.5) {
+        const nx = ai.lastSeen.x + dir.x * t, nz = ai.lastSeen.z + dir.z * t;
+        if (!circleFree(nav, nx, nz, AI_R, groundY(ai.map, nx, nz), true) || inAnyLake(ai.map, nx, nz, 0.2)) break;
+        x = nx; z = nz; got = true;
+      }
+      return got ? new THREE.Vector3(x, 0, z) : null;
+    }
     function pickPatrol() {
       const nav = NAV[ai.map], spots = patrolSpots(ai.map);
       // part-repaired generators and finished objectives draw it; otherwise wander between spots and random paths
       const juicy = ai.preview ? [] : spots.filter((s) => (s.kind === 'gen' && !s.g.running && s.g.progress > 0) || (s.kind === 'brazier' && s.b.lit) ||
         (s.kind === 'altar' && altarSlots.some((a) => a.skull)) || (s.kind === 'breaker' && s.l.pulled && s.l.pos.y < 1.4));
       let target;
-      if (juicy.length && Math.random() < 0.6) target = juicy[(Math.random() * juicy.length) | 0].p;
+      const now = performance.now(), heard = ai.preview ? [] : (ai.heard || []).filter((h) => now - h.t < 45000);
+      const running = ai.preview ? [] : spots.filter((s) => s.kind === 'gen' && s.g.running);
+      if (heard.length && Math.random() < 0.3) target = heard[(Math.random() * heard.length) | 0].p;                  // back to where it heard something
+      else if (juicy.length && Math.random() < 0.7) target = juicy[(Math.random() * juicy.length) | 0].p;
+      else if (running.length && Math.random() < 0.35) target = running[(Math.random() * running.length) | 0].p;    // check on the powered generators
       else if (Math.random() < 0.55) target = spots[(Math.random() * spots.length) | 0].p;
       else {
         for (let k = 0; k < 20; k++) { const n = (Math.random() * nav.free.length) | 0; if (nav.free[n]) { target = new THREE.Vector3(nodeX(nav, n), 0, nodeZ(nav, n)); break; } }
@@ -11268,7 +11689,8 @@
     }
     // loud things the AI hears
     function aiNoise(pos, radius, map = currentMap) {
-      if (!ai.active || ai.preview || map !== ai.map || ai.state === 'chase' || ai.state === 'stare' || ai.state === 'catch' || ai.slash) return;
+      if (!ai.active || ai.preview || map !== ai.map || ai.state === 'chase' || ai.state === 'stare' || ai.state === 'catch' || ai.state === 'stunned' || ai.slash) return;
+      ai.heard = ai.heard || []; ai.heard.push({ p: pos.clone(), t: performance.now() }); if (ai.heard.length > 4) ai.heard.shift();
       if (Math.hypot(pos.x - ai.pos.x, pos.z - ai.pos.z) > radius) return;
       ai.goal = pos.clone();
       goToward(ai.goal, 'investigate');
@@ -11302,6 +11724,26 @@
       return doorHit;
     }
     function startSlash(kind, onHit, dur = 0.75) { ai.slash = { t: 0, dur, kind, onHit, hit: false }; }
+    // five feelers fanned out ahead: if the way straight on is blocked close by, turn towards the clearest gap
+    const FEELERS = [0, 0.4, -0.4, 0.85, -0.85];
+    function feelerSteer(nav, want, len) {
+      if (len < 0.3) return 0;
+      const clear = FEELERS.map((a) => {
+        const h = want + a, sx = Math.sin(h), sz = Math.cos(h);
+        for (let k = 1; k <= 3; k++) {
+          const t = (k / 3) * len, x = ai.pos.x + sx * t, z = ai.pos.z + sz * t;
+          if (!circleFree(nav, x, z, AI_R * 0.85, groundY(ai.map, x, z), true) || inAnyLake(ai.map, x, z, 0.1)) return (k - 1) / 3;   // (doors don't count: it hacks through them)
+        }
+        return 1;
+      });
+      if (clear[0] >= 1) {                                    // straight ahead is clear: just ease away from close side walls
+        const side = (1 - clear[1]) - (1 - clear[2]);
+        return -side * 0.25;
+      }
+      let best = 0, bestScore = -1;
+      for (let i = 1; i < FEELERS.length; i++) { const sc = clear[i] - Math.abs(FEELERS[i]) * 0.15; if (sc > bestScore) { bestScore = sc; best = i; } }
+      return FEELERS[best] * (1 - clear[0]);
+    }
     function moveAlongPath(dt, speed) {
       const nav = NAV[ai.map];
       // shortcut: skip waypoints we can walk straight to
@@ -11311,9 +11753,12 @@
       _aiTo.set(wp.x - ai.pos.x, 0, wp.z - ai.pos.z);
       const d = _aiTo.length();
       if (d < 0.25) { ai.path.shift(); return ai.path.length === 0; }
-      const want = Math.atan2(_aiTo.x, _aiTo.z);
+      let want = Math.atan2(_aiTo.x, _aiTo.z);
+      want += feelerSteer(nav, want, Math.min(d, 0.8 + ai.speed * 0.45));     // bend round corners, posts, stones and railings
       let dh = want - ai.heading; dh = Math.atan2(Math.sin(dh), Math.cos(dh));
-      ai.heading += THREE.MathUtils.clamp(dh, -dt * 4.5, dt * 4.5);
+      // smooth steering: the turn rate eases in and out rather than snapping
+      ai.turnVel = (ai.turnVel || 0) + (THREE.MathUtils.clamp(dh * 6, -4.5, 4.5) - (ai.turnVel || 0)) * Math.min(1, dt * 10);
+      ai.heading += THREE.MathUtils.clamp(ai.turnVel * dt, -Math.abs(dh), Math.abs(dh));
       const turnSlow = THREE.MathUtils.clamp(1 - Math.abs(dh) / 1.6, 0.25, 1);
       ai.speed += (speed * turnSlow - ai.speed) * Math.min(1, dt * 3);
       const step = Math.min(d, ai.speed * dt);
@@ -11867,10 +12312,98 @@
     const P_WIND_D = new THREE.Vector3(-0.32, 0.4, -0.08), P_STRIKE_D = new THREE.Vector3(0.24, -0.32, 0.44);
     const _aS = new THREE.Vector3(), _aW = new THREE.Vector3(), _aQ = new THREE.Quaternion(), _aP = new THREE.Vector3();
     const _aKneel = new THREE.Vector3();
+    // ---------- stun ragdoll: it topples over (a falling body pivoting on its base, bouncing as it lands), its arms
+    //            flop as loose point masses held to the shoulders, nothing sinks into the ground, then it gets back up ----------
+    const RAG_LIE = Math.PI / 2 - 0.13, RAG_STAND = 2.6;
+    const _rgAxis = new THREE.Vector3(), _rgQ = new THREE.Quaternion(), _rgQ2 = new THREE.Quaternion(), _rgS = new THREE.Vector3(), _rgD = new THREE.Vector3(), _rgUp = new THREE.Vector3(0, 1, 0);
+    function ragdollStart() {
+      const nav = NAV[ai.map], L = AI_HEAD_H * 0.92;
+      // fall away from the shot; if that's into a wall, fall sideways, or forwards
+      const back = ai.knock && ai.knock.lengthSq() > 1e-4 ? ai.knock.clone().setY(0).normalize() : new THREE.Vector3(-Math.sin(ai.heading), 0, -Math.cos(ai.heading));
+      const cands = [back, back.clone().applyAxisAngle(_rgUp, 0.9), back.clone().applyAxisAngle(_rgUp, -0.9), back.clone().applyAxisAngle(_rgUp, 1.6), back.clone().applyAxisAngle(_rgUp, -1.6), back.clone().negate()];
+      let dir = cands[0];
+      for (const c of cands) {
+        let ok = true;
+        for (const f of [0.45, 0.8, 1.05]) {
+          const x = ai.pos.x + c.x * L * f, z = ai.pos.z + c.z * L * f;
+          if (!circleFree(nav, x, z, 0.16, groundY(ai.map, x, z), false) || inAnyLake(ai.map, x, z, 0)) { ok = false; break; }
+        }
+        if (ok) { dir = c; break; }
+      }
+      aiRoot.updateMatrixWorld(true);
+      const hands = aiParts.arms.map((arm) => { const p = arm.hand.getWorldPosition(new THREE.Vector3()); return { p, prev: p.clone().addScaledVector(dir, -0.04) }; });
+      ai.rag = { dir, L, theta: 0.06, omega: 1.4, hands, roll: (Math.random() - 0.5) * 0.5, loll: (Math.random() - 0.5) * 1.2, landed: false };
+    }
+    function animateRagdoll(dt) {
+      if (!ai.rag) ragdollStart();
+      const R = ai.rag, L = R.L, g0 = groundY(ai.map, ai.pos.x, ai.pos.z);
+      const standing = ai.stunT < RAG_STAND;
+      if (!standing) {
+        // falling: an inverted pendulum about its base, bouncing a little when it hits the ground, then lying still
+        R.omega += (9.8 / L) * Math.sin(R.theta) * dt * 0.85;
+        R.omega *= Math.exp(-0.4 * dt);
+        R.theta += R.omega * dt;
+        if (R.theta >= RAG_LIE) {
+          R.theta = RAG_LIE;
+          if (Math.abs(R.omega) > 0.5) { R.omega = -R.omega * 0.28; if (!R.landed) { R.landed = true; camera.getWorldPosition(_hCam); gameAudio.thud?.(_hCam.distanceTo(ai.pos)); } }
+          else R.omega = 0;
+        }
+        R.standFrom = R.theta;
+      } else {
+        // getting back up: slowly, pushing up off the ground
+        const f = THREE.MathUtils.smoothstep(RAG_STAND - ai.stunT, 0, RAG_STAND);
+        R.theta = (R.standFrom ?? RAG_LIE) * (1 - f);
+      }
+      // the body pivots about its base; its height never lets it sink into the floor
+      const sn = Math.sin(R.theta), cs = Math.cos(R.theta);
+      aiRoot.position.set(ai.pos.x + R.dir.x * L * sn, Math.max(g0 + 0.15, ai.pos.y + L * cs + 0.03), ai.pos.z + R.dir.z * L * sn);
+      _rgAxis.crossVectors(_rgUp, R.dir).normalize();
+      _rgQ.setFromAxisAngle(_rgAxis, R.theta);                 // tip the 'up' axis over towards the fall direction
+      _rgQ2.setFromEuler(new THREE.Euler(0, ai.heading, R.roll * sn, 'YXZ'));
+      aiRoot.quaternion.multiplyQuaternions(_rgQ, _rgQ2);
+      aiRoot.updateMatrixWorld(true);
+      // limp head
+      const lim = standing ? 1 - THREE.MathUtils.smoothstep(RAG_STAND - ai.stunT, 0, RAG_STAND) : 1;
+      aiParts.head.rotation.set(0.35 * lim + (Math.random() - 0.5) * 0.04, R.loll * lim, 0.3 * R.loll * lim, 'YXZ');
+      // the arms: loose point masses (Verlet) with gravity, the ground under them, held to the shoulders
+      aiParts.arms.forEach((arm, i) => {
+        const H = R.hands[i];
+        _rgS.set(arm.side * 0.21 * AI_TORSO.x, -0.14 * AI_TORSO.y, -0.1 * AI_TORSO.z);
+        aiRoot.localToWorld(_rgS);
+        if (!standing) {
+          const vx = (H.p.x - H.prev.x) * 0.97, vy = (H.p.y - H.prev.y) * 0.97, vz = (H.p.z - H.prev.z) * 0.97;
+          H.prev.copy(H.p);
+          H.p.x += vx; H.p.y += vy - 9.8 * dt * dt; H.p.z += vz;
+          const gy = groundY(ai.map, H.p.x, H.p.z) + 0.04;
+          if (H.p.y < gy) { H.p.y = gy; H.prev.x = H.p.x - vx * 0.6; H.prev.z = H.p.z - vz * 0.6; H.prev.y = H.p.y; }   // friction on the ground
+          _rgD.subVectors(H.p, _rgS);
+          const d = _rgD.length(), maxL = 0.56 * AI_SCALE;
+          if (d > maxL) H.p.copy(_rgS).addScaledVector(_rgD, maxL / d);
+          _aP.copy(H.p);
+          aiRoot.worldToLocal(_aP);
+        } else {
+          _aP.copy(H.p); aiRoot.worldToLocal(_aP);
+          const f = THREE.MathUtils.smoothstep(RAG_STAND - ai.stunT, 0.4, RAG_STAND);
+          _aKneel.set(arm.side * 0.3, -(AI_HEAD_H) / AI_SCALE + 0.06, 0.22);
+          _aP.lerp(_aKneel, f);
+        }
+        arm.hand.position.copy(_aP);
+        arm.hand.quaternion.copy(Q_REST);
+        arm.hand.scale.set(arm.side > 0 ? -HAND_SCALE : HAND_SCALE, HAND_SCALE, HAND_SCALE);
+        _aW.copy(WRIST_LOCAL).multiply(arm.hand.scale).applyQuaternion(arm.hand.quaternion).add(arm.hand.position);
+        _aS.set(arm.side * 0.21 * AI_TORSO.x, -0.14 * AI_TORSO.y, -0.1 * AI_TORSO.z);
+        solveArm(arm, _aS, _aW);
+      });
+      // a low collider where it lies
+      const mx = ai.pos.x + R.dir.x * L * sn * 0.5, mz = ai.pos.z + R.dir.z * L * sn * 0.5, hh = Math.max(0.3, L * cs + 0.1);
+      aiCol.box.min.set(mx - 0.3, ai.pos.y, mz - 0.3); aiCol.box.max.set(mx + 0.3, ai.pos.y + hh, mz + 0.3);
+    }
     function animateAI(dt, moving) {
+      if (ai.state === 'stunned') { animateRagdoll(dt); return; }
+      ai.rag = null;
       const chasing = ai.state === 'chase', stunned = ai.state === 'stunned';
       // stunned: thrown back, then slumped on its knees (eases in over 0.4 s, eases out over the last second), twitching
-      const kneel = stunned ? Math.min(THREE.MathUtils.smoothstep(ai.stunAge || 0, 0.15, 0.55), THREE.MathUtils.smoothstep(ai.stunT, 0, 1)) : 0;
+      const kneel = 0;
       const twitch = stunned ? (Math.random() - 0.5) * 0.08 * (0.4 + Math.random()) : 0;
       aiRoot.position.set(ai.pos.x, ai.pos.y + AI_HEAD_H + Math.abs(Math.sin(ai.stride * Math.PI)) * (chasing ? 0.05 : 0.025) - kneel * 0.42, ai.pos.z);
       aiRoot.rotation.set((chasing ? 0.18 : ai.state === 'stare' ? -0.06 + Math.sin(performance.now() * 0.006) * 0.03 : 0.06) * (1 - kneel) + kneel * 0.62 + twitch,
@@ -11951,6 +12484,8 @@
         if (seen || lit) {
           // first sight (or caught in your torch beam): it stops dead at the edge of the light, stares, then charges
           if (ai.state !== 'chase' && ai.state !== 'stare') { ai.state = 'stare'; ai.stareT = 1.1 + Math.random() * 0.8; ai.slash = null; ai.path = []; aiAudio.snarl(); }
+          if (ai.seenAt) { ai.seenVel = (ai.seenVel || new THREE.Vector3()).lerp(_aiTo.set((ph.x - ai.lastSeen.x) / 0.12, 0, (ph.z - ai.lastSeen.z) / 0.12), 0.5); }
+          ai.seenAt = true;
           ai.lastSeen.copy(ph); ai.lostT = 0;
         } else if (ai.state === 'chase') ai.lostT += 0.12;
       }
@@ -11972,7 +12507,7 @@
           ai.knock.multiplyScalar(Math.exp(-4.5 * dt));
         }
         if (ai.stunT <= 0) {                                   // it shakes it off, dazed: looks round, then back to its patrol
-          ai.state = 'look'; ai.lookT = 1.5; ai.look0 = ai.heading; ai.path = []; ai.lostT = 0; ai.stunAge = 0;
+          ai.state = 'look'; ai.lookT = 1.5; ai.look0 = ai.heading; ai.path = []; ai.lostT = 0; ai.stunAge = 0; ai.rag = null;
         }
       } else if (ai.state === 'stare') {
         ai.speed = 0;
@@ -11980,7 +12515,9 @@
         if ((ai.stareT -= dt) <= 0) { ai.state = 'chase'; ai.chaseT = 0; ai.pathT = 0; gameAudio.growl(); }
       } else if (ai.state === 'chase') {
         ai.chaseT += dt;
-        if (ai.lostT > AI_LOSE_T) {                            // they broke line of sight: go and search where they were last seen
+        if (ai.lostT > AI_LOSE_T) {                            // they broke line of sight: go and search where they were last seen...
+          ai.predict = predictEscape(nav);                    // ...then round the corner where they were heading
+          ai.seenAt = false;
           goToward(ai.lastSeen, 'search');
         } else {
           const target = ph && canSeeCached() ? ph : ai.lastSeen;
@@ -12012,8 +12549,14 @@
               ai.heading = Math.atan2(t.at.x - ai.pos.x, t.at.z - ai.pos.z);
               startSlash('sabotage', () => applySabotage(t));
             }
-            ai.lookT = ai.state === 'search' ? 0.8 + Math.random() * 0.8 : 2 + Math.random() * 2.5;   // a lost chase gives up quickly
-            ai.state = 'look'; ai.look0 = ai.heading;
+            if (ai.state === 'search' && ai.predict && !t) {   // check round the corner they ran towards before giving up
+              const p = ai.predict; ai.predict = null;
+              goToward(p, 'search');
+              if (ai.state === 'search') { moving = true; }
+            } else {
+              ai.lookT = ai.state === 'search' ? 0.8 + Math.random() * 0.8 : 2 + Math.random() * 2.5;   // a lost chase gives up quickly
+              ai.state = 'look'; ai.look0 = ai.heading;
+            }
           }
         }
         if (ai.state === 'patrol' && !ai.path.length && !ai.slash && ai.state !== 'look') pickPatrol();
@@ -12486,6 +13029,7 @@
     }
     enhanceWater(water.material);
     for (const L of extraLakes) enhanceWater(L.water.material);
+    enhanceWater(campChannelWater.material);
 
     // ---------- underwater: murk, a tint, and every sound muffled ----------
     const muffles = [];
@@ -13005,68 +13549,58 @@
       s.sp.position.copy(p); s.vel.copy(v); s.life = s.max = 1.4 + Math.random() * 1.2; s.size = 0.06 + Math.random() * 0.06;
       s.sp.material.rotation = Math.random() * 6; s.sp.visible = true;
     }
-    // racks: one per map, in a spot you'll pass early on
-    const RACK_SITES = [
-      { map: 'camp', x: FIRE.x - 2.6, z: FIRE.z + 2.4, face: [0, 0] },
-      { map: 'graveyard', x: GRAVE.x - 3.4, z: GRAVE.z + 22.6, face: [GRAVE.x, GRAVE.z + 26] },
-      { map: 'mine', x: MINE.x + 13.6, z: MINE.z - 5.2, face: [MINE.x + 12, MINE.z] },
-    ];
+    // the shotgun is hidden: each time you arrive on a map it lies in one of that map's cabins or structures, picked at random
     const mapFloor = (map, x, z) => (map === 'camp' ? floorAt(x, z) : 0);
     function freeSpotNear(map, x0, z0, w, d) {
       const _b = new THREE.Box3();
-      for (let r = 0; r <= 8; r += 0.4) {
-        const steps = Math.max(1, Math.round(r * 6));
+      for (let r = 0; r <= 1.2; r += 0.15) {
+        const steps = Math.max(1, Math.round(r * 12));
         for (let k = 0; k < steps; k++) {
           const a = (k / steps) * Math.PI * 2, x = x0 + Math.cos(a) * r, z = z0 + Math.sin(a) * r, y = mapFloor(map, x, z);
-          if (map === 'camp' && (inLakeArea(x, z) || waterAt(x, z))) continue;
-          if (map !== 'camp' && extraLakes.some((L) => L.map === map && x > L.x0 - 1 && x < L.x1 + 1 && z > L.z0 - 1 && z < L.z1 + 1)) continue;
-          _b.min.set(x - w / 2, y + 0.05, z - d / 2); _b.max.set(x + w / 2, y + 1.4, z + d / 2);
+          _b.min.set(x - w / 2, y + 0.04, z - d / 2); _b.max.set(x + w / 2, y + 0.3, z + d / 2);
           if (!colliders.some((c) => c.box.intersectsBox(_b))) return { x, z, y };
         }
       }
       return { x: x0, z: z0, y: mapFloor(map, x0, z0) };
     }
-    const stunGuns = RACK_SITES.map((site) => {
-      const spot = freeSpotNear(site.map, site.x, site.z, 1.4, 1.4);
-      const yaw = Math.atan2(site.face[0] - spot.x, site.face[1] - spot.z);   // the rack's front faces the way you come in
-      const rack = new THREE.Group(); rack.position.set(spot.x, spot.y, spot.z); rack.rotation.y = yaw; scene.add(rack);
-      const rb = makeBatch();
-      const rackWood = new THREE.MeshStandardMaterial({ map: woodTex, color: 0x5a3e28, roughness: 0.9 });
-      for (const sx of [-1, 1]) rb.add(UNIT_BOX, rackWood, sx * 0.42, 0.5, -0.05, 0, 0, 0, 0.07, 1.0, 0.07);
-      rb.add(UNIT_BOX, rackWood, 0, 0.68, -0.07, 0, 0, 0, 0.95, 0.5, 0.03);                          // backboard
-      rb.add(UNIT_BOX, rackWood, 0, 0.06, -0.05, 0, 0, 0, 0.95, 0.06, 0.3);                         // foot
-      for (const sx of [-1, 1]) rb.add(UNIT_BOX, ironMat, sx * 0.25, 0.6, -0.02, 0, 0, 0, 0.025, 0.05, 0.1);   // hooks
-      rb.add(UNIT_BOX, new THREE.MeshStandardMaterial({ color: 0x103040, emissive: 0x30c8ff, emissiveIntensity: 1.2 }), 0, 0.94, -0.05, 0, 0, 0, 0.9, 0.02, 0.02);
-      const signTex = canvasTexture(256, (g, s) => {
-        g.fillStyle = '#10202a'; g.fillRect(0, s * 0.3, s, s * 0.4);
-        g.strokeStyle = '#40d0ff'; g.lineWidth = 6; g.strokeRect(6, s * 0.3 + 6, s - 12, s * 0.4 - 12);
-        g.fillStyle = '#bff0ff'; g.font = 'bold 34px "Courier New", monospace'; g.textAlign = 'center'; g.textBaseline = 'middle';
-        g.fillText('STUN SHOTGUN', s / 2, s * 0.44); g.font = 'bold 24px "Courier New", monospace'; g.fillStyle = '#ffd060'; g.fillText('1 SHELL', s / 2, s * 0.58);
-      });
-      rb.add(new THREE.PlaneGeometry(0.6, 0.6), new THREE.MeshStandardMaterial({ map: signTex, transparent: true, alphaTest: 0.1, roughness: 0.8, emissive: 0x204050, emissiveMap: signTex }), 0, 0.84, -0.053);
-      rb.build(rack, { rayTarget: true });
-      const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0x40c8ff, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false }));
-      glow.scale.set(1.3, 1.3, 1); glow.position.set(0, 0.66, 0.05); rack.add(glow);
-      rack.updateMatrixWorld(true);
-      // AABB colliders for the posts and the board (rotated, so a little generous)
-      const c = Math.abs(Math.cos(yaw)), s = Math.abs(Math.sin(yaw));
-      const bx = spot.x - Math.sin(yaw) * 0.06, bz = spot.z - Math.cos(yaw) * 0.06;
-      addBoxCollider(bx, spot.y + 0.43, bz, c * 0.95 + s * 0.04, 0.5, s * 0.95 + c * 0.04);
-      for (const sx of [-1, 1]) {
-        const px = spot.x + Math.cos(yaw) * sx * 0.42 - Math.sin(yaw) * 0.05, pz = spot.z - Math.sin(yaw) * sx * 0.42 - Math.cos(yaw) * 0.05;
-        addBoxCollider(px, spot.y, pz, 0.08, 1.0, 0.08);
+    const GUN_SPOTS = (() => {
+      const S = { camp: [], graveyard: [], mine: [] };
+      // camp: the main cabin's table and bed, and the bed in each of the four cabins
+      S.camp.push({ x: CABIN.x + 0.2, y: 0.665, z: CABIN.z + 0.75, yaw: 0.3, label: 'the main cabin' });
+      S.camp.push({ x: CABIN.x - 1.3, y: 0.56, z: CABIN.z - 1.2, yaw: Math.PI / 2, label: 'the main cabin\'s back room' });
+      for (const c of CABINS) { const p = cabinSpot(c, -0.85, 0.5, -0.15); S.camp.push({ x: p.x, y: p.y, z: p.z, yaw: CABIN_FACE[c.face], label: 'a cabin' }); }
+      // graveyard: in the crypt's portico (either side of the door), on the pier, beside the altar
+      const C = GY.crypt;
+      S.graveyard.push({ x: C.x - 1.5, y: 0.43, z: C.z + 2.05, yaw: Math.PI / 2, label: 'the crypt' }, { x: C.x + 1.5, y: 0.43, z: C.z + 2.05, yaw: -Math.PI / 2, label: 'the crypt' });
+      S.graveyard.push({ x: GY.dock.x0 + 1.2, y: 0.085, z: (GY.dock.z0 + GY.dock.z1) / 2, yaw: 0.2, label: 'the pier' });
+      { const p = freeSpotNear('graveyard', GY.altar.x + 0.9, GY.altar.z + 0.3, 0.6, 0.3); S.graveyard.push({ x: p.x, y: 0.03, z: p.z, yaw: 1.1, label: 'the altar' }); }
+      // mine: the storage chambers, the scaffold deck, the ore cavern and the hub
+      for (const [x, z, label] of [[-5, 15.8, 'the north chamber'], [1, -18.6, 'the south cavern'], [-15, -20.2, 'the ore cavern'], [-10, 2.4, 'the hub']]) {
+        const p = freeSpotNear('mine', MINE.x + x, MINE.z + z, 0.6, 0.3); S.mine.push({ x: p.x, y: 0.03, z: p.z, yaw: Math.random() * 3, label });
       }
+      S.mine.push({ x: MN.scaffold.split + 1.8, y: MN.scaffold.deck + 0.025, z: MN.scaffold.z + 0.2, yaw: Math.PI / 2, label: 'the scaffold' });
+      return S;
+    })();
+    const stunGuns = ['camp', 'graveyard', 'mine'].map((map) => {
       const gun = makeShotgun();
       scene.add(gun.group);
-      // resting across the hooks: barrel along the rack, trigger side down
-      const restPos = new THREE.Vector3(0.08, 0.64, 0.0).applyMatrix4(rack.matrixWorld);
-      const restQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, yaw + Math.PI / 2, 0, 'YXZ'));
-      const sg = { map: site.map, rack, glow, gun, restPos, restQuat, held: -1, shells: 1, onRack: true, vel: new THREE.Vector3(), kick: 0, flashT: 0,
+      const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0x40c8ff, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false }));
+      glow.scale.set(0.55, 0.55, 1); scene.add(glow);
+      const sg = { map, rack: glow, glow, gun, restPos: new THREE.Vector3(), restQuat: new THREE.Quaternion(), spot: null, held: -1, shells: 1, onRack: true, vel: new THREE.Vector3(), kick: 0, flashT: 0,
                    emptyNoteT: 0, lastHand: new THREE.Vector3(), handVel: new THREE.Vector3(), told: false };
+      hideStunGun(sg);
       drawShells(sg);
       putOnRack(sg);
       return sg;
     });
+    function hideStunGun(sg) {                             // pick this run's hiding place, lying on its side
+      const list = GUN_SPOTS[sg.map];
+      const p = list[(Math.random() * list.length) | 0];
+      sg.spot = p;
+      sg.restPos.set(p.x, p.y + 0.028, p.z);
+      sg.restQuat.setFromEuler(new THREE.Euler(0, p.yaw, Math.PI / 2, 'YXZ'));
+      sg.glow.position.set(p.x, p.y + 0.06, p.z);
+    }
     function drawShells(sg) {
       const g = sg.gun.canvas.getContext('2d'), W = sg.gun.canvas.width, H = sg.gun.canvas.height;
       g.clearRect(0, 0, W, H);
@@ -13081,7 +13615,7 @@
       sg.gun.group.position.copy(sg.restPos); sg.gun.group.quaternion.copy(sg.restQuat);
       sg.gun.group.visible = true;
     }
-    function resetStunGuns() { for (const sg of stunGuns) { sg.shells = 1; sg.told = false; drawShells(sg); putOnRack(sg); } }
+    function resetStunGuns() { for (const sg of stunGuns) { sg.shells = 1; sg.told = false; hideStunGun(sg); drawShells(sg); putOnRack(sg); } }
     const _sgGrip = new THREE.Vector3(), _sgMuz = new THREE.Vector3(), _sgDir = new THREE.Vector3(), _sgQ = new THREE.Quaternion(), _sgT = new THREE.Vector3(), _sgV = new THREE.Vector3();
     const gunPrev = [[false, false], [false, false]];
     function fireStunGun(sg, i) {
@@ -13128,7 +13662,7 @@
         chaseAudio.setTarget(0);
         for (let k = 0; k < 60; k++) {
           const a = Math.random() * Math.PI * 2, u = Math.random() * 2 - 1, sp = 1 + Math.random() * 3;
-          fxSparks.spawn(ai.pos.x, ai.pos.y + AI_HEAD_H * (0.3 + Math.random() * 0.7), ai.pos.z, Math.cos(a) * sp, u * sp + 1, Math.sin(a) * sp, 0.3 + Math.random() * 0.5, Math.random() < 0.3 ? C_SPARK2 : C_SPARK, { grav: 4, drag: 2 });
+          fxSparks.spawn(ai.pos.x, ai.pos.y + AI_HEAD_H * (0.3 + Math.random() * 0.7) * 0.5, ai.pos.z, Math.cos(a) * sp, u * sp + 1, Math.sin(a) * sp, 0.3 + Math.random() * 0.5, Math.random() < 0.3 ? C_SPARK2 : C_SPARK, { grav: 4, drag: 2 });
         }
         showToast('DIRECT HIT!', `It's stunned for ${STUN_TIME} seconds. RUN!`);
       } else {
@@ -13144,7 +13678,7 @@
       const vr = renderer.xr.isPresenting && locomotionReady;
       for (const sg of stunGuns) {
         const here = sg.map === currentMap;
-        sg.glow.material.opacity = sg.onRack ? 0.35 + 0.2 * Math.sin(performance.now() * 0.004) : 0.12;
+        sg.glow.material.opacity = sg.onRack ? 0.22 + 0.14 * Math.sin(performance.now() * 0.004) : 0; sg.glow.visible = sg.onRack;
         // the muzzle flash and the kick settle
         sg.flashT = Math.max(0, sg.flashT - dt);
         sg.gun.flash.material.opacity = sg.flashT > 0 ? 1 : 0; sg.gun.flash2.material.opacity = sg.flashT > 0 ? 0.8 : 0;
@@ -13213,13 +13747,15 @@
       const showStun = stunned && ai.map === currentMap;
       stunGlow.visible = showStun;
       if (showStun) {
-        stunGlow.position.set(ai.pos.x, ai.pos.y + AI_HEAD_H * 0.6, ai.pos.z);
+        _sgT.copy(ai.pos).lerp(aiRoot.position, 0.5);                 // the middle of the (fallen) body
+        stunGlow.position.copy(_sgT).setY(_sgT.y + 0.1);
         stunGlow.material.opacity = (Math.random() < 0.5 ? 0.15 : 0.55) * Math.min(1, ai.stunT);
         if (Math.random() < 0.8) {
           const n = 1 + ((Math.random() * 4) | 0);
           for (let k = 0; k < n; k++) {
             const a = Math.random() * Math.PI * 2, r = 0.15 + Math.random() * 0.25, sp = 0.6 + Math.random() * 2.2;
-            fxSparks.spawn(ai.pos.x + Math.cos(a) * r, ai.pos.y + 0.1 + Math.random() * (AI_HEAD_H * 0.9), ai.pos.z + Math.sin(a) * r,
+            _sgV.copy(ai.pos).lerp(aiRoot.position, Math.random());      // anywhere along the body, standing or lying
+            fxSparks.spawn(_sgV.x + Math.cos(a) * r * 0.6, _sgV.y + 0.05 + Math.random() * 0.15, _sgV.z + Math.sin(a) * r * 0.6,
               Math.cos(a) * sp, Math.random() * 2, Math.sin(a) * sp, 0.15 + Math.random() * 0.3, Math.random() < 0.25 ? C_SPARK2 : C_SPARK, { grav: 5, drag: 1.5 });
           }
         }
@@ -13249,6 +13785,385 @@
     for (const m of ['camp', 'graveyard', 'mine']) buildNav(m);
 
     // =====================================================================
+    //  BOAT REPAIRS ON EVERY MAP, AND A MONSTER THAT LISTENS
+    //  - the graveyard's and the mine's boats (the same boat as the camp's) are missing their propeller and spark
+    //    plug: find them on the map, carry them (Grip) to the outboard and let go to fit them
+    //  - lighting braziers, laying skulls, pulling breakers, taking fuel and fitting parts all make noise the AI
+    //    monster comes to investigate (on top of failed skill checks, smashed glass, gunshots and running)
+    // =====================================================================
+    const EX_PART_SPOTS = {
+      graveyard: { prop: [-15.5, 23.2], plug: [21.5, 4.5] },
+      mine: { prop: [-19.5, -15.6], plug: [-5.2, 14.6] },
+    };
+    const exParts = [];
+    for (const map of ['graveyard', 'mine']) {
+      for (const kind of ['prop', 'plug']) {
+        const [ox, oz] = EX_PART_SPOTS[map][kind];
+        const base = map === 'graveyard' ? GRAVE : MINE;
+        const spot = freeSpotNear(map, base.x + ox, base.z + oz, 0.3, 0.3);
+        const mesh = makePart(kind);
+        const shape = PART_SHAPE[kind];
+        mesh.position.set(spot.x, shape.r + 0.03, spot.z);
+        mesh.rotation.set(...shape.rest);
+        scene.add(mesh);
+        const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: kind === 'prop' ? 0x80c8ff : 0xffa040, transparent: true, opacity: 0.5,
+          blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+        glow.scale.set(0.3, 0.3, 1); mesh.add(glow);
+        exParts.push({ map, kind, mesh, glow, home: mesh.position.clone(), r: shape.r, held: -1, installed: false, vel: new THREE.Vector3(), falling: false,
+                       name: kind === 'prop' ? 'Propeller' : 'Spark Plug' });
+      }
+    }
+    const exRepairCount = (map) => exParts.filter((p) => p.map === map && p.installed).length;
+    const _xpZone = new THREE.Vector3(), _xpHand = new THREE.Vector3(), _xpPrev = [new THREE.Vector3(), new THREE.Vector3()], _xpVel = [new THREE.Vector3(), new THREE.Vector3()];
+    function boatEngineZone(b, out) { return out.set(-BOAT_L / 2 - 0.05, 0.36, 0).applyMatrix4(b.group.matrixWorld); }
+    function fitExPart(p) {
+      const b = escapeBoats[p.map];
+      p.installed = true; p.held = -1; p.mesh.visible = false;
+      b.repairs[p.kind] = true;
+      const camp = parts.find((q) => q.kind === p.kind);
+      const c = camp && camp.inst && b.cl(camp.inst); if (c) c.visible = true;     // it appears on the motor
+      boatAudio.clunk();
+      controllers.forEach((c2) => pulse(c2, 0.6, 60));
+      const n = exRepairCount(p.map);
+      showToast(`Boat repairs: ${n}/2`, n >= 2 ? 'The outboard is whole again' : `${p.name} fitted to the outboard`);
+      aiNoise(boatEngineZone(b, _xpZone).clone(), 14, p.map);
+      questChanged(p.map);
+    }
+    // the repairs count towards each map's objectives (just before the last line: the escape itself)
+    {
+      const baseLines = objectiveLines;
+      objectiveLines = function (map) {
+        const lines = baseLines(map);
+        if (map === 'graveyard' || map === 'mine') {
+          const n = exRepairCount(map);
+          lines.splice(lines.length - 1, 0, [`Repair the boat: propeller, spark plug  ${n}/2`, n >= 2]);
+        }
+        return lines;
+      };
+      ['graveyard', 'mine'].forEach(questChanged);
+    }
+    const exGripPrev = [false, false];
+    function updateExParts(dt) {
+      const vr = renderer.xr.isPresenting && locomotionReady;
+      for (let i = 0; i < hands.length; i++) {
+        const h = hands[i], c = controllers[i];
+        const grip = vr && h.tracked && btn(c, 1), edge = grip && !exGripPrev[i];
+        exGripPrev[i] = grip;
+        if (!vr || !h.tracked) continue;
+        _xpVel[i].subVectors(h.last, _xpPrev[i]).divideScalar(Math.max(dt, 1e-3)); _xpPrev[i].copy(h.last);
+        const held = exParts.find((p) => p.held === i);
+        if (held && !grip) {                                  // let go: fitted if it's at the outboard, otherwise it drops
+          const b = escapeBoats[held.map];
+          b.group.updateMatrixWorld(true);
+          if (held.mesh.position.distanceTo(boatEngineZone(b, _xpZone)) < 0.5 && playerRole !== 'monster') fitExPart(held);
+          else { held.held = -1; held.falling = true; held.vel.copy(_xpVel[i]).clampLength(0, 6); }
+          continue;
+        }
+        if (edge && !held && !parts.some((p) => p.held === i) && !(typeof stunGuns !== 'undefined' && stunGuns.some((g) => g.held === i))) {
+          const p = exParts.find((q) => q.map === currentMap && !q.installed && q.held < 0 && q.mesh.position.distanceTo(h.last) < 0.2);
+          if (p) {
+            if (monsterBlocked(c)) continue;
+            p.held = i; p.falling = false;
+            boatAudio.pickup(); pulse(c, 0.4, 40);
+          }
+        }
+      }
+      for (const p of exParts) {
+        if (p.installed) continue;
+        p.glow.material.opacity = p.held >= 0 ? 0.35 : 0.4 + 0.2 * Math.sin(performance.now() * 0.003 + p.home.x);
+        if (p.held >= 0) {                                    // carried in your hand
+          const h = hands[p.held];
+          p.mesh.quaternion.multiplyQuaternions(h.follower.quaternion, HOLD_Q);
+          p.mesh.position.copy(h.last);
+          continue;
+        }
+        if (!p.falling) continue;
+        // dropped or thrown: gravity, the floor, and the water (it floats on the lakes)
+        p.vel.y -= 9.8 * dt;
+        p.mesh.position.addScaledVector(p.vel, dt);
+        const L = extraLakes.find((l) => l.map === p.map && p.mesh.position.x > l.x0 && p.mesh.position.x < l.x1 && p.mesh.position.z > l.z0 && p.mesh.position.z < l.z1);
+        const floor = (L ? L.level : 0) + p.r;
+        if (p.mesh.position.y < floor) {
+          p.mesh.position.y = floor;
+          if (L) { p.vel.multiplyScalar(0.6); p.vel.y = 0; } else { p.vel.set(0, 0, 0); p.falling = false; p.mesh.rotation.set(...PART_SHAPE[p.kind].rest); }
+        }
+        if (L && Math.abs(p.vel.x) + Math.abs(p.vel.z) < 0.02) p.falling = false;
+        if (p.mesh.position.y < -6) { p.mesh.position.copy(p.home); p.vel.set(0, 0, 0); p.falling = false; }
+      }
+    }
+    // desktop: click a part to fit it straight away
+    for (const p of exParts) addDeskClick([p.mesh], () => { if (!p.installed && !monsterBlocked()) fitExPart(p); }, p.map);
+    // dying or being caught: the parts go back where they were found
+    {
+      const baseReset = resetRunProgress;
+      resetRunProgress = function (...a) {
+        for (const p of exParts) {
+          p.installed = false; p.held = -1; p.falling = false; p.vel.set(0, 0, 0);
+          p.mesh.visible = true; p.mesh.position.copy(p.home); p.mesh.rotation.set(...PART_SHAPE[p.kind].rest);
+          const b = escapeBoats[p.map]; b.repairs[p.kind] = false;
+          const camp = parts.find((q) => q.kind === p.kind);
+          const c = camp && camp.inst && b.cl(camp.inst); if (c) c.visible = false;
+        }
+        return baseReset.apply(this, a);
+      };
+    }
+    // quest actions are noisy
+    {
+      const noisy = (fn, posOf, radius = 14) => function (...a) {
+        const r = fn.apply(this, a);
+        try { const p = posOf(...a); if (p) aiNoise(p.clone ? p.clone() : p, radius); } catch (e) { }
+        return r;
+      };
+      lightBrazier = noisy(lightBrazier, (b) => b.p);
+      placeSkull = noisy(placeSkull, (s, slot) => slot.pos);
+      pullLever = noisy(pullLever, (l) => l.pos, 18);
+      takeFuel = noisy(takeFuel, (f) => f.p, 10);
+      powerUp = noisy(powerUp, (g) => g.pos, 22);
+      installPart = noisy(installPart, () => repairZoneWorld, 14);
+    }
+
+    // =====================================================================
+    //  THE TRADER'S CHAINS AND CHARMS
+    //  Real chains of interlocking metal links for the wrist (gold, silver, rusted iron), detailed little charms
+    //  (a silver hockey mask, a glowing lantern, a carved skull with glowing eyes, crossed machetes, a working compass,
+    //  and the rabbit's foot), hung from a short link chain that swings with your hand's movement. The charm you wear
+    //  also hangs on a chain round your neck. At the shop they're laid out on a velvet tray and a wooden chain stand.
+    // =====================================================================
+    const chainMats = {
+      gold: new THREE.MeshStandardMaterial({ color: 0xd8a83a, roughness: 0.22, metalness: 1 }),
+      silver: new THREE.MeshStandardMaterial({ color: 0xd0d4d8, roughness: 0.18, metalness: 1 }),
+      iron: new THREE.MeshStandardMaterial({ color: 0x5a4a3e, map: grimeTex, roughness: 0.6, metalness: 0.85 }),
+    };
+    const charmSilver = new THREE.MeshStandardMaterial({ color: 0xdadde2, roughness: 0.2, metalness: 1 });
+    const charmSteel = new THREE.MeshStandardMaterial({ color: 0x9ea4aa, roughness: 0.25, metalness: 1 });
+    const charmDark = new THREE.MeshStandardMaterial({ color: 0x1a1210, roughness: 0.7 });
+    const charmRed = new THREE.MeshStandardMaterial({ color: 0xb01810, roughness: 0.4, metalness: 0.3 });
+    const charmBone = new THREE.MeshStandardMaterial({ color: 0xe8e0c8, roughness: 0.55 });
+    const charmGlowMat = new THREE.MeshStandardMaterial({ color: 0x3a1a04, emissive: 0xffa040, emissiveIntensity: 2.2, roughness: 0.3 });
+    const charmEyeMat = new THREE.MeshBasicMaterial({ color: 0xff3020, fog: false });
+    const charmGold = new THREE.MeshStandardMaterial({ color: 0xc8962a, roughness: 0.25, metalness: 1 });
+    const LINK = new THREE.TorusGeometry(0.0034, 0.0011, 6, 12); LINK.scale(1, 1.55, 1);
+    // a string of interlocking links along a curve (each turned 90 degrees to the last), as one merged mesh
+    function linkChain(points, mat, scale = 1) {
+      const b = makeBatch(), up = new THREE.Vector3(0, 1, 0), q = new THREE.Quaternion(), q90 = new THREE.Quaternion();
+      for (let k = 0; k < points.length - 1; k++) {
+        const a = points[k], c = points[k + 1], dir = c.clone().sub(a).normalize();
+        q.setFromUnitVectors(up, dir);
+        if (k % 2) q.multiply(q90.setFromAxisAngle(up, Math.PI / 2));
+        b.addMatrix(LINK, mat, new THREE.Matrix4().compose(a.clone().lerp(c, 0.5), q, new THREE.Vector3(scale, scale, scale)));
+      }
+      const g = new THREE.Group(); b.build(g, { castShadow: false, receiveShadow: false });
+      return g;
+    }
+    const ringPoints = (r, n, sx = 1) => Array.from({ length: n + 1 }, (_, k) => { const a = (k / n) * Math.PI * 2; return new THREE.Vector3(Math.cos(a) * r * sx, Math.sin(a) * r, 0); });
+    const dropPoints = (len, n) => Array.from({ length: n + 1 }, (_, k) => new THREE.Vector3(0, -(k / n) * len, 0));
+    // ---------- the charms (about 2-3 cm, hanging from their top) ----------
+    function makeCharm(kind) {
+      const g = new THREE.Group(), b = makeBatch();
+      const y0 = -0.026;                                            // the charm's centre sits below its hanging ring
+      b.add(new THREE.TorusGeometry(0.0035, 0.0012, 6, 12), charmSteel, 0, -0.004, 0);                    // bail ring
+      if (kind === 'mask') {                                       // a miniature silver hockey mask
+        b.add(new THREE.SphereGeometry(1, 16, 12, 0, Math.PI * 2, 0, Math.PI), charmSilver, 0, y0, 0, Math.PI / 2, 0, 0, 0.012, 0.004, 0.016);
+        for (const s of [-1, 1]) b.add(new THREE.SphereGeometry(0.0028, 8, 6), charmDark, s * 0.005, y0 + 0.004, 0.003, 0, 0, 0, 1.3, 0.8, 0.4);   // eye holes
+        for (const [x, y] of [[0, -0.006], [-0.003, -0.009], [0.003, -0.009], [0, -0.012], [-0.006, 0.0], [0.006, 0.0], [0, 0.01]]) b.add(new THREE.SphereGeometry(0.0009, 5, 4), charmDark, x, y0 + y, 0.0038);
+        for (const s of [-1, 1]) { b.add(UNIT_BOX, charmRed, s * 0.004, y0 + 0.009, 0.0036, 0, 0, s * 0.7, 0.006, 0.0012, 0.0008); b.add(UNIT_BOX, charmRed, s * 0.004, y0 + 0.006, 0.0036, 0, 0, -s * 0.7, 0.006, 0.0012, 0.0008); }   // chevrons
+        b.add(new THREE.TorusGeometry(0.0115, 0.0007, 4, 20), charmSteel, 0, y0, 0.0005, 0, 0, 0, 1, 1.35, 1);   // rim
+      } else if (kind === 'lantern') {                             // a glowing lantern
+        b.add(new THREE.CylinderGeometry(0.006, 0.0068, 0.003, 12), charmSteel, 0, y0 - 0.011, 0);
+        b.add(new THREE.SphereGeometry(0.0055, 12, 10), charmGlowMat, 0, y0 - 0.002, 0, 0, 0, 0, 1, 1.4, 1);
+        for (let k = 0; k < 4; k++) { const a = (k / 4) * Math.PI * 2 + 0.4; b.add(new THREE.CylinderGeometry(0.0006, 0.0006, 0.016, 4), charmSteel, Math.cos(a) * 0.0062, y0 - 0.002, Math.sin(a) * 0.0062); }
+        b.add(new THREE.ConeGeometry(0.0068, 0.005, 12), charmSteel, 0, y0 + 0.0085, 0);
+        b.add(new THREE.TorusGeometry(0.004, 0.0007, 4, 10, Math.PI), charmSteel, 0, y0 + 0.012, 0);
+      } else if (kind === 'skull') {                               // a carved skull pendant with glowing eyes
+        b.add(new THREE.SphereGeometry(0.0085, 14, 10), charmBone, 0, y0 + 0.002, 0, 0, 0, 0, 1, 0.95, 1.05);
+        b.add(bevelBox(0.009, 0.006, 0.007, 0.0015), charmBone, 0, y0 - 0.0065, 0.002);
+        for (const s of [-1, 1]) { b.add(new THREE.SphereGeometry(0.0024, 8, 6), charmDark, s * 0.0032, y0 + 0.001, 0.0068); b.add(new THREE.SphereGeometry(0.0011, 6, 4), charmEyeMat, s * 0.0032, y0 + 0.001, 0.0082); }
+        b.add(new THREE.ConeGeometry(0.0012, 0.0024, 3), charmDark, 0, y0 - 0.002, 0.008, -Math.PI / 2, 0, Math.PI);
+        for (let t = 0; t < 5; t++) b.add(UNIT_BOX, charmBone, -0.003 + t * 0.0015, y0 - 0.0092, 0.0052, 0, 0, 0, 0.001, 0.0018, 0.0012);
+      } else if (kind === 'machetes') {                            // crossed machetes
+        for (const s of [-1, 1]) {
+          const rz = s * 0.75;
+          b.add(UNIT_BOX, charmSteel, s * 0.001, y0, 0, 0, 0, rz, 0.0048, 0.03, 0.0008);                                  // blade
+          b.add(UNIT_BOX, charmSteel, s * (0.001 - Math.sin(rz) * 0.013), y0 + Math.cos(rz) * 0.013, 0, 0, 0, rz + s * 0.25, 0.0042, 0.006, 0.0008);   // curved tip
+          b.add(UNIT_BOX, charmDark, s * (0.001 + Math.sin(rz) * 0.019), y0 - Math.cos(rz) * 0.019, 0, 0, 0, rz, 0.0034, 0.011, 0.0028);   // handle
+          b.add(UNIT_BOX, charmGold, s * (0.001 + Math.sin(rz) * 0.0135), y0 - Math.cos(rz) * 0.0135, 0, 0, 0, rz, 0.008, 0.0014, 0.0022);   // guard
+        }
+      } else if (kind === 'compass') {                             // a brass compass whose needle points north
+        b.add(new THREE.CylinderGeometry(0.0105, 0.0105, 0.004, 20), charmGold, 0, y0, 0, Math.PI / 2, 0, 0);
+        b.add(new THREE.TorusGeometry(0.0105, 0.0011, 6, 20), charmGold, 0, y0, 0.0012);
+        b.add(new THREE.CylinderGeometry(0.0092, 0.0092, 0.0006, 20), new THREE.MeshStandardMaterial({ color: 0xf0e6cc, roughness: 0.5 }), 0, y0, 0.0021, Math.PI / 2, 0, 0);
+        for (let k = 0; k < 8; k++) { const a = (k / 8) * Math.PI * 2; b.add(UNIT_BOX, charmDark, Math.sin(a) * 0.0078, y0 + Math.cos(a) * 0.0078, 0.0025, 0, 0, -a, 0.0006, k % 2 ? 0.0012 : 0.0022, 0.0003); }
+        b.add(new THREE.TorusGeometry(0.0035, 0.0011, 6, 12), charmGold, 0, y0 + 0.0115, 0);
+      } else if (kind === 'foot') {                                 // the rabbit's foot (fur and a brass cap)
+        b.add(new THREE.CapsuleGeometry(0.0055, 0.016, 4, 10), new THREE.MeshStandardMaterial({ color: 0xe8e2d4, roughness: 1 }), 0, y0 - 0.004, 0);
+        b.add(new THREE.CylinderGeometry(0.0058, 0.0058, 0.004, 12), charmGold, 0, y0 + 0.007, 0);
+      }
+      b.build(g, { castShadow: false, receiveShadow: false });
+      if (kind === 'compass') {                                    // the needle is its own part, so it can turn
+        const needle = new THREE.Group(); needle.position.set(0, y0, 0.0026);
+        const nb = makeBatch();
+        nb.add(new THREE.ConeGeometry(0.0012, 0.008, 4), charmRed, 0, 0.004, 0);
+        nb.add(new THREE.ConeGeometry(0.0012, 0.008, 4), charmSilver, 0, -0.004, 0, Math.PI, 0, 0);
+        nb.build(needle, { castShadow: false, receiveShadow: false });
+        g.add(needle); g.userData.needle = needle;
+      }
+      if (kind === 'lantern') {
+        const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xffa040, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false }));
+        glow.scale.set(0.05, 0.05, 1); glow.position.y = y0 - 0.002; g.add(glow); g.userData.glow = glow;
+      }
+      return g;
+    }
+    const CHARM_KINDS = ['foot', 'skull', 'lantern', 'mask', 'machetes', 'compass'];
+    // the shop's new stock (the old items keep their ids, so anything already bought stays owned)
+    SHOP.band.items.push(['silver', 'SILVER CHAIN', 70, 0xd0d4d8], ['iron', 'RUSTED CHAIN', 40, 0x6a4a3a]);
+    SHOP.charm.items.push(['mask', 'SILVER MASK', 90], ['machetes', 'CROSSED MACHETES', 110], ['compass', 'COMPASS', 70]);
+    for (const it of SHOP.band.items) if (it[0] === 'gold') it[1] = 'GOLD CHAIN';
+    // ---------- worn on your wrists: the band (a real chain for the metal ones) and the charm on its own short chain ----------
+    const wristChains = { gold: null, silver: null, iron: null };
+    const wear = cosm.map((c, i) => {
+      const parent = c.band.parent;
+      const chains = {};
+      for (const k of Object.keys(chainMats)) {
+        const ch = linkChain(ringPoints(0.027, 22, 0.82), chainMats[k], 1.15);
+        ch.position.copy(c.band.position); ch.rotation.copy(c.band.rotation); ch.visible = false;
+        parent.add(ch); chains[k] = ch;
+      }
+      // the charm's hanging chain: four links from the hook
+      c.charmHook.children[0].visible = false;
+      const hang = linkChain(dropPoints(0.022, 4), chainMats.silver, 1); c.charmHook.add(hang);
+      const holder = new THREE.Group(); holder.position.y = -0.022; c.charmHook.add(holder);
+      const charms = {};
+      for (const k of CHARM_KINDS) { const m = makeCharm(k); m.visible = false; holder.add(m); charms[k] = m; }
+      for (const m of Object.values(c.charms)) m.visible = false;             // (the old simple charms)
+      return { c, chains, hang, holder, charms, swing: { x: 0, z: 0, vx: 0, vz: 0 }, prev: new THREE.Vector3(), prevV: new THREE.Vector3(), ok: false };
+    });
+    // ---------- worn on your chest: a necklace with the charm as a pendant ----------
+    const necklace = (() => {
+      const g = new THREE.Group(); avatarBody.add(g);
+      const pts = [];
+      for (let k = 0; k <= 26; k++) {                               // round the neck at the back, draping down to the chest at the front
+        const a = (k / 26) * Math.PI * 2, front = Math.max(0, -Math.cos(a));
+        pts.push(new THREE.Vector3(Math.sin(a) * (0.036 + 0.012 * front), -0.108 - 0.07 * front * front, 0.045 + Math.cos(a) * 0.03 - 0.012 * front));
+      }
+      const chain = linkChain(pts, chainMats.silver, 0.9); g.add(chain);
+      const holder = new THREE.Group(); holder.position.set(0, -0.178, 0.045 - 0.044); g.add(holder);
+      const charms = {};
+      for (const k of CHARM_KINDS) { const m = makeCharm(k); m.scale.setScalar(1.25); m.rotation.y = Math.PI; m.visible = false; holder.add(m); charms[k] = m; }
+      g.visible = false;
+      return { g, chain, holder, charms };
+    })();
+    {
+      const baseApply = applyCosmetics;
+      applyCosmetics = function (...a) {
+        const r = baseApply.apply(this, a);
+        const band = save.equipped.band, charm = save.equipped.charm;
+        for (const w of wear) {
+          const metal = !!chainMats[band];
+          w.c.band.visible = band !== 'none' && !metal;            // the cord and the glow band stay as they were
+          for (const [k, ch] of Object.entries(w.chains)) ch.visible = k === band;
+          for (const m of Object.values(w.c.charms)) m.visible = false;
+          for (const [k, m] of Object.entries(w.charms)) m.visible = k === charm;
+          w.hang.visible = charm !== 'none';
+          w.hang.children.forEach((m) => { if (m.material) m.material = chainMats[metal ? band : 'silver']; });
+        }
+        necklace.g.visible = charm !== 'none';
+        for (const [k, m] of Object.entries(necklace.charms)) m.visible = k === charm;
+        return r;
+      };
+      applyCosmetics();
+      redrawShop();
+    }
+    // ---------- swing physics: the charm hangs along gravity felt in the hand's frame (gravity minus the hand's own
+    //            acceleration), as an under-damped pendulum, so it swings and settles as you move ----------
+    const _swP = new THREE.Vector3(), _swV = new THREE.Vector3(), _swA = new THREE.Vector3(), _swQ = new THREE.Quaternion(), _swG = new THREE.Vector3();
+    const _north = new THREE.Vector3(), _ndir = new THREE.Vector3();
+    function updateCharmSwing(dt) {
+      if (dt <= 0) return;
+      const t = performance.now() * 0.001;
+      wear.forEach((w, i) => {
+        const hook = w.c.charmHook;
+        if (!hook.visible) { w.ok = false; return; }
+        hook.getWorldPosition(_swP);
+        if (!w.ok) { w.prev.copy(_swP); w.prevV.set(0, 0, 0); w.ok = true; }
+        _swV.subVectors(_swP, w.prev).divideScalar(dt);
+        _swA.subVectors(_swV, w.prevV).divideScalar(dt).clampLength(0, 60);
+        w.prev.copy(_swP); w.prevV.copy(_swV);
+        // effective gravity in the hook's parent frame
+        _swG.set(0, -9.8, 0).sub(_swA.multiplyScalar(0.6));
+        hook.parent.getWorldQuaternion(_swQ).invert();
+        _swG.applyQuaternion(_swQ).normalize();
+        const tz = Math.atan2(_swG.x, -_swG.y), tx = Math.atan2(-_swG.z, -_swG.y);
+        const S = w.swing, k = 70, damp = 3.2;
+        S.vz += (k * (tz - S.z) - damp * S.vz) * dt; S.vx += (k * (tx - S.x) - damp * S.vx) * dt;
+        S.z = THREE.MathUtils.clamp(S.z + S.vz * dt, -2.4, 2.4); S.x = THREE.MathUtils.clamp(S.x + S.vx * dt, -2.4, 2.4);
+        hook.rotation.set(S.x, 0, S.z);
+        w.holder.rotation.y = Math.sin(t * 0.9 + i) * 0.4 + S.vz * 0.02;    // and it twists a little on its chain
+      });
+      // the compass needles turn to world north; the lanterns flicker
+      _north.set(0, 0, -1);
+      for (const set of [...wear.map((w) => w.charms), necklace.charms, ...shopDisplay.charms]) {
+        const cmp = set.compass;
+        if (cmp && cmp.visible && cmp.userData.needle) {
+          cmp.getWorldQuaternion(_swQ).invert();
+          _ndir.copy(_north).applyQuaternion(_swQ);
+          cmp.userData.needle.rotation.z = Math.atan2(-_ndir.x, _ndir.y) * 0.9 + Math.sin(t * 7) * 0.02;
+        }
+        const ln = set.lantern;
+        if (ln && ln.visible && ln.userData.glow) ln.userData.glow.material.opacity = 0.45 + 0.15 * Math.sin(t * 17) * Math.sin(t * 5.3);
+      }
+      charmGlowMat.emissiveIntensity = 2 + 0.4 * Math.sin(t * 13) * Math.sin(t * 7);
+      shopDisplay.update(t);
+    }
+    // ---------- at THE TRADER: a velvet tray with every charm, and a wooden stand with the chains draped over it ----------
+    const shopDisplay = (() => {
+      const W = WAIT_ROOM, cx = W.x - W.w / 2 + 0.55, cz = SB.z, top = 0.52;
+      const g = new THREE.Group(); scene.add(g);
+      const b = makeBatch();
+      const velvet = new THREE.MeshStandardMaterial({ color: 0x5a0c14, roughness: 1 });
+      const standWood = new THREE.MeshStandardMaterial({ map: woodTex, color: 0x6a4428, roughness: 0.6 });
+      // the tray: a bevelled wooden frame with a velvet bed and little velvet cushions
+      b.add(bevelBox(0.3, 0.025, 0.46, 0.006), standWood, cx - 0.04, top + 0.0125, cz - 0.08);
+      b.add(bevelBox(0.27, 0.012, 0.43, 0.004), velvet, cx - 0.04, top + 0.03, cz - 0.08);
+      const slots = [];
+      for (let k = 0; k < CHARM_KINDS.length; k++) {
+        const x = cx - 0.04 + (k % 2 ? 0.06 : -0.06), z = cz - 0.08 - 0.15 + Math.floor(k / 2) * 0.15;
+        b.add(new THREE.SphereGeometry(1, 12, 8), velvet, x, top + 0.04, z, 0, 0, 0, 0.032, 0.012, 0.032);
+        slots.push(new THREE.Vector3(x, top + 0.075, z));
+      }
+      // the chain stand: a turned post with a crossbar
+      const sx = cx + 0.02, sz = cz + 0.33;
+      b.add(new THREE.CylinderGeometry(0.05, 0.06, 0.02, 14), standWood, sx, top + 0.01, sz);
+      b.add(new THREE.CylinderGeometry(0.008, 0.011, 0.24, 10), standWood, sx, top + 0.14, sz);
+      b.add(new THREE.SphereGeometry(0.014, 10, 8), standWood, sx, top + 0.26, sz);
+      b.add(new THREE.CylinderGeometry(0.006, 0.006, 0.2, 8), standWood, sx, top + 0.24, sz, Math.PI / 2, 0, 0);
+      for (const s of [-1, 1]) b.add(new THREE.SphereGeometry(0.009, 8, 6), standWood, sx, top + 0.24, sz + s * 0.1);
+      b.build(g, { rayTarget: true });
+      // the charms on their cushions, standing up a little
+      const charms = [];
+      const set = {};
+      CHARM_KINDS.forEach((k, i) => {
+        const m = makeCharm(k); m.scale.setScalar(2.6); m.position.copy(slots[i]); m.position.y += 0.06; m.rotation.y = Math.PI / 2;   // facing the room (+x)
+        g.add(m); set[k] = m;
+      });
+      charms.push(set);
+      // the three chains hanging from the crossbar in loops
+      ['gold', 'silver', 'iron'].forEach((k, i) => {
+        const pts = [];
+        const z0 = sz - 0.07 + i * 0.07;
+        for (let j = 0; j <= 16; j++) { const t = j / 16, a = t * Math.PI; pts.push(new THREE.Vector3(sx + Math.sin(a) * 0.012, top + 0.24 - Math.sin(a) * (0.09 + i * 0.015), z0 + (t - 0.5) * 0.03)); }
+        const ch = linkChain(pts, chainMats[k], 2.2); g.add(ch);
+      });
+      const tag = new THREE.Mesh(new THREE.PlaneGeometry(0.16, 0.04), new THREE.MeshStandardMaterial({ map: canvasTexture(256, (c, S) => {
+        c.fillStyle = '#e8dcc0'; c.fillRect(0, S * 0.4, S, S * 0.2); c.fillStyle = '#3a2214'; c.font = 'bold 26px Georgia, serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('CHARMS · CHAINS', S / 2, S / 2);
+      }), transparent: true, alphaTest: 0.1, roughness: 0.9 }));
+      tag.geometry.scale(1, 4, 1); tag.position.set(cx + 0.115, top + 0.035, cz - 0.08); tag.rotation.set(-0.5, Math.PI / 2, 0, 'YXZ'); tag.scale.setScalar(0.25); g.add(tag);
+      return {
+        charms,
+        update(t) { CHARM_KINDS.forEach((k, i) => { const m = set[k]; m.rotation.y = Math.PI / 2 + Math.sin(t * 0.7 + i) * 0.5; }); },
+      };
+    })();
+
+    // =====================================================================
     //  SINGLE-MAP LOADING, RUN RESETS AND THE SUNRISE BOAT RUN
     //  - only the map you're on (and, in the waiting room, the one picked on the big screen) is in the scene:
     //    every other map's meshes are taken out of the scene and their geometries, materials and textures freed on
@@ -13264,7 +14179,7 @@
     const MAP_REGIONS = [
       ['waiting', { x0: -25, x1: 25, z0: -125, z1: -68 }],
       ['graveyard', { x0: 56, x1: 174, z0: -64, z1: 64 }],
-      ['mine', { x0: -178, x1: -56, z0: -64, z1: 64 }],
+      ['mine', { x0: -200, x1: -56, z0: -64, z1: 64 }],
       ['camp', { x0: -60, x1: 60, z0: -64, z1: 64 }],
     ];
     function regionOfPoint(x, z) {
@@ -13750,6 +14665,8 @@
         updateNightSky(dt); // the camp's moon, moonlight and stars (they fade out at sunrise)
         updateWaterFx(dt); // diving: ripples and glints, splashes, bubbles, underwater murk and muffled sound
         updateStunGuns(dt); // the stun shotguns on their racks: grab, fire, recoil, smoke and the stunned monster's sparks
+        updateExParts(dt); // carrying the propeller / spark plug to the graveyard's and mine's boats
+        updateCharmSwing(dt); // wrist and necklace charms swinging on their chains, the compass needle, shop display
         updateMapsAndRun(dt); // only the current map stays loaded (others freed); the sunrise boat-run minigame
       } catch (err) {
         if (!loopErrorReported) {
