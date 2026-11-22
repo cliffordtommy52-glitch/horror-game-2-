@@ -139,6 +139,7 @@
     import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     window.__appStarted = true; // imports succeeded
 
     // ---------- Locomotion settings (names match Player.cs) ----------
@@ -6218,6 +6219,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'UPDATE', date: '22/11/26', title: 'NEW SURVIVOR MODEL',
+        text: 'A detailed proboscis monkey survivor, cut away from your own eyes in VR and whole everywhere else.' },
       { tag: 'UPDATE', date: '22/11/26', title: 'PROBOSCIS MONKEY SURVIVOR, WOODEN COAL CARTS, HANDS-ON TILLER',
         text: 'Three-fingered grip hands, no kill cutscene, smooth mine stairs, hinged breaker doors, smarter mine AI.' },
       { tag: 'UPDATE', date: '22/11/26', title: 'OBJECTIVES & LIVE MAP IN THE MENU, FASTER GRAVEYARD & MINE',
@@ -15586,6 +15589,88 @@
       updateMineAI(dt);
     }
 
+    // =====================================================================
+    //  Custom survivor model: result_CtlOqt.glb (loaded next to this page). Until it arrives, or if it can't be
+    //  loaded (e.g. the page was opened straight from disk without a local web server), the built-in proboscis
+    //  monkey stays as the lightweight fallback.
+    // =====================================================================
+    const SURVIVOR_GLB_URL = './result_CtlOqt.glb';
+    // How tall the model stands, in world units. The player's eyes sit 0.38 above the ground at this game's
+    // Gorilla scale (PLAYER_SCALE 0.6), so a 0.5-tall survivor puts its eyes at your eyes and its base on the
+    // ground; a larger value (e.g. 1.1) would push the body down through the floor and swallow the camera.
+    const SURVIVOR_GLB_HEIGHT = 0.5;
+    const SURVIVOR_GLB_EYE = { y: 0.765, z: 0.25 };   // where its eyes are: fraction of its height up, fraction of its depth forward of centre
+    const survivorGLB = new THREE.Group();            // the loaded model lives in here, inside the survivor body (turns with the torso)
+    survivorGLB.visible = false;
+    avatarBody.add(survivorGLB);
+    let survivorGLBReady = false;
+    // first-person clipping: from your own eyes the head (and the model's own hanging arms, since your tracked
+    // hands are drawn separately) are cut away; from any other camera (Monster POV, third person) it's whole
+    const _sgPlanesLocal = [
+      new THREE.Plane(new THREE.Vector3(0, -1, 0), 0),    // keep below the neck
+      new THREE.Plane(new THREE.Vector3(-1, 0, 0), 0),    // keep left of the right shoulder
+      new THREE.Plane(new THREE.Vector3(1, 0, 0), 0),     // keep right of the left shoulder
+    ];
+    const _sgPlanes = _sgPlanesLocal.map((p) => p.clone());
+    const _sgOff = _sgPlanesLocal.map((p) => new THREE.Plane(p.normal.clone(), 1e6));   // "keep everything"
+    const _sgCamP = new THREE.Vector3(), _sgHeadP = new THREE.Vector3();
+    function setupSurvivorGLB(root) {
+      // orientation: the model faces +Z, the survivor faces -Z
+      root.rotation.set(0, Math.PI, 0);
+      root.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(root), size = box.getSize(new THREE.Vector3()), centre = box.getCenter(new THREE.Vector3());
+      const s = SURVIVOR_GLB_HEIGHT / Math.max(1e-6, size.y);
+      root.scale.setScalar(s);
+      // centre X/Z under your head, eyes at the body's origin (your eyes), base on the ground below them
+      // (after the half turn the model's front is -z, so "forward of centre" is towards -z)
+      root.position.set(-centre.x * s, -(box.min.y + size.y * SURVIVOR_GLB_EYE.y) * s, -(centre.z - size.z * SURVIVOR_GLB_EYE.z) * s);
+      // the clip planes, in the body's own space
+      const neckY = -0.26 * SURVIVOR_GLB_HEIGHT, shoulder = 0.62 * (size.x * s) / 2;
+      _sgPlanesLocal[0].constant = neckY; _sgPlanesLocal[1].constant = shoulder; _sgPlanesLocal[2].constant = shoulder;
+      const mats = new Set();
+      root.traverse((o) => {
+        if (!o.isMesh) return;
+        o.castShadow = false; o.receiveShadow = false;          // high-poly: no shadow passes
+        const ms = Array.isArray(o.material) ? o.material : [o.material];
+        for (const m of ms) {
+          if (m.map) { m.map.colorSpace = THREE.SRGBColorSpace; m.map.anisotropy = 4; m.map.needsUpdate = true; }
+          m.clippingPlanes = _sgPlanes; m.clipShadows = false;
+          mats.add(m);
+        }
+        // pick the clip planes per camera: your own eye cameras are the ones right at the model's head
+        o.onBeforeRender = (r, sc, cam) => {
+          cam.getWorldPosition(_sgCamP);
+          avatar.getWorldPosition(_sgHeadP);
+          const firstPerson = renderer.xr.isPresenting && _sgCamP.distanceTo(_sgHeadP) < 0.35;
+          for (let i = 0; i < _sgPlanes.length; i++) {
+            if (firstPerson) _sgPlanes[i].copy(_sgPlanesLocal[i]).applyMatrix4(avatarBody.matrixWorld);
+            else _sgPlanes[i].copy(_sgOff[i]);
+          }
+        };
+      });
+      renderer.localClippingEnabled = true;
+      survivorGLB.add(root);
+      survivorGLBReady = true;
+      // the GLB replaces the built-in survivor body and head (the necklace and hand cosmetics stay)
+      for (const o of avatarHead.children) o.visible = false;
+      for (const o of avatarBody.children) if (o.isMesh) o.visible = false;
+      survivorGLB.visible = true;
+    }
+    {
+      const loader = new GLTFLoader();
+      loader.load(SURVIVOR_GLB_URL, (gltf) => {
+        try { setupSurvivorGLB(gltf.scene); }
+        catch (e) { console.warn('GRIMAPE: survivor model could not be set up, keeping the built-in survivor', e); }
+      }, undefined, (err) => {
+        console.warn(`GRIMAPE: ${SURVIVOR_GLB_URL} could not be loaded (serve the page over http with the .glb beside it); using the built-in survivor`, err);
+      });
+    }
+    // role switching: SURVIVOR shows the model, MONSTER hides it (the monster model takes over)
+    function updateSurvivorGLB() {
+      if (!survivorGLBReady) return;
+      survivorGLB.visible = playerRole !== 'monster' && !titleActive;
+    }
+
     // ---------- XR session hooks ----------
     renderer.xr.addEventListener('sessionstart', () => {
       if (!titleActive) horrorAudio.start(); // backup in case the click handler didn't get to run (on the title screen PLAY starts it)
@@ -15655,6 +15740,7 @@
         updateMapsAndRun(dt); // only the current map stays loaded (others freed); the sunrise boat-run minigame
         updateMenuAndPerf(dt); // live objectives + map in the menu; per-map far plane / shadow size; mine spark cues
         updateSurvivorExtras(dt); // hinged breaker doors, the monster's mine waypoints, lobby PLAY always on top
+        updateSurvivorGLB(); // the custom survivor model (result_CtlOqt.glb): shown as SURVIVOR, hidden as MONSTER
       } catch (err) {
         if (!loopErrorReported) {
           loopErrorReported = true;
