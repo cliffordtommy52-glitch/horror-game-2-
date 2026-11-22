@@ -116,7 +116,7 @@
     // Defaults written in Player.cs:
     const MAX_ARM_LENGTH        = 1.5;   // maxArmLength
     const UNSTICK_DISTANCE      = 1.0;   // unStickDistance
-    const MIN_RAYCAST_DISTANCE  = 0.12;  // minimumRaycastDistance (= hand sphere radius). Player.cs default 0.05; bigger = easier floor slaps
+    const MIN_RAYCAST_DISTANCE  = 0.065; // minimumRaycastDistance (= hand sphere radius). Player.cs default 0.05
     const DEFAULT_SLIDE_FACTOR  = 0.03;  // defaultSlideFactor (two-handed slide)
     const DEFAULT_PRECISION     = 0.995; // defaultPrecision
     // Set in the Unity inspector, not in Player.cs (chosen here):
@@ -135,11 +135,12 @@
     // below your eyes. Lowering the rig alone can't change that: the hands just push you back up.
     // PLAYER_SCALE shrinks your whole tracked body (height, arm reach, eye spacing) in VR, so relaxed arms
     // reach the floor from a gorilla-like height. With hands hanging ~0.7 m below your eyes in real life,
-    // 0.6 puts your eyes about 0.54 m off the floor. Lower = shorter player, but each arm swing also
+    // 0.6 puts your eyes about 0.49 m off the floor. Lower = shorter player, but each arm swing also
     // moves you less far.
     const PLAYER_SCALE          = 0.6;
-    const MIN_HEAD_HEIGHT       = 0.45;  // lowest eye height (m above the floor) the body allows
-    const SPAWN_HEAD_HEIGHT     = 0.45;  // eye height you start at when entering VR
+    const MIN_HEAD_HEIGHT       = 0.38;  // lowest eye height (m above the floor) the body allows
+    const SPAWN_HEAD_HEIGHT     = 0.38;  // eye height you start at when entering VR (the tracking offset is worked out
+                                         // from your real head height, so it adapts to tall or short players)
     const BODY_RADIUS           = 0.15;
     // bodyCollider: short vertical capsule under the head; its bottom touches the floor at MIN_HEAD_HEIGHT
     const BODY_CAPSULE = { top: -0.15, bottom: -(MIN_HEAD_HEIGHT - BODY_RADIUS), radius: BODY_RADIUS };
