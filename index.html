@@ -33,7 +33,8 @@
     <b>WebXR Flashlight Starter + Gorilla Locomotion</b><br />
     VR: push off the floor, walls and blocks with your hands to move and jump (the blue block is slippery).<br />
     <b>A</b> (right controller) toggles the flashlight; grip moves it to that hand.<br />
-    Desktop: drag to orbit, <b>F</b> toggles the flashlight (no locomotion).
+    Desktop: drag to orbit, <b>F</b> toggles the flashlight (no locomotion).<br />
+    Ambient horror music starts when you press ENTER VR (headphones recommended).
   </div>
   <div id="diag"></div>
 
@@ -153,7 +154,10 @@
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.xr.enabled = true;
     document.body.appendChild(renderer.domElement);
-    document.body.appendChild(VRButton.createButton(renderer)); // "Enter VR" button
+    const vrButton = VRButton.createButton(renderer); // "Enter VR" button
+    document.body.appendChild(vrButton);
+    // Browsers only allow audio to start inside a user gesture, so start the music in the button's own click.
+    vrButton.addEventListener('click', () => horrorAudio.start());
 
     // ---------- Scene, player rig & camera ----------
     const scene = new THREE.Scene();
@@ -881,13 +885,250 @@
       }
     }
 
+    // =====================================================================
+    //  Procedural horror ambience (Web Audio API, no audio files)
+    //  Layers: sub-bass drone · slow dissonant chords · metallic echoes · wind · whispers
+    // =====================================================================
+    const horrorAudio = (() => {
+      const MASTER_VOLUME = 0.45; // overall level (0–1). The compressor below also stops sudden peaks.
+      let ctx = null, master = null, reverbSend = null, delaySend = null, noise = null, wind = null;
+      let running = false;
+      const timers = [];
+      const rand = (a, b) => a + Math.random() * (b - a);
+      const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+      const midiHz = (m) => 440 * Math.pow(2, (m - 69) / 12);
+      const later = (fn, ms) => timers.push(setTimeout(() => { if (running) fn(); }, ms));
+
+      function noiseBuffer(seconds) {
+        const len = Math.floor(ctx.sampleRate * seconds);
+        const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+        const d = buf.getChannelData(0);
+        for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+        return buf;
+      }
+
+      // Big dark reverb: a convolver fed with exponentially decaying stereo noise
+      function makeReverb(seconds, decay) {
+        const len = Math.floor(ctx.sampleRate * seconds);
+        const buf = ctx.createBuffer(2, len, ctx.sampleRate);
+        for (let ch = 0; ch < 2; ch++) {
+          const d = buf.getChannelData(ch);
+          for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+        }
+        const conv = ctx.createConvolver();
+        conv.buffer = buf;
+        return conv;
+      }
+
+      function build() {
+        ctx = new (window.AudioContext || window.webkitAudioContext)();
+        noise = noiseBuffer(6);
+
+        // master -> compressor (ear safety) -> speakers
+        const comp = ctx.createDynamicsCompressor();
+        comp.threshold.value = -20; comp.knee.value = 12; comp.ratio.value = 6;
+        comp.attack.value = 0.01; comp.release.value = 0.6;
+        master = ctx.createGain();
+        master.gain.value = 0;
+        master.connect(comp);
+        comp.connect(ctx.destination);
+
+        // shared reverb
+        const reverb = makeReverb(5.5, 2.8);
+        const reverbDamp = ctx.createBiquadFilter();
+        reverbDamp.type = 'lowpass'; reverbDamp.frequency.value = 3500;
+        reverbSend = ctx.createGain();
+        reverbSend.connect(reverb);
+        reverb.connect(reverbDamp);
+        reverbDamp.connect(master);
+
+        // feedback delay for the distant metallic echoes
+        const delay = ctx.createDelay(3);
+        delay.delayTime.value = 0.43;
+        const feedback = ctx.createGain(); feedback.gain.value = 0.45;
+        const fbFilter = ctx.createBiquadFilter(); fbFilter.type = 'lowpass'; fbFilter.frequency.value = 2000;
+        delay.connect(fbFilter); fbFilter.connect(feedback); feedback.connect(delay);
+        delaySend = ctx.createGain();
+        delaySend.connect(delay);
+        const delayOut = ctx.createGain(); delayOut.gain.value = 0.5;
+        delay.connect(delayOut);
+        delayOut.connect(master);
+        delayOut.connect(reverbSend);
+
+        buildDrone();
+        buildWind();
+      }
+
+      // 1) Sub-bass drone: E1 with a slightly detuned twin (slow beating), its octave, and a tritone (B♭1)
+      function buildDrone() {
+        const droneGain = ctx.createGain(); droneGain.gain.value = 0.2;
+        const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 140; lp.Q.value = 4;
+        lp.connect(droneGain);
+        droneGain.connect(master);
+        const droneVerb = ctx.createGain(); droneVerb.gain.value = 0.15;
+        droneGain.connect(droneVerb); droneVerb.connect(reverbSend);
+
+        [[41.2, 'sine', 0.6], [41.65, 'sine', 0.5], [82.4, 'triangle', 0.16], [58.27, 'sine', 0.14]]
+          .forEach(([freq, type, gain]) => {
+            const o = ctx.createOscillator(); o.type = type; o.frequency.value = freq;
+            const g = ctx.createGain(); g.gain.value = gain;
+            o.connect(g); g.connect(lp); o.start();
+          });
+
+        // very slow movement in tone and level
+        const cutoffLfo = ctx.createOscillator(); cutoffLfo.frequency.value = 0.045;
+        const cutoffAmt = ctx.createGain(); cutoffAmt.gain.value = 60;
+        cutoffLfo.connect(cutoffAmt); cutoffAmt.connect(lp.frequency); cutoffLfo.start();
+        const levelLfo = ctx.createOscillator(); levelLfo.frequency.value = 0.07;
+        const levelAmt = ctx.createGain(); levelAmt.gain.value = 0.06;
+        levelLfo.connect(levelAmt); levelAmt.connect(droneGain.gain); levelLfo.start();
+      }
+
+      // 4a) Wind: looping noise through a wandering band-pass filter
+      function buildWind() {
+        const src = ctx.createBufferSource(); src.buffer = noise; src.loop = true;
+        const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 600; bp.Q.value = 0.9;
+        const g = ctx.createGain(); g.gain.value = 0;
+        const pan = ctx.createStereoPanner();
+        src.connect(bp); bp.connect(g); g.connect(pan);
+        pan.connect(master);
+        const verb = ctx.createGain(); verb.gain.value = 0.5; pan.connect(verb); verb.connect(reverbSend);
+        src.start();
+        wind = { bp, g, pan };
+      }
+
+      function gust() {
+        const t = ctx.currentTime, dur = rand(4, 9);
+        wind.bp.frequency.setTargetAtTime(rand(300, 1400), t, dur / 3);
+        wind.g.gain.setTargetAtTime(rand(0.012, 0.045), t, dur / 3);
+        wind.pan.pan.setTargetAtTime(rand(-0.7, 0.7), t, dur / 2);
+        later(gust, dur * 1000);
+      }
+
+      // 2) Slow dissonant chords: minor seconds and tritones that swell in and fade out
+      const CHORDS = [[0, 1, 6], [0, 6, 11], [0, 1, 7], [0, 3, 6], [0, 6, 7], [0, 1, 13]];
+      function chord() {
+        const t = ctx.currentTime + 0.05;
+        const root = pick([40, 41, 43, 44, 45]) + (Math.random() < 0.3 ? 12 : 0); // E2–A2, sometimes an octave up
+        const attack = rand(3, 6), hold = rand(2, 5), release = rand(5, 8);
+        const end = t + attack + hold + release;
+
+        const out = ctx.createGain();
+        out.gain.setValueAtTime(0, t);
+        out.gain.linearRampToValueAtTime(0.055, t + attack);
+        out.gain.setValueAtTime(0.055, t + attack + hold);
+        out.gain.linearRampToValueAtTime(0, end);
+        const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.Q.value = 1.5;
+        lp.frequency.setValueAtTime(250, t);
+        lp.frequency.linearRampToValueAtTime(rand(700, 1200), t + attack);
+        lp.frequency.linearRampToValueAtTime(220, end);
+        const pan = ctx.createStereoPanner(); pan.pan.value = rand(-0.5, 0.5);
+        lp.connect(out); out.connect(pan);
+        pan.connect(master); pan.connect(reverbSend);
+
+        for (const interval of pick(CHORDS)) {
+          for (const detune of [-7, 7]) {
+            const o = ctx.createOscillator(); o.type = 'sawtooth';
+            o.frequency.value = midiHz(root + interval);
+            o.detune.setValueAtTime(detune + rand(-3, 3), t);
+            o.detune.linearRampToValueAtTime(detune + rand(-30, -10), end); // pitch sags as it fades: unsettling
+            const vg = ctx.createGain(); vg.gain.value = 0.11;
+            o.connect(vg); vg.connect(lp);
+            o.start(t); o.stop(end + 0.1);
+          }
+        }
+        later(chord, rand(7, 14) * 1000);
+      }
+
+      // 3) Distant metallic echoes: inharmonic bell partials into the feedback delay + reverb
+      function metal() {
+        const t = ctx.currentTime + 0.05;
+        const base = rand(180, 650);
+        const out = ctx.createGain(); out.gain.value = rand(0.012, 0.03);
+        const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 3000;
+        const pan = ctx.createStereoPanner(); pan.pan.value = rand(-0.9, 0.9);
+        out.connect(lp); lp.connect(pan);
+        const dry = ctx.createGain(); dry.gain.value = 0.3;
+        pan.connect(dry); dry.connect(master);
+        pan.connect(delaySend); pan.connect(reverbSend);
+
+        [1, 2.76, 5.4, 8.93].forEach((ratio, i) => {
+          const o = ctx.createOscillator(); o.type = 'sine';
+          o.frequency.value = base * ratio * (1 + rand(-0.01, 0.01));
+          const g = ctx.createGain();
+          const decay = rand(1.5, 4) / (1 + i * 0.6);
+          g.gain.setValueAtTime(0, t);
+          g.gain.linearRampToValueAtTime(1 / (i + 1), t + 0.005);
+          g.gain.exponentialRampToValueAtTime(0.0001, t + decay);
+          o.connect(g); g.connect(out);
+          o.start(t); o.stop(t + decay + 0.1);
+        });
+        later(metal, rand(9, 22) * 1000);
+      }
+
+      // 4b) Faint whispers: short breathy noise bursts with syllable-like flutter, far left or right
+      function whisper() {
+        const t = ctx.currentTime + 0.05, dur = rand(1.2, 2.5);
+        const src = ctx.createBufferSource(); src.buffer = noise;
+        const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 6;
+        bp.frequency.setValueAtTime(rand(1800, 3200), t);
+        bp.frequency.linearRampToValueAtTime(rand(1200, 2600), t + dur);
+        const g = ctx.createGain(); g.gain.setValueAtTime(0, t);
+        for (let tt = t; tt < t + dur;) {
+          const syl = rand(0.08, 0.22);
+          g.gain.linearRampToValueAtTime(rand(0.008, 0.02), tt + syl * 0.4);
+          g.gain.linearRampToValueAtTime(0.001, tt + syl);
+          tt += syl;
+        }
+        g.gain.linearRampToValueAtTime(0, t + dur + 0.1);
+        const pan = ctx.createStereoPanner(); pan.pan.value = (Math.random() < 0.5 ? -1 : 1) * rand(0.6, 0.9);
+        src.connect(bp); bp.connect(g); g.connect(pan);
+        pan.connect(master); pan.connect(reverbSend);
+        src.start(t, rand(0, 4)); src.stop(t + dur + 0.2);
+        later(whisper, rand(14, 30) * 1000);
+      }
+
+      return {
+        start() {
+          try {
+            if (!ctx) build();
+            ctx.resume();
+            if (running) return;
+            running = true;
+            const t = ctx.currentTime;
+            master.gain.cancelScheduledValues(t);
+            master.gain.setValueAtTime(master.gain.value, t);
+            master.gain.linearRampToValueAtTime(MASTER_VOLUME, t + 5); // slow fade-in
+            gust();
+            later(chord, 2000);
+            later(metal, 6000);
+            later(whisper, 12000);
+          } catch (err) {
+            console.warn('Audio could not start:', err);
+          }
+        },
+        stop() {
+          if (!ctx || !running) return;
+          running = false;
+          timers.forEach(clearTimeout); timers.length = 0;
+          const t = ctx.currentTime;
+          master.gain.cancelScheduledValues(t);
+          master.gain.setValueAtTime(master.gain.value, t);
+          master.gain.linearRampToValueAtTime(0, t + 2);
+          setTimeout(() => { if (!running) ctx.suspend(); }, 2500);
+        },
+      };
+    })();
+
     // ---------- XR session hooks ----------
     renderer.xr.addEventListener('sessionstart', () => {
+      horrorAudio.start(); // backup in case the click handler didn't get to run
       orbit.enabled = false;
       playerRig.scale.setScalar(PLAYER_SCALE); // shrink head + controllers together in VR
       resetLocomotion();
     });
     renderer.xr.addEventListener('sessionend', () => {
+      horrorAudio.stop(); // fade out when you leave VR
       orbit.enabled = true;
       playerRig.scale.setScalar(1); // desktop view at normal size
       resetLocomotion();
