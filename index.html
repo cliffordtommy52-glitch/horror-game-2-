@@ -54,7 +54,7 @@
     Desktop: drag to orbit, <b>F</b> toggles the flashlight, <b>E</b> opens / closes the nearest door (no locomotion).<br />
     Generator: hold Trigger or Grip on its yellow handle, then hit each skill check with the other Trigger (or A / X). Beat 5 to power the floodlights.<br />
     Four generators are spread round the bigger campground (camp, cabin row, deep woods, lakeside ridge): power all 4 to light the whole camp.<br />
-    Lake (east of camp): walk down the sandy beach into the deep water, or out along the dock; swim by sweeping your hands through the water. Find the propeller and spark plug (hidden far out: a far cabin and behind a rock in the woods) and drop them at the boat's motor; find the jerrycan in another cabin and tilt it over the fuel tank's cap to pour until the gauge reads 100%. Then grab the wheel and use Trigger or the thumbstick to drive. Dropped and thrown items bounce, settle and float.<br />
+    Lake (east of camp): walk down the sandy beach into the deep water, or out along the dock. You slowly sink in the water: swim by sweeping your hands through it to rise and move. Find the propeller and spark plug (hidden far out: a far cabin and behind a rock in the woods) and drop them at the boat's motor; find the jerrycan in another cabin and tilt it over the fuel tank's cap to pour until the gauge reads 100%. Then grab the tiller on the outboard and swing it to steer; Trigger or the thumbstick is the throttle (desktop: arrow keys). Dropped and thrown items bounce, settle and float.<br />
     Ambient horror music starts when you press PLAY in the lobby (headphones recommended).
   </div>
   <!-- GRIMAPE lobby: the menu itself is 3D (a curved panel in the scene, on desktop and in VR). These are just a hint and a fade. -->
@@ -848,8 +848,8 @@
     // Each clump is three curved, tapering blades, dark at the root and lighter at the tip.
     {
       const blades = [];
-      for (let b = 0; b < 3; b++) {
-        const h = 0.2 + b * 0.05, w = 0.016, bend = 0.05 + b * 0.025, segs = 3;
+      for (let b = 0; b < 4; b++) {
+        const h = 0.05 + b * 0.016, w = 0.006, bend = 0.012 + b * 0.008, segs = 2;   // short, fine blades close to the ground
         const pos = [], col = [];
         const pt = (t, side) => {
           const ww = w * (1 - t) * side;
@@ -859,36 +859,47 @@
           const t0 = k / segs, t1 = (k + 1) / segs;
           const a = pt(t0, -1), bb = pt(t0, 1), c = pt(t1, -1), d = pt(t1, 1);
           const c0 = 0.35 + 0.65 * t0, c1 = 0.35 + 0.65 * t1;
+          if (k === segs - 1) {                       // the tip is a single triangle
+            pos.push(...a, ...bb, ...pt(1, 0));
+            col.push(c0, c0, c0, c0, c0, c0, c1, c1, c1);
+            continue;
+          }
           pos.push(...a, ...bb, ...d, ...a, ...d, ...c);
           col.push(c0, c0, c0, c0, c0, c0, c1, c1, c1, c0, c0, c0, c1, c1, c1, c1, c1, c1);
         }
         const g = new THREE.BufferGeometry();
         g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
         g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
-        g.rotateY((b / 3) * Math.PI * 2 + 0.4);
-        g.translate(Math.cos(b * 2.1) * 0.02, 0, Math.sin(b * 2.1) * 0.02);
+        g.rotateY((b / 4) * Math.PI * 2 + 0.4);
+        g.translate(Math.cos(b * 2.1) * 0.012, 0, Math.sin(b * 2.1) * 0.012);
         blades.push(g);
       }
       const bladeGeo = mergeGeometries(blades, false);
       bladeGeo.computeVertexNormals();
-      const tufts = new THREE.InstancedMesh(bladeGeo, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, side: THREE.DoubleSide }), 6500);
+      const GRASS_COUNT = 15000;                     // dense woodland turf (lower this if the frame rate drops)
+      const tufts = new THREE.InstancedMesh(bladeGeo, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, side: THREE.DoubleSide }), GRASS_COUNT);
       const m = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), s = new THREE.Vector3();
       const e = new THREE.Euler(), col = new THREE.Color();
       let n = 0;
       while (n < tufts.count) {
-        const x = rr(-WORLD_HALF, WORLD_HALF), z = rr(-WORLD_HALF, WORLD_HALF);
+        let x, z;
+        if (rng() < 0.55) {                             // thickest round the camp
+          const a = rng() * Math.PI * 2, d = Math.sqrt(rng()) * 15;
+          x = FIRE.x + Math.cos(a) * d; z = FIRE.z + Math.sin(a) * d;
+        } else { x = rr(-WORLD_HALF, WORLD_HALF); z = rr(-WORLD_HALF, WORLD_HALF); }
         if (Math.hypot(x - FIRE.x, z - FIRE.z) < 5.8 * S) continue;
         if (x > CABIN.x - CABIN.w / 2 - 0.8 && x < CABIN.x + CABIN.w / 2 + 1.3 && z > CABIN.z - CABIN.d / 2 - 0.3 && z < CABIN.z + CABIN.d / 2 + 1.7) continue; // main cabin, porch and chimney
         if (inLakeArea(x, z, 0.3)) continue;                              // no grass on the beach or in the lake
         if (nearCabin(x, z, 2.7)) continue;                                // no grass through the cabins' floors
         if (Math.hypot(x - RIDGE.x, z - RIDGE.z) < 3.6) continue;         // or through the ridge
-        const sc = rr(0.7, 1.5);
-        q.setFromEuler(e.set(rr(-0.2, 0.2), rr(0, 6.3), rr(-0.2, 0.2)));
-        m.compose(p.set(x, 0, z), q, s.set(sc, sc * rr(0.8, 1.3), sc));
+        const sc = rr(0.8, 1.3);
+        q.setFromEuler(e.set(rr(-0.1, 0.1), rr(0, 6.3), rr(-0.1, 0.1)));
+        m.compose(p.set(x, 0, z), q, s.set(sc, sc * rr(0.75, 1.2), sc));
         tufts.setMatrixAt(n, m);
-        const k = rng();
-        tufts.setColorAt(n, k < 0.15 ? col.setRGB(rr(0.2, 0.28), rr(0.17, 0.22), rr(0.08, 0.11))   // a few dry straw-coloured clumps
-                                     : col.setRGB(rr(0.07, 0.12), rr(0.15, 0.24), rr(0.05, 0.09)));
+        const k = rng();                                 // dark green, olive, and the odd dry clump
+        tufts.setColorAt(n, k < 0.08 ? col.setRGB(rr(0.17, 0.22), rr(0.15, 0.18), rr(0.07, 0.09))
+                          : k < 0.45 ? col.setRGB(rr(0.11, 0.15), rr(0.13, 0.17), rr(0.04, 0.06))
+                                     : col.setRGB(rr(0.05, 0.08), rr(0.11, 0.16), rr(0.035, 0.06)));
         n++;
       }
       tufts.instanceMatrix.needsUpdate = true; tufts.instanceColor.needsUpdate = true;
@@ -1044,9 +1055,10 @@
       const spot = findSpot(len / 2 + 0.3);
       if (spot) addLog(spot.x, spot.z, len, r, rng() < 0.5);
     }
-    { // one wet, mossy log: slippery like the old blue block (Surface slipPercentage)
+    { // one wet, slimy-dark log (bare bark, no moss): slippery like the old blue block (Surface slipPercentage)
       const spot = findSpot(2.4 * S);
-      if (spot) addLog(spot.x, spot.z, 4 * S, 0.3 * S, true, mossMat, 0.7);
+      const wetBark = new THREE.MeshStandardMaterial({ map: barkTex, bumpMap: barkTex, bumpScale: 2, color: 0x6a5c52, roughness: 0.35 });
+      if (spot) addLog(spot.x, spot.z, 4 * S, 0.3 * S, true, wetBark, 0.7);
     }
     for (let i = 0; i < 12; i++) {   // (was 6)
       const spot = findSpot(0.7);
@@ -1060,14 +1072,15 @@
       addBoxCollider(spot.x, 0, spot.z, r * 1.6, h, r * 1.6);
     }
 
-    // ---------- Campsite: four mossy bark logs arranged round the fire (no benches) ----------
-    // Bark-textured, slightly bent logs with cut ends showing their growth rings, moss along the top, a few branch
-    // stubs and shelf fungi. One merged mesh per material; each log has a box collider so you can sit, push off or climb.
+    // ---------- Campsite: four bare bark logs arranged round the fire (no benches, no greenery) ----------
+    // Weathered, bark-textured, slightly bent logs with cut ends showing their growth rings and a broken branch stub,
+    // plus a small stack of split firewood. One merged mesh per material; each log has a box collider so you can sit,
+    // push off or climb.
     {
       const lb = makeBatch();
       const endMat = new THREE.MeshStandardMaterial({ map: endGrainTex, roughness: 0.95 });
-      const mossLogMat = new THREE.MeshStandardMaterial({ color: 0x3a5a26, roughness: 1, flatShading: true });
-      const fungusMat = new THREE.MeshStandardMaterial({ color: 0x8a6a40, roughness: 0.8 });
+      const oldBark = new THREE.MeshStandardMaterial({ map: barkTex, bumpMap: barkTex, bumpScale: 2.5, color: 0xc4bab0, roughness: 1 }); // sun-bleached
+      const splitMat = new THREE.MeshStandardMaterial({ map: woodTex, color: 0xd8c4a4, roughness: 0.95 });                              // split faces
       const seats = [
         { dx: 0, dz: 2.25, alongX: true, len: 2.1, r: 0.23 },
         { dx: 0, dz: -2.25, alongX: true, len: 1.9, r: 0.21 },
@@ -1089,7 +1102,7 @@
         body.rotateZ(Math.PI / 2);                     // lie it along x, then turn it to its direction
         body.rotateY(ry);
         body.translate(x, r * 0.92, z);
-        lb.addMatrix(body, barkMat, IDENTITY);
+        lb.addMatrix(body, oldBark, IDENTITY);
         // cut ends with growth rings
         for (const s of [-1, 1]) {
           const cap = new THREE.CircleGeometry(r * 0.97, 16);
@@ -1099,27 +1112,23 @@
           cap.translate(x, r * 0.92, z);
           lb.addMatrix(cap, endMat, IDENTITY);
         }
-        // moss along the top: a partial sleeve just outside the bark, in two patchy bands
-        for (const [a0, a1, l] of [[0.15, 0.55, 0.42], [-0.3, 0.2, 0.36]]) {
-          const moss = new THREE.CylinderGeometry(r * 1.04, r * 1.04, len * l, 10, 1, true, Math.PI / 2 - 0.9 + a0, 1.6 + a1);
-          moss.rotateZ(Math.PI / 2);
-          moss.translate((a0 - 0.1) * len, 0, 0);
-          moss.rotateY(ry);
-          moss.translate(x, r * 0.92, z);
-          lb.addMatrix(moss, mossLogMat, IDENTITY);
-        }
-        // a broken branch stub and two shelf fungi on the side away from the fire
+        // a broken branch stub on the side away from the fire
         const away = new THREE.Vector3(sp.dx, 0, sp.dz).normalize();
         const along = sp.alongX ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, 1);
         const stubAt = new THREE.Vector3(x, r * 1.3, z).addScaledVector(along, len * 0.22).addScaledVector(away, r * 0.4);
         lb.add(new THREE.CylinderGeometry(r * 0.12, r * 0.22, r * 1.2, 6), barkMat, stubAt.x, stubAt.y, stubAt.z,
           away.z * 0.7, 0, -away.x * 0.7);
-        for (let f = 0; f < 2; f++) {
-          const at = new THREE.Vector3(x, r * (0.6 + f * 0.35), z).addScaledVector(along, len * (-0.25 + f * 0.12)).addScaledVector(away, r * 1.0);
-          lb.add(new THREE.SphereGeometry(1, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2), fungusMat, at.x, at.y, at.z, 0, 0, 0, r * 0.35, r * 0.1, r * 0.35);
-        }
         addBoxCollider(x, 0, z, sp.alongX ? len : r * 2, r * 1.85, sp.alongX ? r * 2 : len);
       });
+      // a small stack of split firewood (quartered rounds) beside the west log
+      const quarter = new THREE.Shape();
+      quarter.moveTo(0, 0); quarter.lineTo(0.07, 0); quarter.absarc(0, 0, 0.07, 0, Math.PI / 2, false); quarter.lineTo(0, 0);
+      const splitGeo = new THREE.ExtrudeGeometry(quarter, { depth: 0.26, bevelEnabled: false, curveSegments: 6 });
+      splitGeo.translate(-0.025, -0.025, -0.13);
+      [[0, 0, 0, 0.6], [0.075, 0, 0.02, 2.2], [0.035, 0.055, -0.01, 1.3], [-0.07, 0, 0.03, -0.4], [-0.02, 0.06, 0.02, 3.6]].forEach(([dx, dy, dz, rz]) => {
+        lb.add(splitGeo, splitMat, FIRE.x - 2.25 * S + dx - 0.32, 0.033 + dy, FIRE.z + 0.75 + dz, 0, 0.15, rz);
+      });
+      addBoxCollider(FIRE.x - 2.25 * S - 0.32, 0, FIRE.z + 0.75, 0.24, 0.12, 0.26);
       lb.build(scene, { rayTarget: true });
     }
 
@@ -1173,6 +1182,9 @@
     const glassShardMat = new THREE.MeshStandardMaterial({ color: 0x9fb8c0, emissive: 0x24160a, roughness: 0.05, metalness: 0.2,
       transparent: true, opacity: 0.6, side: THREE.DoubleSide, depthWrite: false });
     const windowVoidMat = new THREE.MeshBasicMaterial({ color: 0x140b05 });      // soot black (the back of the main cabin's firebox)
+    // window glass: genuinely see-through, a faint dusty pale-blue tint with a glossy reflection, no backing behind it
+    const windowGlassMat = new THREE.MeshStandardMaterial({ color: 0xc6d8e2, transparent: true, opacity: 0.3, roughness: 0.04,
+      metalness: 0.35, depthWrite: false, side: THREE.DoubleSide });
     const cabinGlows = [];                             // flickering lights in the main cabin (updated in updateCampExtras)
 
     // ---------- Door, window and debris sounds (their own small Web Audio graph; the music code is untouched) ----------
@@ -1316,7 +1328,7 @@
 
     // ---------- Breakable window pane (both faces of the glass, in a wall opening) ----------
     // parent: the cabin group; (x, y, z) the centre of the window on the wall's outer face (parent-local);
-    // ry turns the pane to face out of the wall; thick = wall thickness; mat = the cabin's glowing glass material.
+    // ry turns the pane to face out of the wall; thick = wall thickness; (mat is no longer used: the glass is clear).
     // While it's whole the pane has its own thin collider filling the opening; once broken the glass, the glazing bars
     // and the collider are all gone, leaving a hollow opening you can climb through (the sill stays solid to grab).
     function makePane(parent, { x, y, z, ry, w, h, thick, mat, bars = false }) {
@@ -1324,14 +1336,14 @@
       holder.position.set(x, y, z);
       holder.rotation.y = ry;
       parent.add(holder);
-      const glass = new THREE.PlaneGeometry(w, h);
-      const outer = new THREE.Mesh(glass, mat); outer.position.z = -0.02;
-      const inner = new THREE.Mesh(glass, mat); inner.position.z = -(thick - 0.02); inner.rotation.y = Math.PI;
-      holder.add(outer, inner);
+      const glass = new THREE.Mesh(new THREE.PlaneGeometry(w, h), windowGlassMat);   // one clear pane in the middle of the opening
+      glass.position.z = -thick / 2;
+      glass.renderOrder = 2;
+      holder.add(glass);
       if (bars) {                                      // glazing bars (they go with the glass)
         for (const [bw, bh] of [[w, 0.025], [0.025, h]]) {
           const bar = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, 0.03), trimMat);
-          bar.position.z = -0.01;
+          bar.position.z = -thick / 2;
           holder.add(bar);
         }
       }
@@ -2443,7 +2455,7 @@
         const p = geo.attributes.position, c = new Float32Array(p.count * 4);
         for (let i = 0; i < p.count; i++) {
           const t = Math.min(1, Math.max(0, p.getZ(i) / len));
-          const a = Math.pow(1 - t, 1.6) * 0.9 + 0.04;
+          const a = Math.pow(1 - t, 2.4) * 0.9 + 0.015;          // fades out into the dark well before the ground
           c.set([0.9, 0.94, 1, a], i * 4);
         }
         geo.setAttribute('color', new THREE.BufferAttribute(c, 4));
@@ -2490,7 +2502,7 @@
         poolBatch.add(new THREE.CircleGeometry(4.6, 28), g.poolMat, ax + (x - ax) * 0.18, 0.03, az + (z - az) * 0.18, -Math.PI / 2, 0, 0);
         poolBatch.add(new THREE.CircleGeometry(2.2, 20), g.poolMat, ax + (x - ax) * 0.3, 0.035, az + (z - az) * 0.3, -Math.PI / 2, 0, 0);
         if (k < site.realLights) {                         // real spot lights stay in the scene at intensity 0 while off
-          const spot = new THREE.SpotLight(0xeef3ff, 0, 34, 0.82, 0.55, 1.3);
+          const spot = new THREE.SpotLight(0xf0f3ff, 0, 30, 0.8, 0.65, 2);   // realistic quadratic falloff (decay 2), soft edge (penumbra 0.65)
           spot.position.set(x, by + poleH, z);
           spot.target.position.set(ax, 0, az);
           scene.add(spot, spot.target);
@@ -2659,11 +2671,11 @@
         g.group.position.set(g.pos.x + (Math.random() - 0.5) * 0.006, g.pos.y + Math.random() * 0.004, g.pos.z + (Math.random() - 0.5) * 0.006);
         g.powerT += dt;
         const on = g.powerT > 1.6 || Math.random() < g.powerT / 1.6;
-        for (const s of g.floods) s.intensity = on ? 130 : 0;            // floodlights: much brighter, longer reach
-        g.lensMat.emissiveIntensity = on ? 5 : 0;
-        g.coneMat.opacity = on ? 0.2 : 0;
-        g.poolMat.opacity = on ? 0.34 : 0;
-        g.haloMat.opacity = on ? 0.85 : 0;
+        for (const s of g.floods) s.intensity = on ? 48 : 0;             // floodlights: bright and useful, not blown out
+        g.lensMat.emissiveIntensity = on ? 2.6 : 0;
+        g.coneMat.opacity = on ? 0.07 : 0;                               // subtle, see-through beams
+        g.poolMat.opacity = on ? 0.16 : 0;
+        g.haloMat.opacity = on ? 0.5 : 0;
         g.coneMesh.visible = g.poolMesh.visible = on;
         g.glow.material.opacity = 0.9;
         g.gaugeNeedles.forEach((n, k) => { n.rotation.z = -1.0 - k * 0.4 + (Math.random() - 0.5) * 0.12; });
@@ -3897,8 +3909,8 @@
     const WHEEL_LOCK = 2.2;                              // wheel rotation (rad) for full lock
     const SWIM_STRENGTH = 3.0;                           // how hard a hand sweep through the water pushes you
     const WATER_DRAG = 1.6;                              // 1/s: slows you while swimming
-    const FLOAT_EYE = 0.12;                              // your eyes float this far above the water surface
-    const FLOAT_SPRING = 22, FLOAT_DAMP = 5;             // buoyancy spring towards the float height
+    const UNDERWATER_SINK = 1.1;                         // net downward pull in the water (m/s²): you sink unless you swim
+    const MAX_SINK_SPEED = 0.5;                          // the water won't let you sink faster than this (m/s)
     const PART_GRAB_RADIUS = 0.18, WHEEL_GRAB_RADIUS = 0.2, REPAIR_ZONE_RADIUS = 0.45;
     const PARTS_NEEDED = 3;
 
@@ -4279,8 +4291,27 @@
     const boat = {
       pos: new THREE.Vector3(DOCK.x1 - 0.8, WATER_LEVEL, DOCK.z1 + BOAT_W / 2 + 0.12), // moored alongside the dock
       yaw: 0, speed: 0, wheelAngle: 0, wheelPrev: 0, holding: -1, parts: 0,
-      prevThr: false, warnT: 0, sparkT: 0, time: 0, hapticT: 0, engineLevel: 0,
+      prevThr: false, warnT: 0, sparkT: 0, time: 0, hapticT: 0, engineLevel: 0, tillerTilt: 0,
     };
+    // Desktop driving: arrow keys swing the tiller (left / right) and work the throttle (up / down)
+    const deskBoat = { left: false, right: false, up: false, down: false, engaged: false };
+    {
+      const keyMap = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' };
+      const setKey = (e, on) => {
+        const k = keyMap[e.key];
+        if (!k || renderer.xr.isPresenting || titleActive) return;
+        e.preventDefault();
+        deskBoat[k] = on;
+        if (on && !deskBoat.engaged) {               // first press: bring the camera to the boat
+          deskBoat.engaged = true;
+          orbit.target.set(boat.pos.x, WATER_LEVEL + 0.3, boat.pos.z);
+          camera.position.set(boat.pos.x - 2.4, 1.4, boat.pos.z + 1.6);
+          orbit.update();
+        }
+      };
+      window.addEventListener('keydown', (e) => setKey(e, true));
+      window.addEventListener('keyup', (e) => setKey(e, false));
+    }
     const boatGroup = new THREE.Group();
     scene.add(boatGroup);
     const darkMetal = new THREE.MeshStandardMaterial({ color: 0x1e2022, roughness: 0.5, metalness: 0.7 });
@@ -4304,7 +4335,8 @@
     });
     strakeTex.wrapS = strakeTex.wrapT = THREE.RepeatWrapping;
     const hullMat = new THREE.MeshStandardMaterial({ map: strakeTex, bumpMap: strakeTex, bumpScale: 1.2, roughness: 0.8, side: THREE.DoubleSide });
-    let wheelInner, motorGroup, propSlot;
+    let tillerPivot, tillerGrip, motorGroup, propSlot;
+    const TILLER_MAX = 0.6;                              // how far the tiller swings either way (rad)
     let bowLantern = null, fuelGauge = null;
     const fuelCapLocal = new THREE.Vector3(-0.93, BOAT_FLOOR + 0.185, 0.3);   // the fuel tank's filler cap (boat-local)
     {
@@ -4482,69 +4514,100 @@
       boatGroup.add(lanternGlow);
       bowLantern = { mat: lanternMat, sprite: lanternGlow, dip: 1 };
 
-      // helm: the tilted mount, the spoked wheel (it turns with your hand) and its column
-      const helmTilt = new THREE.Group();
-      helmTilt.position.set(0.58, BOAT_FLOOR + 0.42, 0);
-      helmTilt.rotation.z = -0.5;
-      boatGroup.add(helmTilt);
-      const wheelSpin = new THREE.Group();
-      wheelSpin.rotation.y = Math.PI / 2;      // wheel faces aft, towards the driver
-      helmTilt.add(wheelSpin);
-      wheelInner = new THREE.Group();
-      wheelSpin.add(wheelInner);
-      boatGroup.userData.helm = helmTilt;
-      const wb = makeBatch();
-      const wheelWood = new THREE.MeshStandardMaterial({ color: 0x6b4423, roughness: 0.6, emissive: 0x1a0d00 });
-      wb.add(new THREE.TorusGeometry(0.11, 0.014, 8, 32), wheelWood, 0, 0, 0);
-      for (let k = 0; k < 6; k++) {
-        const a = Math.PI / 2 + (k * Math.PI) / 3;
-        wb.add(new THREE.CylinderGeometry(0.006, 0.008, 0.11, 6), chromeMat, Math.cos(a) * 0.055, Math.sin(a) * 0.055, 0, 0, 0, a - Math.PI / 2);   // spoke
-        wb.add(new THREE.CylinderGeometry(0.008, 0.011, 0.045, 8), wheelWood, Math.cos(a) * 0.137, Math.sin(a) * 0.137, 0, 0, 0, a - Math.PI / 2); // handle
-        wb.add(new THREE.SphereGeometry(0.011, 8, 6), wheelWood, Math.cos(a) * 0.16, Math.sin(a) * 0.16, 0);
-      }
-      wb.add(new THREE.TorusGeometry(0.05, 0.006, 6, 24), chromeMat, 0, 0, 0);
-      wb.add(new THREE.CylinderGeometry(0.032, 0.032, 0.036, 14), brassMat, 0, 0, -0.006, Math.PI / 2, 0, 0);
-      wb.build(wheelInner);
-      const cb = makeBatch();
-      cb.add(new THREE.CylinderGeometry(0.014, 0.018, 0.12, 10), darkMetal, 0, 0, 0.065, Math.PI / 2, 0, 0);   // local +z points forward, into the console
-      cb.build(wheelSpin);
-
-      // outboard motor (in its own frame: it sits behind the transom at local x = 0)
-      motorGroup = new THREE.Group();
-      motorGroup.position.set(-L2 - 0.07, 0, 0);
-      boatGroup.add(motorGroup);
-      const cowlMat = new THREE.MeshStandardMaterial({ color: 0x3b444b, map: grimeTex, roughnessMap: grimeTex, roughness: 0.45, metalness: 0.5 });
+      // ---- outboard motor + steering tiller (replaces the old steering wheel) ----
+      // The transom mounting bracket is fixed to the boat; everything above it (powerhead, leg, gearcase, tiller)
+      // swivels left / right as one on the steering axis, and the tiller arm also tilts up / down on its own hinge.
+      const cowlMat = new THREE.MeshStandardMaterial({ color: 0x2f363c, map: grimeTex, roughnessMap: grimeTex, roughness: 0.35, metalness: 0.45 });
+      const coverMat = new THREE.MeshStandardMaterial({ color: 0x3c454c, map: grimeTex, roughnessMap: grimeTex, roughness: 0.3, metalness: 0.5 });
+      const legMat = new THREE.MeshStandardMaterial({ color: 0x4d5961, map: grimeTex, roughness: 0.4, metalness: 0.6 });
       const rubberMat = new THREE.MeshStandardMaterial({ color: 0x0e0e0e, roughness: 0.7 });
       const stripeMat = new THREE.MeshStandardMaterial({ color: 0xb8261a, roughness: 0.5, metalness: 0.3 });
-      const mb = makeBatch();
-      mb.add(new THREE.SphereGeometry(1, 20, 14), cowlMat, 0, 0.35, 0, 0, 0, 0, 0.14, 0.125, 0.115);             // cowling
-      mb.add(new THREE.SphereGeometry(1, 20, 6, 0, Math.PI * 2, 0, 0.5), cowlMat, 0, 0.36, 0, 0, 0, 0, 0.15, 0.13, 0.12);
-      for (const s of [-1, 1]) mb.add(UNIT_BOX, stripeMat, 0, 0.36, s * 0.113, 0, 0, 0, 0.2, 0.025, 0.004);        // red stripe either side
-      for (let k = 0; k < 5; k++) mb.add(UNIT_BOX, darkMetal, -0.06 + k * 0.025, 0.44, 0.0, 0, 0, 0, 0.012, 0.006, 0.08);  // air intake slots
-      mb.add(UNIT_BOX, darkMetal, 0.13, 0.42, 0, 0, 0, 0, 0.03, 0.02, 0.05);                                     // top-cover latch
-      mb.add(UNIT_BOX, motorMat, 0, 0.27, 0, 0, 0, 0, 0.24, 0.03, 0.2);                                          // lower cowl band
-      mb.add(UNIT_BOX, seamMat, -0.002, 0.35, 0, 0, 0, 0, 0.27, 0.012, 0.226);                                    // cowl seam
-      mb.add(new THREE.CylinderGeometry(0.012, 0.012, 0.03, 8), brassMat, 0.0, 0.3, 0.11, Math.PI / 2, 0, 0);    // fuel fitting
-      mb.add(UNIT_BOX, motorMat, 0.005, 0.12, 0, 0, 0, 0, 0.09, 0.2, 0.075);                                      // midsection
-      for (let k = 0; k < 3; k++) mb.add(UNIT_BOX, darkMetal, -0.04, 0.05 + k * 0.03, 0.039, 0, 0, 0, 0.03, 0.008, 0.004);   // water intake grille
-      mb.add(new THREE.CylinderGeometry(0.005, 0.005, 0.01, 6), brassMat, 0.04, 0.2, 0.04, Math.PI / 2, 0, 0);    // tell-tale water outlet
-      mb.add(UNIT_BOX, darkMetal, -0.02, -0.15, 0, 0, 0, 0, 0.16, 0.008, 0.11);                                   // anti-cavitation plate
-      mb.add(UNIT_BOX, darkMetal, -0.06, -0.165, 0, 0, 0, 0, 0.05, 0.02, 0.006);                                  // trim tab
-      mb.add(new THREE.CapsuleGeometry(0.028, 0.1, 6, 12), motorMat, -0.015, -0.2, 0, 0, 0, Math.PI / 2);         // gearcase torpedo
-      mb.add(UNIT_BOX, motorMat, 0.02, -0.25, 0, 0, 0, 0, 0.06, 0.07, 0.008);                                     // skeg
-      mb.add(new THREE.CylinderGeometry(0.006, 0.006, 0.045, 8), darkMetal, -0.075, -0.2, 0, 0, 0, Math.PI / 2);  // prop shaft (the propeller goes on here)
-      mb.add(new THREE.CylinderGeometry(0.011, 0.011, 0.012, 6), brassMat, -0.098, -0.2, 0, 0, 0, Math.PI / 2);   // prop nut
+      const ventMat = new THREE.MeshStandardMaterial({ color: 0x090a0b, roughness: 0.9 });
+      // mounting bracket on the transom (boat frame): two clamp brackets hooked over the transom top, clamp screws with
+      // T-handles on the inside, and the swivel bracket the motor turns in
+      const fb = makeBatch();
+      const MX = -L2 - 0.07;                                                     // the motor's steering axis (boat x)
       for (const s of [-1, 1]) {
-        mb.add(UNIT_BOX, darkMetal, 0.065, 0.37, s * 0.055, 0, 0, 0, 0.05, 0.15, 0.025);                          // clamp bracket
-        mb.add(new THREE.CylinderGeometry(0.006, 0.006, 0.06, 6), darkMetal, 0.1, 0.33, s * 0.055, 0, 0, Math.PI / 2); // clamp screw
-        mb.add(new THREE.CylinderGeometry(0.01, 0.01, 0.03, 8), rubberMat, 0.13, 0.33, s * 0.055, Math.PI / 2, 0, 0);
+        fb.add(UNIT_BOX, darkMetal, -L2 - 0.012, 0.36, s * 0.06, 0, 0, 0, 0.022, 0.16, 0.03);      // outer plate (behind the transom)
+        fb.add(UNIT_BOX, darkMetal, -L2 + 0.03, 0.43, s * 0.06, 0, 0, 0, 0.1, 0.02, 0.03);          // hook over the top of the transom
+        fb.add(UNIT_BOX, darkMetal, -L2 + 0.075, 0.37, s * 0.06, 0, 0, 0, 0.018, 0.12, 0.03);       // inner leg
+        fb.add(new THREE.CylinderGeometry(0.007, 0.007, 0.07, 8), chromeMat, -L2 + 0.11, 0.34, s * 0.06, 0, 0, Math.PI / 2); // clamp screw
+        fb.add(new THREE.CylinderGeometry(0.005, 0.005, 0.05, 6), chromeMat, -L2 + 0.145, 0.34, s * 0.06);                   // T-handle
+        fb.add(new THREE.CylinderGeometry(0.014, 0.014, 0.008, 10), rubberMat, -L2 + 0.04, 0.34, s * 0.06, 0, 0, Math.PI / 2); // swivel pad
       }
-      mb.add(new THREE.CylinderGeometry(0.012, 0.012, 0.16, 8), darkMetal, 0.05, 0.3, 0, Math.PI / 2, 0, 0);       // tilt tube
-      mb.add(new THREE.CylinderGeometry(0.012, 0.012, 0.3, 6), darkMetal, 0.2, 0.36, 0, 0, 0, Math.PI / 2);        // tiller arm
-      mb.add(new THREE.CylinderGeometry(0.017, 0.017, 0.09, 10), rubberMat, 0.33, 0.36, 0, 0, 0, Math.PI / 2);     // tiller grip
-      mb.add(new THREE.CylinderGeometry(0.009, 0.009, 0.02, 8), stripeMat, 0.05, 0.42, 0.05);                      // kill switch
+      fb.add(new THREE.CylinderGeometry(0.012, 0.012, 0.15, 10), darkMetal, -L2 - 0.03, 0.36, 0, Math.PI / 2, 0, 0);            // tilt tube
+      fb.add(new THREE.CylinderGeometry(0.03, 0.03, 0.16, 12), darkMetal, MX, 0.33, 0);                                         // swivel bracket
+      fb.build(boatGroup);
+
+      motorGroup = new THREE.Group();                                           // swivels on the steering axis
+      motorGroup.position.set(MX, 0, 0);
+      boatGroup.add(motorGroup);
+      const mb = makeBatch();
+      // powerhead: sculpted lower cowl (chaps), then the top cowling cover, with a seam, a carry handle and air intake vents
+      mb.add(new THREE.SphereGeometry(1, 22, 14, 0, Math.PI * 2, Math.PI * 0.45, Math.PI * 0.55), cowlMat, 0, 0.36, 0, 0, 0, 0, 0.14, 0.11, 0.11);
+      mb.add(new THREE.CylinderGeometry(0.11, 0.095, 0.06, 22), cowlMat, 0, 0.33, 0, 0, 0, 0, 1.27, 1, 1);            // chaps
+      mb.add(new THREE.SphereGeometry(1, 22, 12, 0, Math.PI * 2, 0, Math.PI * 0.5), coverMat, -0.005, 0.37, 0, 0, 0, 0, 0.15, 0.11, 0.118);   // top cover
+      mb.add(new THREE.TorusGeometry(1, 0.012, 6, 30), ventMat, -0.005, 0.37, 0, Math.PI / 2, 0, 0, 0.148, 0.118, 1);  // cowl parting seam
+      for (let k = 0; k < 6; k++) {                                                                                     // intake louvres on the back of the cover
+        mb.add(UNIT_BOX, ventMat, -0.1 - k * 0.004, 0.43 - k * 0.012, 0, 0, 0, 0.45, 0.025, 0.006, 0.09);
+      }
+      for (const s of [-1, 1]) for (let k = 0; k < 3; k++) mb.add(UNIT_BOX, ventMat, 0.02 - k * 0.03, 0.44, s * 0.06, 0, 0, 0, 0.018, 0.004, 0.03); // top side slots
+      for (const s of [-1, 1]) mb.add(UNIT_BOX, stripeMat, -0.01, 0.39, s * 0.112, 0, s * 0.05, 0, 0.21, 0.022, 0.004);       // stripe
+      mb.add(new THREE.TorusGeometry(0.03, 0.007, 6, 14, Math.PI), darkMetal, -0.11, 0.455, 0, 0, Math.PI / 2, 0);            // rear carry handle
+      mb.add(UNIT_BOX, darkMetal, 0.13, 0.4, 0, 0, 0, 0, 0.025, 0.02, 0.05);                                                  // cover latch
+      // fuel hose port with a quick-connect fitting (the fuel line from the tank plugs in here)
+      mb.add(new THREE.CylinderGeometry(0.014, 0.014, 0.02, 10), brassMat, 0.0, 0.3, 0.112, Math.PI / 2, 0, 0);
+      mb.add(new THREE.CylinderGeometry(0.009, 0.011, 0.025, 10), rubberMat, 0.0, 0.3, 0.13, Math.PI / 2, 0, 0);
+      // midsection leg: a streamlined (teardrop) column from the powerhead down to the cavitation plate
+      {
+        const sh = new THREE.Shape();
+        sh.moveTo(0.04, 0); sh.bezierCurveTo(0.04, 0.03, 0.0, 0.028, -0.055, 0.008); sh.lineTo(-0.055, -0.008);
+        sh.bezierCurveTo(0.0, -0.028, 0.04, -0.03, 0.04, 0);
+        const leg = new THREE.ExtrudeGeometry(sh, { depth: 0.42, bevelEnabled: false, curveSegments: 8 });
+        leg.rotateX(Math.PI / 2);                                              // extrude downwards
+        leg.translate(0, 0.28, 0);
+        mb.addMatrix(leg, legMat, IDENTITY);
+      }
+      for (let k = 0; k < 4; k++) mb.add(UNIT_BOX, ventMat, -0.02, -0.06 - k * 0.018, 0.026, 0, 0, 0, 0.035, 0.006, 0.004); // water intake grille
+      mb.add(new THREE.CylinderGeometry(0.005, 0.005, 0.01, 6), brassMat, 0.035, 0.2, 0.024, Math.PI / 2, 0, 0);           // tell-tale water outlet
+      mb.add(new THREE.CylinderGeometry(0.012, 0.012, 0.01, 10), ventMat, -0.052, 0.17, 0, 0, 0, Math.PI / 2);               // exhaust relief
+      // cavitation (anti-ventilation) plate with a trim tab, lower gearcase torpedo, skeg
+      {
+        const ps = new THREE.Shape();
+        ps.moveTo(0.06, -0.035); ps.lineTo(0.06, 0.035); ps.quadraticCurveTo(-0.06, 0.07, -0.12, 0.04); ps.lineTo(-0.12, -0.04);
+        ps.quadraticCurveTo(-0.06, -0.07, 0.06, -0.035);
+        const plate = new THREE.ExtrudeGeometry(ps, { depth: 0.006, bevelEnabled: false });
+        plate.rotateX(Math.PI / 2); plate.translate(0, -0.14, 0);
+        mb.addMatrix(plate, legMat, IDENTITY);
+      }
+      mb.add(UNIT_BOX, darkMetal, -0.08, -0.155, 0, 0, 0, 0, 0.04, 0.02, 0.006);                                          // trim tab / anode
+      mb.add(new THREE.CapsuleGeometry(0.027, 0.11, 6, 14), legMat, -0.015, -0.2, 0, 0, 0, Math.PI / 2);                  // gearcase torpedo
+      mb.add(new THREE.SphereGeometry(0.027, 12, 8), legMat, 0.055, -0.2, 0, 0, 0, 0, 1.3, 1, 1);                       // its rounded nose
+      { const sk = new THREE.Shape(); sk.moveTo(0.05, 0); sk.lineTo(-0.03, 0); sk.lineTo(-0.01, -0.07); sk.lineTo(0.02, -0.07); sk.closePath();
+        const skeg = new THREE.ExtrudeGeometry(sk, { depth: 0.008, bevelEnabled: false }); skeg.translate(0, -0.215, -0.004); mb.addMatrix(skeg, legMat, IDENTITY); }
+      mb.add(new THREE.CylinderGeometry(0.006, 0.006, 0.045, 8), darkMetal, -0.075, -0.2, 0, 0, 0, Math.PI / 2);          // prop shaft (the propeller goes on here)
+      mb.add(new THREE.CylinderGeometry(0.011, 0.011, 0.012, 6), brassMat, -0.098, -0.2, 0, 0, 0, Math.PI / 2);           // prop nut
+      mb.add(new THREE.CylinderGeometry(0.018, 0.018, 0.05, 12), darkMetal, 0.06, 0.33, 0);                               // steering friction knob housing
       mb.build(motorGroup);
       propSlot = new THREE.Group(); propSlot.position.set(-0.07, -0.2, 0); motorGroup.add(propSlot);
+
+      // tiller: hinged at the front of the powerhead, reaching forward over the transom into the boat
+      tillerPivot = new THREE.Group();
+      tillerPivot.position.set(0.1, 0.42, 0);
+      motorGroup.add(tillerPivot);
+      const tb = makeBatch();
+      tb.add(new THREE.CylinderGeometry(0.016, 0.016, 0.05, 10), darkMetal, 0, 0, 0, Math.PI / 2, 0, 0);                  // hinge
+      tb.add(new THREE.CylinderGeometry(0.013, 0.017, 0.24, 10), cowlMat, 0.12, 0, 0, 0, 0, Math.PI / 2);                 // arm
+      tb.add(new THREE.CylinderGeometry(0.019, 0.019, 0.1, 12), rubberMat, 0.29, 0, 0, 0, 0, Math.PI / 2);                // twist-grip throttle
+      for (let k = 0; k < 5; k++) tb.add(new THREE.TorusGeometry(0.019, 0.0025, 4, 14), rubberMat, 0.25 + k * 0.02, 0, 0, 0, Math.PI / 2, 0);   // grip ribs
+      tb.add(new THREE.CylinderGeometry(0.022, 0.022, 0.012, 14), stripeMat, 0.237, 0, 0, 0, 0, Math.PI / 2);             // throttle index ring
+      tb.add(new THREE.CylinderGeometry(0.006, 0.006, 0.015, 8), stripeMat, 0.2, 0.016, 0.0);                              // kill switch
+      tb.add(new THREE.SphereGeometry(0.02, 12, 8), rubberMat, 0.345, 0, 0);                                               // end cap
+      tb.build(tillerPivot);
+      tillerGrip = new THREE.Object3D();                                         // where your hand grabs it
+      tillerGrip.position.set(0.29, 0, 0);
+      tillerPivot.add(tillerGrip);
+      boatGroup.userData.helm = tillerGrip;
     }
     // the fuel gauge on the dash: a needle sweeping from E to F and the percentage
     function drawFuelGauge(pct) {
@@ -4770,7 +4833,7 @@
       if (boat.fuel < 100) missing.push(`Fuel ${Math.floor(boat.fuel)}% (pour the jerrycan into the tank)`);
       const line2 = boat.warnT > 0
         ? `Engine won't start: ${PARTS_NEEDED - boat.parts} repair${PARTS_NEEDED - boat.parts === 1 ? '' : 's'} missing!`
-        : ready ? 'Grab the wheel · Trigger or stick = throttle' : 'Need: ' + missing.join(', ');
+        : ready ? 'Grab the tiller and swing it to steer · Trigger or stick = throttle' : 'Need: ' + missing.join(', ');
       fit(line2, 26, 'normal');
       g.fillStyle = boat.warnT > 0 ? '#ff6a5a' : '#cfd8dc';
       g.fillText(line2, W / 2, 112);
@@ -5191,12 +5254,18 @@
         throttle = THREE.MathUtils.clamp((gripping ? trig : 0) - sy, -1, 1); // trigger (while gripping) or stick forward
         if (src?.handedness === 'left') stickSteer = sx;  // the right stick's X stays your snap turn
       } else {
-        boat.wheelAngle *= Math.exp(-3 * dt);             // wheel drifts back to centre when let go
+        boat.wheelAngle *= Math.exp(-3 * dt);             // tiller swings back to centre when let go
+      }
+      const desk = !renderer.xr.isPresenting && !titleActive && (deskBoat.left || deskBoat.right || deskBoat.up || deskBoat.down);
+      if (desk) {                                        // desktop: arrow keys
+        throttle = (deskBoat.up ? 1 : 0) - (deskBoat.down ? 1 : 0);
+        const want = ((deskBoat.right ? 1 : 0) - (deskBoat.left ? 1 : 0)) * WHEEL_LOCK;
+        boat.wheelAngle += (want - boat.wheelAngle) * Math.min(1, dt * 3);
       }
       const ready = boat.parts >= PARTS_NEEDED;
       const thrActive = Math.abs(throttle) > 0.3;
       if (!ready) {
-        if (boat.holding >= 0 && thrActive && !boat.prevThr) boatSputter();
+        if ((boat.holding >= 0 || desk) && thrActive && !boat.prevThr) boatSputter();
         throttle = 0;
       }
       boat.prevThr = thrActive;
@@ -5237,7 +5306,10 @@
       const bob = 0.012 * Math.sin(boat.time * 1.6);
       boatGroup.position.set(boat.pos.x, WATER_LEVEL + bob, boat.pos.z);
       boatGroup.rotation.set(0.02 * Math.sin(boat.time * 1.1), boat.yaw, 0.012 * Math.sin(boat.time * 0.8) - boat.speed * 0.01);
-      wheelInner.rotation.z = boat.wheelAngle;
+      // the motor swivels on its steering axis with the tiller; the tiller arm tilts with your hand (level when let go)
+      motorGroup.rotation.y = boat.wheelAngle / WHEEL_LOCK * TILLER_MAX;
+      if (boat.holding < 0) boat.tillerTilt *= Math.exp(-4 * dt);
+      tillerPivot.rotation.z = boat.tillerTilt;
       if (ready && boat.holding >= 0) motorGroup.position.y = (Math.random() - 0.5) * 0.004; // engine running
       const propPart = parts.find((p) => p.kind === 'prop');
       if (propPart.installed) propPart.inst.rotation.x += boat.speed * 25 * dt;
@@ -5260,13 +5332,14 @@
         denormalizedVelocityAverage.applyAxisAngle(_UPY, dYaw);
         for (const v of velocityHistory) v.applyAxisAngle(_UPY, dYaw);
       }
+      if (desk) { camera.position.x += dx; camera.position.z += dz; orbit.target.x += dx; orbit.target.z += dz; }   // desktop camera follows the boat
 
       // ---- engine sound + haptics ----
-      const running = ready && boat.holding >= 0;
+      const running = ready && (boat.holding >= 0 || desk);
       boat.engineLevel += ((running ? Math.abs(throttle) : 0) - boat.engineLevel) * Math.min(1, dt * 4);
       camera.getWorldPosition(_lkHead);
       boatAudio.setEngine(running || (ready && Math.abs(boat.speed) > 0.3), boat.engineLevel, _lkHead.distanceTo(repairZoneWorld));
-      if (running && (boat.hapticT -= dt) <= 0) {
+      if (running && boat.holding >= 0 && (boat.hapticT -= dt) <= 0) {
         boat.hapticT = 0.06;
         pulse(controllers[boat.holding], 0.05 + 0.25 * boat.engineLevel, 40);
       }
@@ -5348,16 +5421,16 @@
         zoneMarker.material.opacity = close ? 0.9 : 0.45 + 0.2 * Math.sin(t * 4);
       } else zoneMarker.material.opacity = 0;
 
-      // turning the wheel with your hand
+      // the tiller follows your hand: swing it left / right to steer, lift it or press it down to tilt it
       if (boat.holding >= 0) {
         const h = hands[boat.holding];
-        const a = wheelHandAngle(h);
-        let d = a - boat.wheelPrev;
-        if (d > Math.PI) d -= Math.PI * 2;
-        if (d < -Math.PI) d += Math.PI * 2;
-        boat.wheelPrev = a;
-        const r = Math.hypot(h.last.y - wheelWorld.y, h.last.x - wheelWorld.x, h.last.z - wheelWorld.z);
-        if (r > 0.03) boat.wheelAngle = THREE.MathUtils.clamp(boat.wheelAngle - d, -WHEEL_LOCK, WHEEL_LOCK);
+        boatGroup.worldToLocal(_lkRel.copy(h.last));
+        const ax = _lkRel.x - motorGroup.position.x, az = _lkRel.z;
+        const swing = THREE.MathUtils.clamp(Math.atan2(-az, ax), -TILLER_MAX, TILLER_MAX);       // matches motorGroup.rotation.y
+        const reach = Math.max(0.05, Math.hypot(ax, az) - tillerPivot.position.x);
+        const tilt = THREE.MathUtils.clamp(Math.atan2(_lkRel.y - tillerPivot.position.y, reach), -0.25, 0.55);
+        boat.wheelAngle += (swing / TILLER_MAX * WHEEL_LOCK - boat.wheelAngle) * Math.min(1, dt * 12);
+        boat.tillerTilt += (tilt - boat.tillerTilt) * Math.min(1, dt * 12);
       }
 
       // ---------- swimming ----------
@@ -5367,10 +5440,11 @@
       swimming = inWater;
       if (!inWater) { prevRelOk[0] = prevRelOk[1] = false; return; }
 
-      // buoyancy: cancel gravity and spring your eyes towards a gently bobbing float height
-      const target = WATER_LEVEL + FLOAT_EYE + 0.025 * Math.sin(t * 1.7);
-      rigVelocity.y += (GRAVITY + FLOAT_SPRING * (target - _lkHead.y) - FLOAT_DAMP * rigVelocity.y) * dt;
+      // no free floating: the water takes most of your weight, but you still sink slowly towards the lakebed
+      // unless you stroke your hands through the water to swim up and along
+      rigVelocity.y += (GRAVITY - UNDERWATER_SINK) * dt;
       rigVelocity.multiplyScalar(Math.exp(-WATER_DRAG * dt)); // water drag
+      if (rigVelocity.y < -MAX_SINK_SPEED) rigVelocity.y += (-MAX_SINK_SPEED - rigVelocity.y) * Math.min(1, dt * 4);
 
       // Gorilla-style strokes: a hand sweeping through the water pushes you the opposite way
       let stroking = false;
@@ -5698,6 +5772,92 @@
         fd.spot.visible = lit;
         fd.lensMat.color.set(lit ? 0xfff4d6 : 0x222222);
       }
+    }
+
+    // ---------- Survivor body: a legless human torso with shoulders, sleeves, neck and a head with eyes ----------
+    // Gorilla-Tag style: the body ends at the waist and your (articulated) hands float free. It follows your headset
+    // (position and turn); the torso turns after your head with a little lag. In the headset the head and eyes are
+    // hidden, so nothing ever sits in front of your own eyes (you see your shirt if you look down). On the desktop
+    // the whole survivor stands at the camp spawn so you can see them.
+    const avatar = new THREE.Group();          // origin = your eyes
+    avatar.visible = false;
+    scene.add(avatar);
+    const avatarHead = new THREE.Group(), avatarBody = new THREE.Group();
+    avatar.add(avatarBody, avatarHead);
+    {
+      const skin = new THREE.MeshStandardMaterial({ color: 0xc89a7c, roughness: 0.7 });
+      const hair = new THREE.MeshStandardMaterial({ color: 0x2a1c12, roughness: 0.9 });
+      const white = new THREE.MeshStandardMaterial({ color: 0xf4f1ea, roughness: 0.3 });
+      const iris = new THREE.MeshStandardMaterial({ color: 0x3a2a1a, roughness: 0.25 });
+      const pupil = new THREE.MeshStandardMaterial({ color: 0x050505, roughness: 0.2 });
+      const shirt = new THREE.MeshStandardMaterial({ color: 0x405670, map: grimeTex, roughness: 0.9 });   // worn flannel blue
+      const shirtDark = new THREE.MeshStandardMaterial({ color: 0x2c3c4f, roughness: 0.9 });
+      const belt = new THREE.MeshStandardMaterial({ color: 0x2a1d14, roughness: 0.7 });
+      // head (forward is -z): skull, hair cap, ears, nose, eyes with irises and pupils, brows
+      const hb = makeBatch();
+      const HC = new THREE.Vector3(0, -0.012, 0.045);                     // head centre, a little behind and below your eyes
+      hb.add(new THREE.SphereGeometry(0.068, 20, 14), skin, HC.x, HC.y, HC.z, 0, 0, 0, 0.95, 1.12, 1.0);
+      hb.add(new THREE.SphereGeometry(0.071, 20, 10, 0, Math.PI * 2, 0, Math.PI * 0.5), hair, HC.x, HC.y + 0.012, HC.z + 0.006, -0.25, 0, 0, 0.97, 1.05, 1.03);
+      for (const s of [-1, 1]) hb.add(new THREE.SphereGeometry(0.014, 8, 6), skin, s * 0.064, HC.y - 0.005, HC.z + 0.005, 0, 0, 0, 0.5, 1, 0.8);   // ears
+      hb.add(new THREE.ConeGeometry(0.011, 0.028, 8), skin, 0, HC.y - 0.022, HC.z - 0.074, -Math.PI / 2 + 0.25, 0, 0);                         // nose
+      for (const s of [-1, 1]) {
+        const ex = s * 0.024, ey = HC.y + 0.008, ez = HC.z - 0.058;
+        hb.add(new THREE.SphereGeometry(0.0125, 12, 10), white, ex, ey, ez);                                  // eyeball
+        hb.add(new THREE.SphereGeometry(0.0065, 10, 8), iris, ex, ey, ez - 0.0085);                          // iris
+        hb.add(new THREE.SphereGeometry(0.0034, 8, 6), pupil, ex, ey, ez - 0.0125);                          // pupil
+        hb.add(UNIT_BOX, hair, ex, ey + 0.018, ez - 0.002, 0, 0, s * -0.12, 0.026, 0.005, 0.006);           // brow
+      }
+      hb.add(UNIT_BOX, new THREE.MeshStandardMaterial({ color: 0x7a4a42, roughness: 0.6 }), 0, HC.y - 0.045, HC.z - 0.062, 0, 0, 0, 0.026, 0.005, 0.006); // mouth
+      hb.build(avatarHead, { castShadow: false, receiveShadow: false });
+      // body: neck, a shirt torso (shoulders wider than the waist, flattened front to back), collar, sleeves, belt
+      const bb2 = makeBatch();
+      bb2.add(new THREE.CylinderGeometry(0.024, 0.028, 0.06, 12), skin, 0, -0.095, 0.045);
+      const prof = [[0.0, -0.36], [0.07, -0.36], [0.078, -0.33], [0.082, -0.27], [0.092, -0.2], [0.1, -0.16], [0.108, -0.13], [0.1, -0.115], [0.06, -0.1], [0.0, -0.1]];
+      const torso = new THREE.LatheGeometry(prof.map(([r, y]) => new THREE.Vector2(r, y)), 22);
+      torso.scale(1.15, 1, 0.66);
+      bb2.addMatrix(torso, shirt, new THREE.Matrix4().makeTranslation(0, 0, 0.05));
+      bb2.add(new THREE.TorusGeometry(0.03, 0.009, 6, 16), shirtDark, 0, -0.112, 0.045, Math.PI / 2, 0, 0);     // collar
+      for (let k = 0; k < 4; k++) bb2.add(new THREE.SphereGeometry(0.0045, 6, 4), shirtDark, 0, -0.15 - k * 0.05, 0.05 - 0.071, 0, 0, 0, 1, 1, 0.5); // buttons
+      bb2.add(UNIT_BOX, shirtDark, 0, -0.205, 0.05 - 0.066, 0, 0, 0, 0.006, 0.2, 0.004);                         // placket
+      for (const s of [-1, 1]) {
+        bb2.add(new THREE.SphereGeometry(0.036, 12, 10), shirt, s * 0.118, -0.135, 0.05);                       // shoulder
+        bb2.add(new THREE.CapsuleGeometry(0.028, 0.07, 6, 10), shirt, s * 0.135, -0.19, 0.05, 0, 0, s * 0.18);   // short sleeve / upper arm
+        bb2.add(new THREE.CylinderGeometry(0.029, 0.029, 0.012, 12), shirtDark, s * 0.143, -0.235, 0.05, 0, 0, s * 0.18); // sleeve cuff
+        bb2.add(UNIT_BOX, shirtDark, s * 0.045, -0.24, 0.05 - 0.06, 0, 0, 0, 0.04, 0.035, 0.004);                // chest pockets
+      }
+      bb2.add(new THREE.CylinderGeometry(0.082, 0.082, 0.025, 22), belt, 0, -0.35, 0.05, 0, 0, 0, 1.12, 1, 0.66);
+      bb2.add(UNIT_BOX, brassMat, 0, -0.35, 0.05 - 0.056, 0, 0, 0, 0.022, 0.018, 0.006);                          // buckle
+      bb2.build(avatarBody, { castShadow: false, receiveShadow: false });
+    }
+    const _avPos = new THREE.Vector3(), _avDir = new THREE.Vector3(), _avQ = new THREE.Quaternion();
+    let avatarBodyYaw = 0;
+    function updateAvatar(dt) {
+      avatar.visible = !titleActive;
+      if (!avatar.visible) return;
+      const vr = renderer.xr.isPresenting;
+      avatarHead.visible = !vr;                     // never in front of your own eyes in the headset
+      let headYaw = 0;
+      if (vr && locomotionReady) {
+        headWorld(_avPos);
+        camera.getWorldDirection(_avDir);
+        headYaw = Math.atan2(-_avDir.x, -_avDir.z);
+        avatar.position.copy(_avPos);
+        avatar.scale.setScalar(1);
+        // the head follows your gaze fully (it's hidden, but stays right for anything that looks at it)
+        camera.getWorldQuaternion(_avQ);
+        avatarHead.quaternion.copy(_avQ);
+      } else {
+        // desktop: the survivor stands at the camp spawn, facing the fire
+        avatar.position.set(0, SPAWN_HEAD_HEIGHT + 0.07, 0);
+        avatarHead.quaternion.identity();
+        headYaw = 0;
+      }
+      // the torso turns after your head (a little lag, and only once you've turned past a few degrees)
+      let d = headYaw - avatarBodyYaw;
+      d = Math.atan2(Math.sin(d), Math.cos(d));
+      if (Math.abs(d) > 0.05 || !vr) avatarBodyYaw += d * Math.min(1, dt * (vr ? 6 : 50));
+      avatarBody.rotation.set(0, avatarBodyYaw, 0);
+      if (vr) avatarHead.position.set(0, 0, 0);
     }
 
     // ---------- Light pool: lend a few real warm point lights to the lanterns and hearths nearest you ----------
@@ -6945,6 +7105,7 @@
           playerRig.updateMatrixWorld(true); // so the rays use this frame's rig position
         }
         updateHands(dt); // articulated hands: fist on Grip / Trigger; lobby wireframe; head lamp locked in the lobby
+        updateAvatar(dt); // legless survivor body (torso, shoulders; head and eyes hidden from your own view in VR)
         updateLake(dt); // lake & boat: water, swimming, repair parts, steering wheel
         updateSurvival(dt); // health: burns, drowning, death and respawn
         updateTitle(dt); // title screen: logo drips, PLAY button, fades into the camp
