@@ -5212,7 +5212,7 @@
         if (inWater) {
           // buoyancy: it bobs at the surface instead of sinking; the water slows it and it drifts a little
           const target = WATER_LEVEL - p.r * 0.35 + 0.015 * Math.sin(t * 1.7 + p.phase);
-          if (!p.floating && v.y < -0.8) boatAudio.splash(Math.min(1, -v.y / 5) * 0.6);
+          // (hitting the water: the splash, rings and sound come from updatePropSplashes)
           v.y += (20 * (target - pos.y) - 5 * v.y) * dt;
           const drag = Math.exp(-1.5 * dt);
           v.x = v.x * drag + Math.sin(t * 0.31 + p.phase) * 0.03 * dt;
@@ -5597,7 +5597,7 @@
       // ---------- swimming ----------
       headWorld(_lkHead);
       const inWater = !boat.aboard && inLake(_lkHead.x, _lkHead.z, -0.05) && _lkHead.y < WATER_LEVEL + 0.35;
-      if (inWater && !swimming && rigVelocity.y < -0.4) boatAudio.splash(-rigVelocity.y / 3);
+      // (jumping in: the body splash, its rings, spray and sound come from updateWaterFx)
       swimming = inWater;
       if (!inWater) { prevRelOk[0] = prevRelOk[1] = false; return; }
 
@@ -6083,6 +6083,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'UPDATE', date: '22/11/26', title: 'REALISTIC WATER SPLASHES',
+        text: 'Ripple rings, arcing droplets and foam bursts scaled to impact speed, splash sounds and haptic ticks.' },
       { tag: 'UPDATE', date: '22/11/26', title: 'BOAT RUN MINIGAME, ONE MAP AT A TIME, NEW FURNITURE & TREES',
         text: 'High floating, steerable swim strokes, leaner monster, tasks reset on death, WANTED posters.' },
       { tag: 'UPDATE', date: '22/11/26', title: 'DIVING, STUN SHOTGUNS, HUGE GRAVEYARD & MINE, SLOWER AI',
@@ -9033,7 +9035,7 @@
       headWorld(_exHead);
       const L = extraLakes.find((l) => l.map === currentMap && _exHead.x > l.x0 + 0.05 && _exHead.x < l.x1 - 0.05 && _exHead.z > l.z0 + 0.05 && _exHead.z < l.z1 - 0.05);
       const inWater = !!L && _exHead.y < L.level + 0.35 && !escapeBoatAboard();
-      if (inWater && !exSwimming && rigVelocity.y < -0.4) boatAudio.splash(-rigVelocity.y / 3);
+      // (jumping in: the body splash, its rings, spray and sound come from updateWaterFx)
       exSwimming = inWater;
       if (!inWater) { exPrevOk[0] = exPrevOk[1] = false; return; }
       floatAtSurface(dt, L.level);
@@ -12390,7 +12392,7 @@
         spawn(x, y, z, vx, vy, vz, life, color, opt = {}) {
           if (list.length >= max) list.shift();
           list.push({ x, y, z, vx, vy, vz, life, max: life, r: color.r, g: color.g, b: color.b, grav: opt.grav ?? 6, drag: opt.drag ?? 0.6,
-                      floor: opt.floor ?? -1e9, ceil: opt.ceil ?? 1e9, wob: opt.wob || 0, ph: Math.random() * 6 });
+                      floor: opt.floor ?? -1e9, ceil: opt.ceil ?? 1e9, wob: opt.wob || 0, ph: Math.random() * 6, land: opt.land || null });
         },
         clear() { list.length = 0; geo.setDrawRange(0, 0); },
         update(dt) {
@@ -12404,7 +12406,7 @@
             p.x += p.vx * dt + (p.wob ? Math.sin(p.life * 11 + p.ph) * p.wob * dt : 0);
             p.y += p.vy * dt;
             p.z += p.vz * dt + (p.wob ? Math.cos(p.life * 9 + p.ph) * p.wob * dt : 0);
-            if (p.y > p.ceil || p.y < p.floor) { list.splice(k, 1); continue; }
+            if (p.y > p.ceil || p.y < p.floor) { if (p.land && p.y < p.floor) p.land(p); list.splice(k, 1); continue; }
           }
           let n = 0;
           for (const p of list) {
@@ -12418,11 +12420,14 @@
         },
       };
     }
-    const fxDrops = makeFx(500, 0.028, dotTex, THREE.AdditiveBlending);      // splash droplets
+    const fxDrops = makeFx(700, 0.032, dotTex, THREE.AdditiveBlending);      // splash droplets (the bigger ones)
+    const fxSpray = makeFx(900, 0.016, dotTex, THREE.AdditiveBlending);      // fine spray and the tiny secondary splashes
+    const fxPlume = makeFx(300, 0.1, dotTex, THREE.AdditiveBlending);        // white foam bursting up from big splashes
     const fxFoam = makeFx(260, 0.07, dotTex, THREE.AdditiveBlending);        // foam spreading on the surface
     const fxBubbles = makeFx(260, 0.045, bubbleTex, THREE.NormalBlending);   // bubbles rising under water
     const fxSparks = makeFx(500, 0.03, dotTex, THREE.AdditiveBlending);      // electrical sparks
-    const C_FOAM = new THREE.Color(0xeef6ff), C_DROP = new THREE.Color(0xc8e4f0), C_BUBBLE = new THREE.Color(0xd8f4ff);
+    const C_FOAM = new THREE.Color(0xeef6ff), C_DROP = new THREE.Color(0x9ec4d8), C_BUBBLE = new THREE.Color(0xd8f4ff);
+    const C_SPRAY = new THREE.Color(0x7ea8c0), C_PLUME = new THREE.Color(0xd4e4ee);   // translucent: dimmer than the foam
     const C_SPARK = new THREE.Color(0xbfe8ff), C_SPARK2 = new THREE.Color(0xfff2a0);
 
     // ---------- the water surfaces: ripples, glints, and the sky shimmering through from below ----------
@@ -12507,8 +12512,9 @@
     underTint.renderOrder = 9000; underTint.visible = false; camera.add(underTint);
     const wfx = {
       under: false, saved: null, splashCool: 0, bubbleT: 0,
-      prev: [null, null, null],                // last height above the water: head, left hand, right hand
-      prevPos: [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()],
+      prev: [null, null, null, null],          // last height above the water: head, left hand, right hand, body
+      prevPos: [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()],
+      skimT: [0, 0, 0, 0], bodyT: 0,
     };
     function setUnderwater(on) {
       if (on === wfx.under) return;
@@ -12527,20 +12533,157 @@
       }
       for (const m of muffles) { try { m.frequency.setTargetAtTime(on ? 520 : 22000, m.context.currentTime, on ? 0.06 : 0.12); } catch (e) { } }
     }
-    function splashAt(x, y, z, speed, big) {
-      const n = Math.round(THREE.MathUtils.clamp(8 + speed * 16, 8, big ? 46 : 30));
-      for (let k = 0; k < n; k++) {
-        const a = Math.random() * Math.PI * 2, out = 0.25 + Math.random() * 0.8 * Math.min(2, speed);
-        fxDrops.spawn(x + Math.cos(a) * 0.03, y + 0.01, z + Math.sin(a) * 0.03, Math.cos(a) * out, 0.6 + Math.random() * 1.4 * Math.min(2.2, speed), Math.sin(a) * out,
-          0.45 + Math.random() * 0.5, C_DROP, { grav: 7, drag: 0.8, floor: y - 0.02 });
-      }
-      for (let k = 0; k < (big ? 18 : 10); k++) {
-        const a = Math.random() * Math.PI * 2, out = 0.15 + Math.random() * 0.35;
-        fxFoam.spawn(x, y + 0.006, z, Math.cos(a) * out, 0, Math.sin(a) * out, 0.9 + Math.random() * 0.8, C_FOAM, { grav: 0, drag: 2.2 });
-      }
-      if (wfx.splashCool <= 0) { boatAudio.splash(THREE.MathUtils.clamp(speed / 2.6, 0.15, big ? 1 : 0.6)); wfx.splashCool = 0.12; }
+    // ---------- splashes: expanding ripple rings, arcing droplets, foam bursts, a matching sound and a haptic tick ----------
+    // ripple rings: flat translucent foam rings that widen and fade across the surface
+    const ringGeo = new THREE.RingGeometry(0.8, 1, 48, 1); ringGeo.rotateX(-Math.PI / 2);
+    const ringGeoThin = new THREE.RingGeometry(0.9, 1, 48, 1); ringGeoThin.rotateX(-Math.PI / 2);
+    const ripples = Array.from({ length: 40 }, (_, k) => {
+      const m = new THREE.Mesh(k % 2 ? ringGeoThin : ringGeo, new THREE.MeshBasicMaterial({ color: 0xe8f4ff, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide }));
+      m.visible = false; m.renderOrder = 2; m.frustumCulled = false; scene.add(m);
+      return { m, t: 0, life: 1, delay: 0, r0: 0.02, r1: 0.3, a: 0.5, live: false };
+    });
+    let rippleNext = 0;
+    function spawnRipple(x, y, z, r1, life, delay = 0, alpha = 0.5) {
+      const R = ripples[rippleNext++ % ripples.length];
+      R.live = true; R.t = 0; R.life = life; R.delay = delay; R.r0 = Math.min(0.03, r1 * 0.1); R.r1 = r1; R.a = alpha;
+      R.m.position.set(x, y + 0.004, z); R.m.scale.setScalar(R.r0); R.m.material.opacity = 0; R.m.visible = false;
     }
-    const _wH = new THREE.Vector3(), _wP = new THREE.Vector3();
+    function updateRipples(dt) {
+      for (const R of ripples) {
+        if (!R.live) continue;
+        R.t += dt;
+        if (R.t < R.delay) continue;
+        const f = (R.t - R.delay) / R.life;
+        if (f >= 1) { R.live = false; R.m.visible = false; continue; }
+        const e = 1 - Math.pow(1 - f, 2.4);                         // fast at first, then slowing as it spreads
+        R.m.scale.setScalar(R.r0 + (R.r1 - R.r0) * e);
+        R.m.material.opacity = R.a * Math.pow(1 - f, 1.6) * Math.min(1, f * 10);
+        R.m.visible = true;
+      }
+    }
+    // the sound: a filtered-noise slap and hiss, a watery rush for the big ones, and bubbly resonant 'bloops'
+    const splashAudio = (() => {
+      let ctx = null, out = null, noiseBuf = null;
+      function init() {
+        if (ctx) { if (ctx.state === 'suspended') ctx.resume(); return true; }
+        try {
+          ctx = new (window.AudioContext || window.webkitAudioContext)();
+          const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -14; comp.ratio.value = 4;
+          out = ctx.createGain(); out.gain.value = 0.9; out.connect(comp); comp.connect(ctx.destination);
+          noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
+          const d = noiseBuf.getChannelData(0); let b = 0;
+          for (let i = 0; i < d.length; i++) { const w = Math.random() * 2 - 1; b = 0.97 * b + 0.03 * w; d[i] = w * 0.6 + b * 2.5; }   // a little body under the hiss
+          return true;
+        } catch (e) { ctx = null; return false; }
+      }
+      function noise(t0, dur, type, f0, f1, q, peak, attack, dest) {
+        const src = ctx.createBufferSource(); src.buffer = noiseBuf;
+        const f = ctx.createBiquadFilter(); f.type = type; f.Q.value = q;
+        f.frequency.setValueAtTime(f0, t0); f.frequency.exponentialRampToValueAtTime(Math.max(40, f1), t0 + dur);
+        const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(Math.max(0.0002, peak), t0 + attack);
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+        src.connect(f); f.connect(g); g.connect(dest);
+        src.start(t0, Math.random() * 1.5); src.stop(t0 + dur + 0.05);
+      }
+      function bloop(t0, f0, dur, peak, dest) {                // a bubble: a short sine that chirps upward as it rings
+        const o = ctx.createOscillator(); o.type = 'sine';
+        o.frequency.setValueAtTime(f0, t0); o.frequency.exponentialRampToValueAtTime(f0 * (1.6 + Math.random() * 0.8), t0 + dur);
+        const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(Math.max(0.0002, peak), t0 + 0.004);
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+        o.connect(g); g.connect(dest); o.start(t0); o.stop(t0 + dur + 0.02);
+      }
+      return {
+        // I: 0 (a touch) .. 1.5 (a big jump in); pan -1..1; vol: distance fade
+        play(I, kind, pan, vol) {
+          if (!Number.isFinite(I) || !Number.isFinite(vol) || vol < 0.02 || !init()) return;
+          const t = ctx.currentTime + 0.005, k = Math.min(1.5, Math.max(0.03, I)), big = kind === 'body' || k > 0.9;
+          const bus = ctx.createGain(); bus.gain.value = vol;
+          const p = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+          if (p) { p.pan.value = Math.max(-1, Math.min(1, pan)); bus.connect(p); p.connect(out); } else bus.connect(out);
+          const soft = kind === 'exit' || kind === 'skim' || kind === 'drip';
+          // the slap of the surface breaking, then the hiss of the spray
+          noise(t, 0.05 + 0.08 * k, 'bandpass', 2400 + 1600 * k, 900, 0.9, (soft ? 0.12 : 0.28) * (0.3 + k), 0.003, bus);
+          noise(t + 0.01, 0.15 + 0.45 * k, 'highpass', 3200, 1600, 0.6, (soft ? 0.05 : 0.09) * (0.25 + k), 0.02, bus);
+          // the watery rush (and a thump) for big splashes
+          if (big || k > 0.5) noise(t, 0.3 + 0.6 * k, 'lowpass', 1400 + 600 * k, 220, 0.7, 0.3 * k, 0.01, bus);
+          if (kind === 'body' || k > 1.1) {
+            const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.setValueAtTime(110, t); o.frequency.exponentialRampToValueAtTime(42, t + 0.25);
+            const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.5 * Math.min(1, k), t + 0.008); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
+            o.connect(g); g.connect(bus); o.start(t); o.stop(t + 0.35);
+          }
+          // bubbly low-mid resonance: more, deeper bubbles the harder you hit
+          const n = (soft ? 1 : 2) + Math.round(k * (big ? 9 : 5));
+          for (let i = 0; i < n; i++) {
+            const f0 = (big ? 220 : 380) + Math.random() * (big ? 420 : 620) * (1.2 - Math.min(1, k) * 0.4);
+            bloop(t + 0.01 + Math.random() * (0.08 + 0.3 * k), f0, 0.035 + Math.random() * 0.07, (0.05 + 0.06 * Math.random()) * (0.4 + Math.min(1, k)), bus);
+          }
+          setTimeout(() => { try { bus.disconnect(); if (p) p.disconnect(); } catch (e) { } }, 2500);
+        },
+      };
+    })();
+    const _spCam = new THREE.Vector3(), _spDir = new THREE.Vector3(), _spRight = new THREE.Vector3();
+    const splashCool = { hand: 0, exit: 0, body: 0, head: 0, prop: 0, skim: 0, drip: 0 };
+    function splashSound(I, kind, x, y, z) {
+      if (splashCool[kind] > 0) return;
+      splashCool[kind] = kind === 'drip' ? 0.05 : kind === 'skim' ? 0.12 : 0.06;
+      camera.getWorldPosition(_spCam);
+      _spDir.set(x - _spCam.x, y - _spCam.y, z - _spCam.z);
+      const d = _spDir.length();
+      _spRight.set(1, 0, 0).applyQuaternion(camera.getWorldQuaternion(_wQ));
+      const pan = d > 0.05 ? _spDir.dot(_spRight) / d * 0.8 : 0;
+      splashAudio.play(I, kind, pan, THREE.MathUtils.clamp(1.25 - d / 12, 0, 1));
+    }
+    const _wQ = new THREE.Quaternion();
+    // where a droplet falls back in: a tiny ring and a couple of specks (rate-limited)
+    let dripBudget = 0;
+    function dropLand(p) {
+      if (dripBudget <= 0 || Math.random() > 0.35) return;
+      dripBudget--;
+      spawnRipple(p.x, p.floor + 0.02, p.z, 0.05 + Math.random() * 0.06, 0.45 + Math.random() * 0.25, 0, 0.35);
+      for (let k = 0; k < 2; k++) fxSpray.spawn(p.x, p.floor + 0.025, p.z, (Math.random() - 0.5) * 0.3, 0.3 + Math.random() * 0.4, (Math.random() - 0.5) * 0.3, 0.25, C_SPRAY, { grav: 7, drag: 0.6, floor: p.floor - 0.005 });
+      if (Math.random() < 0.15) splashSound(0.05, 'drip', p.x, p.floor, p.z);
+    }
+    // the splash itself. kind: 'hand' (a hand going in / slapping), 'exit' (coming out), 'head', 'body' (jumping / diving
+    // in), 'prop' (a thrown item), 'skim' (a hand sweeping along the surface). speed: impact speed in m/s; size: scales props
+    function splashAt(x, y, z, speed, kind = 'hand', size = 1, dir = null) {
+      if (typeof kind === 'boolean') kind = kind ? 'head' : 'hand';      // (older calls)
+      const big = kind === 'body';
+      let I = THREE.MathUtils.clamp(speed / (big ? 2.2 : 3), 0.04, 1.5) * size;
+      if (kind === 'exit') I *= 0.55;
+      if (kind === 'skim') I = Math.min(I, 0.35);
+      const L = y, far = big ? 1.6 : 1;
+      // arcing droplets: up and out, falling back under gravity (and splashing again where they land)
+      const nd = Math.round((big ? 30 : 5) + I * (big ? 80 : 36));
+      for (let k = 0; k < nd; k++) {
+        const a = Math.random() * Math.PI * 2, out = (0.15 + Math.random() * (0.35 + I * 1.1)) * far;
+        let vx = Math.cos(a) * out, vz = Math.sin(a) * out;
+        if (dir && kind === 'skim') { vx = dir.x * (0.8 + Math.random() * 1.4) + vx * 0.4; vz = dir.z * (0.8 + Math.random() * 1.4) + vz * 0.4; }
+        const up = (0.35 + Math.random() * (0.5 + I * 2.4)) * (kind === 'skim' ? 0.5 : 1) * (big ? 1.25 : 1);
+        (k % 3 ? fxSpray : fxDrops).spawn(x + Math.cos(a) * 0.02 * far, L + 0.012, z + Math.sin(a) * 0.02 * far, vx, up, vz,
+          0.5 + Math.random() * 0.6, k % 3 ? C_SPRAY : C_DROP, { grav: 7.5, drag: 0.5, floor: L - 0.01, land: dropLand });
+      }
+      // white foam: a burst up in the middle for hard hits, and a patch spreading out on the surface
+      if (I > 0.45 || big) {
+        const np = Math.round((big ? 18 : 4) + I * (big ? 30 : 12));
+        for (let k = 0; k < np; k++) {
+          const a = Math.random() * Math.PI * 2, out = Math.random() * (0.15 + I * 0.35) * far;
+          fxPlume.spawn(x + Math.cos(a) * 0.03, L + 0.02, z + Math.sin(a) * 0.03, Math.cos(a) * out, (0.8 + Math.random() * (0.8 + I * 2.0)) * (big ? 1.2 : 1), Math.sin(a) * out,
+            0.45 + Math.random() * 0.45, C_PLUME, { grav: 6.5, drag: 1.4, floor: L - 0.01, land: dropLand });
+        }
+      }
+      const nf = Math.round((big ? 16 : 4) + I * (big ? 22 : 12));
+      for (let k = 0; k < nf; k++) {
+        const a = Math.random() * Math.PI * 2, out = (0.08 + Math.random() * (0.2 + I * 0.4)) * far;
+        fxFoam.spawn(x, L + 0.006, z, Math.cos(a) * out, 0, Math.sin(a) * out, 0.8 + Math.random() * (0.6 + I), C_FOAM, { grav: 0, drag: 2 });
+      }
+      // ripple rings at the contact point: one for a touch, two or three for harder hits, wide ones for a jump in
+      const rMax = (big ? 0.7 : 0.14) + I * (big ? 1.1 : 0.55);
+      const nr = kind === 'skim' ? 1 : 1 + (I > 0.35 ? 1 : 0) + (I > 0.8 || big ? 1 : 0);
+      for (let k = 0; k < nr; k++) spawnRipple(x, L, z, rMax * (1 - k * 0.22), 0.8 + I * 0.9 + k * 0.15, k * (0.1 + I * 0.06), (k ? 0.32 : 0.5) * Math.min(1, 0.45 + I));
+      splashSound(I, kind, x, L, z);
+      return I;
+    }
+    const _wH = new THREE.Vector3(), _wP = new THREE.Vector3(), _wB = new THREE.Vector3(), _wD = new THREE.Vector3();
     function updateWaterFx(dt) {
       waterU.uTime.value = performance.now() * 0.001;
       // the glints follow the moon at night and the sun at dawn
@@ -12550,33 +12693,48 @@
       const camp = currentMap === 'camp';
       waterU.uLightCol.value.setRGB(0.78, 0.85, 1.0).multiplyScalar(camp ? 1.3 : 0.55).lerp(new THREE.Color(1.6, 1.15, 0.7), dawn);
       waterU.uSkyCol.value.setRGB(camp ? 0.11 : 0.07, camp ? 0.17 : 0.1, camp ? 0.3 : 0.12).lerp(new THREE.Color(0.75, 0.6, 0.45), dawn);
-      wfx.splashCool -= dt;
+      wfx.splashCool -= dt; wfx.bodyT -= dt;
+      for (const k of Object.keys(splashCool)) splashCool[k] -= dt;
+      dripBudget = Math.min(10, dripBudget + 1);           // at most a handful of secondary drips per frame
+      updatePropSplashes(dt);
       const vr = renderer.xr.isPresenting && locomotionReady && currentMap !== 'waiting' && dt > 0;
       if (vr) {
         headWorld(_wH);
         const onBoat = aboardAnyBoat();
-        // head and hands breaking the surface
-        for (let k = 0; k < 3; k++) {
+        // head, hands and body breaking the surface (going in, coming out, slapping it), and hands skimming along it
+        for (let k = 0; k < 4; k++) {
           let p;
           if (k === 0) p = _wH;
+          else if (k === 3) { if (onBoat) { wfx.prev[3] = null; continue; } p = _wB.copy(_wH); p.y -= 0.36; }   // your chest / body
           else { const h = hands[k - 1]; if (!h.tracked) { wfx.prev[k] = null; continue; } p = currentHandPosition(h, _wP); }
           const L = lakeAtPoint(p.x, p.z);
           if (!L) { wfx.prev[k] = null; continue; }
           const s = p.y - L.level;
+          const pp = wfx.prevPos[k];
+          const vy = (p.y - pp.y) / dt, vh = Math.hypot(p.x - pp.x, p.z - pp.z) / dt;
           if (wfx.prev[k] !== null && Math.sign(s) !== Math.sign(wfx.prev[k]) && !(k === 0 && onBoat)) {
-            const vy = Math.abs(p.y - wfx.prevPos[k].y) / dt, vh = Math.hypot(p.x - wfx.prevPos[k].x, p.z - wfx.prevPos[k].z) / dt;
-            const speed = vy + vh * 0.3;
-            if (speed > 0.25) {
-              splashAt(p.x, L.level, p.z, speed, k === 0);
-              if (k > 0) pulse(controllers[k - 1], Math.min(0.6, 0.15 + speed * 0.12), 30);
+            const into = s < 0, speed = Math.abs(vy) + vh * 0.35;
+            if (speed > 0.22 && Number.isFinite(speed)) {
+              const kind = !into ? 'exit' : k === 3 ? 'body' : k === 0 ? 'head' : 'hand';
+              // a big jump in already throws up the body splash; the head going under after it is just a small one
+              const I = splashAt(p.x, L.level, p.z, kind === 'head' && wfx.bodyT > 0 ? speed * 0.4 : speed, kind);
+              if (kind === 'body') { wfx.bodyT = 0.6; if (I > 0.5) controllers.forEach((c) => pulse(c, Math.min(1, 0.3 + I * 0.4), 70)); }
+              if (k === 1 || k === 2) pulse(controllers[k - 1], THREE.MathUtils.clamp(0.06 + I * (into ? 0.45 : 0.25), 0.05, 0.8), Math.round(10 + 30 * Math.min(1, I)));   // the haptic tick
             }
           }
-          wfx.prev[k] = s; wfx.prevPos[k].copy(p);
-          // hands sweeping fast under water leave a trail of bubbles
-          if (k > 0 && s < -0.02 && Math.random() < 0.5) {
-            const sp = Math.hypot(p.x - wfx.prevPos[k].x, p.y - wfx.prevPos[k].y, p.z - wfx.prevPos[k].z) / dt;
-            if (sp > 0.9) fxBubbles.spawn(p.x, p.y, p.z, (Math.random() - 0.5) * 0.1, 0.1, (Math.random() - 0.5) * 0.1, 2.5, C_BUBBLE, { grav: -0.9, drag: 2.5, ceil: L.level - 0.005, wob: 0.15 });
+          // a hand sweeping fast along (just under) the surface throws a thin sheet of spray ahead of it
+          if ((k === 1 || k === 2) && s < 0.015 && s > -0.06 && vh > 1.0 && Number.isFinite(vh)) {
+            if ((wfx.skimT[k] -= dt) <= 0) {
+              wfx.skimT[k] = 0.06;
+              _wD.set(p.x - pp.x, 0, p.z - pp.z).normalize();
+              splashAt(p.x, L.level, p.z, vh * 0.6, 'skim', 1, _wD);
+              pulse(controllers[k - 1], Math.min(0.25, 0.04 + vh * 0.04), 8);
+            }
           }
+          // hands sweeping fast under water leave a trail of bubbles
+          if ((k === 1 || k === 2) && s < -0.02 && Math.random() < 0.5 && Math.hypot(vh, vy) > 0.9)
+            fxBubbles.spawn(p.x, p.y, p.z, (Math.random() - 0.5) * 0.1, 0.1, (Math.random() - 0.5) * 0.1, 2.5, C_BUBBLE, { grav: -0.9, drag: 2.5, ceil: L.level - 0.005, wob: 0.15 });
+          wfx.prev[k] = s; pp.copy(p);
         }
         // head under: murk, muffle, bubbles streaming up from your mouth
         const L = lakeAtPoint(_wH.x, _wH.z);
@@ -12592,10 +12750,34 @@
         }
       } else {
         setUnderwater(false);
-        wfx.prev[0] = wfx.prev[1] = wfx.prev[2] = null;
+        wfx.prev[0] = wfx.prev[1] = wfx.prev[2] = wfx.prev[3] = null;
       }
-      fxDrops.update(dt); fxFoam.update(dt); fxBubbles.update(dt); fxSparks.update(dt);
+      fxDrops.update(dt); fxSpray.update(dt); fxPlume.update(dt); fxFoam.update(dt); fxBubbles.update(dt); fxSparks.update(dt);
+      updateRipples(dt);
     }
+    // ---------- thrown / dropped props splashing in ----------
+    const propTrack = new Map();
+    const _ptP = new THREE.Vector3();
+    function updatePropSplashes(dt) {
+      if (dt <= 0) return;
+      const list = [];
+      if (currentMap === 'camp') for (const p of parts) if (!p.installed && p.held < 0) list.push([p, p.mesh.position, p.kind === 'gas' ? 1.2 : 0.8]);
+      if (typeof stunGuns !== 'undefined') for (const sg of stunGuns) if (sg.map === currentMap && !sg.onRack && sg.held < 0) list.push([sg, sg.gun.group.position, 1]);
+      if (currentMap === 'graveyard' && typeof skulls !== 'undefined') for (const sk of skulls) if (sk.held < 0 && !sk.placed) list.push([sk, sk.group.position, 0.7]);
+      for (const [key, pos, size] of list) {
+        const L = lakeAtPoint(pos.x, pos.z);
+        let t = propTrack.get(key);
+        if (!t) { t = { y: pos.y, s: null }; propTrack.set(key, t); }
+        if (L) {
+          const s = pos.y - L.level, vy = (pos.y - t.y) / dt;
+          if (t.s !== null && Math.sign(s) !== Math.sign(t.s) && Math.abs(vy) > 0.4 && Number.isFinite(vy))
+            splashAt(pos.x, L.level, pos.z, Math.abs(vy), s < 0 ? 'prop' : 'exit', size);
+          t.s = s;
+        } else t.s = null;
+        t.y = pos.y;
+      }
+    }
+
     // the AI can't spot you while your head is under (or by torchlight under the water)
     {
       const baseLit = litByFlashlight;
@@ -13058,7 +13240,8 @@
         setUnderwater(false);                                  // put the fog back before the new map's sky goes in
         const r = baseArrive.apply(this, a);
         resetStunGuns();
-        fxDrops.clear(); fxFoam.clear(); fxBubbles.clear(); fxSparks.clear();
+        fxDrops.clear(); fxSpray.clear(); fxPlume.clear(); fxFoam.clear(); fxBubbles.clear(); fxSparks.clear();
+        for (const R of ripples) { R.live = false; R.m.visible = false; }
         return r;
       };
     }
