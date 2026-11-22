@@ -33,6 +33,7 @@
     <b>WebXR Flashlight Starter + Gorilla Locomotion</b><br />
     VR: push off the ground, trees, rocks, tents and the cabin with your hands to move, jump and climb (the mossy log is slippery).<br />
     <b>A</b> (right controller) toggles the flashlight; grip moves it to that hand.<br />
+    Right thumbstick left/right: 45° snap turn.<br />
     Desktop: drag to orbit, <b>F</b> toggles the flashlight (no locomotion).<br />
     Generator: hold Trigger or Grip on its yellow handle, then hit each skill check with the other Trigger (or A / X). Beat 3 to power the floodlights.<br />
     Ambient horror music starts when you press ENTER VR (headphones recommended).
@@ -146,6 +147,11 @@
     const BODY_RADIUS           = 0.15;
     // bodyCollider: short vertical capsule under the head; its bottom touches the floor at MIN_HEAD_HEIGHT
     const BODY_CAPSULE = { top: -0.15, bottom: -(MIN_HEAD_HEIGHT - BODY_RADIUS), radius: BODY_RADIUS };
+
+    // ---------- Snap turning (right thumbstick) ----------
+    const SNAP_TURN_DEGREES = 45;   // each flick of the right stick turns you this much
+    const SNAP_TURN_TRIGGER = 0.7;  // stick must pass this to turn...
+    const SNAP_TURN_RESET   = 0.3;  // ...and come back inside this before the next turn
 
     // ---------- Renderer ----------
     const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -1281,18 +1287,19 @@
     const denormalizedVelocityAverage = new THREE.Vector3();
     let locomotionReady = false;
 
-    // The rig only translates and uniformly scales: world = rig.position + local * PLAYER_SCALE
+    // The rig translates, scales uniformly and turns about the vertical axis (snap turning):
+    // world = rig.position + rigRotation * (local * PLAYER_SCALE)
     function headWorld(out) {
-      return out.copy(headLocal).multiplyScalar(PLAYER_SCALE).add(playerRig.position);
+      return out.copy(headLocal).multiplyScalar(PLAYER_SCALE).applyQuaternion(playerRig.quaternion).add(playerRig.position);
     }
 
     // CurrentLeftHandPosition / CurrentRightHandPosition: tracked hand + offset, clamped to maxArmLength from the head
     const _hwHead = new THREE.Vector3();
     const _hwDelta = new THREE.Vector3();
     function currentHandPosition(hand, out) {
-      // grip pose is local to the rig: world = rig.position + local * PLAYER_SCALE
+      // grip pose is local to the rig: world = rig.position + rigRotation * (local * PLAYER_SCALE)
       out.copy(hand.offset).applyQuaternion(hand.grip.quaternion).add(hand.grip.position)
-         .multiplyScalar(PLAYER_SCALE).add(playerRig.position);
+         .multiplyScalar(PLAYER_SCALE).applyQuaternion(playerRig.quaternion).add(playerRig.position);
       headWorld(_hwHead);
       _hwDelta.subVectors(out, _hwHead);
       if (_hwDelta.length() >= MAX_ARM_LENGTH) {
@@ -1303,6 +1310,8 @@
 
     function resetLocomotion() {
       playerRig.position.set(0, 0, 0);
+      playerRig.rotation.set(0, 0, 0); // undo any snap turns
+      snapReady = true;
       rigVelocity.set(0, 0, 0);
       for (const v of velocityHistory) v.set(0, 0, 0);
       denormalizedVelocityAverage.set(0, 0, 0);
@@ -1500,15 +1509,59 @@
       for (const h of hands) {
         if (h.tracked) {
           // Put the controller model where the physics hand is (undo the hand offset)
-          h.follower.position.copy(h.offset).applyQuaternion(h.grip.quaternion)
+          h.follower.quaternion.multiplyQuaternions(playerRig.quaternion, h.grip.quaternion); // world orientation
+          h.follower.position.copy(h.offset).applyQuaternion(h.follower.quaternion)
             .multiplyScalar(-PLAYER_SCALE).add(h.last);
-          h.follower.quaternion.copy(h.grip.quaternion);
           h.follower.scale.setScalar(PLAYER_SCALE); // controller model matches your scaled hands
           h.sphere.position.copy(h.last);
           h.follower.userData.sphereMat.color.set(h.colliding ? 0x66ff99 : 0x88aaff);
           if (h.colliding && !h.wasTouching) pulse(h.controller, 0.25, 20);
         }
         h.wasTouching = h.colliding;
+      }
+    }
+
+    // =====================================================================
+    //  Snap turning (right thumbstick), modelled on Player.Turn() in Player.cs:
+    //  rotate the rig about your head so you turn in place, and rotate everything the
+    //  physics remembers from last frame by the same amount so nothing sees a jump.
+    // =====================================================================
+    let snapReady = true;
+    const _pivot = new THREE.Vector3();
+    const _UP = new THREE.Vector3(0, 1, 0);
+    const _turnQ = new THREE.Quaternion();
+
+    function rotateAroundPivot(v, angle) {
+      return v.sub(_pivot).applyAxisAngle(_UP, angle).add(_pivot);
+    }
+
+    function snapTurn(degrees) {
+      const angle = THREE.MathUtils.degToRad(degrees);
+      headWorld(_pivot);                       // your head's current world position (only X/Z matter)
+      // rig: orbit its origin around the head and add the yaw, so your head stays put
+      rotateAroundPivot(playerRig.position, angle);
+      _turnQ.setFromAxisAngle(_UP, angle);
+      playerRig.quaternion.premultiply(_turnQ);
+      // previous-frame state, rotated the same way, so travel/velocity this frame is a normal step
+      for (const h of hands) rotateAroundPivot(h.last, angle);   // physics hand positions
+      rotateAroundPivot(lastHeadPosition, angle);
+      rotateAroundPivot(lastPosition, angle);                    // velocity is measured from this
+      denormalizedVelocityAverage.applyAxisAngle(_UP, angle);    // as Player.Turn() does
+      for (const v of velocityHistory) v.applyAxisAngle(_UP, angle);
+    }
+
+    function pollSnapTurn() {
+      const right = controllers.find((c) => c.userData.inputSource?.handedness === 'right');
+      const axes = right?.userData.inputSource.gamepad?.axes;
+      if (!axes) return;
+      // xr-standard mapping: axes[2] is the thumbstick X (axes[0] is a touchpad, usually 0)
+      const x = axes.length >= 4 ? axes[2] : (axes[0] ?? 0);
+      if (snapReady && Math.abs(x) > SNAP_TURN_TRIGGER) {
+        snapReady = false;                      // latch: no more turns until the stick recentres
+        snapTurn(x > 0 ? -SNAP_TURN_DEGREES : SNAP_TURN_DEGREES); // push right = turn right (clockwise)
+        pulse(right, 0.2, 15);
+      } else if (!snapReady && Math.abs(x) < SNAP_TURN_RESET) {
+        snapReady = true;
       }
     }
 
@@ -1519,6 +1572,9 @@
       headLocal.set(p.x, p.y, p.z);
 
       if (!locomotionReady) initializeValues();
+
+      // Snap turn first, so this frame's physics already uses the new facing
+      pollSnapTurn();
 
       // A hand that just started tracking begins at its tracked position
       for (const h of hands) {
