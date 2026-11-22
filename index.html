@@ -18,6 +18,35 @@
     }
     #diag .bad { color: #ff8a8a; }
     #diag a { color: #8cf; }
+    /* GRIMAPE title screen (desktop overlay) */
+    #title-screen {
+      position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 10px; padding: 20px 20px 100px; box-sizing: border-box; user-select: none;
+      background: radial-gradient(ellipse at 50% 42%, rgba(42,0,3,.8) 0%, rgba(8,0,0,.95) 55%, #000 100%);
+      transition: opacity .9s ease;
+    }
+    #title-logo { width: min(94vw, 1150px); height: auto; animation: title-flicker 7s infinite; }
+    #title-tag { color: #7d5a5a; letter-spacing: .35em; text-transform: uppercase; font: 600 13px/1.4 system-ui, sans-serif; margin-top: -8px; }
+    #play-btn {
+      margin-top: 18px; padding: 14px 52px 14px calc(52px + .3em); cursor: pointer;
+      font: 900 34px/1 Impact, Haettenschweiler, "Arial Narrow", "Arial Black", sans-serif; letter-spacing: .3em;
+      color: #ffe2e2; text-shadow: 0 0 10px rgba(255,40,40,.9);
+      background: radial-gradient(ellipse at 50% 30%, #a3000f, #3b0004 75%);
+      border: 2px solid #c4121e; border-radius: 6px; animation: play-glow 2.2s ease-in-out infinite;
+      transition: transform .12s ease, filter .12s ease;
+    }
+    #play-btn:hover, #play-btn:focus-visible { filter: brightness(1.35); transform: scale(1.05); outline: none; }
+    #play-btn:active { transform: scale(.97); }
+    #title-hint { color: #6d5555; font: 12px/1.5 system-ui, sans-serif; max-width: 90vw; text-align: center; margin-top: 6px; }
+    @keyframes play-glow {
+      0%, 100% { box-shadow: 0 0 14px rgba(255,20,30,.45), inset 0 0 14px rgba(0,0,0,.6); }
+      50%      { box-shadow: 0 0 36px rgba(255,30,40,.85), inset 0 0 10px rgba(0,0,0,.5); }
+    }
+    @keyframes title-flicker {
+      0%, 90%, 93%, 96%, 100% { opacity: 1; filter: none; }
+      91.5% { opacity: .55; }
+      94.5% { opacity: .85; filter: brightness(1.45); }
+    }
   </style>
   <script type="importmap">
     {
@@ -38,6 +67,13 @@
     Generator: hold Trigger or Grip on its yellow handle, then hit each skill check with the other Trigger (or A / X). Beat 5 to power the floodlights.<br />
     Lake (east of camp): swim by sweeping your hands through the water. Find the 3 glowing boat parts, carry them with Grip and drop them at the boat's motor; then grab the wheel and use Trigger or the thumbstick to drive.<br />
     Ambient horror music starts when you press ENTER VR (headphones recommended).
+  </div>
+  <!-- GRIMAPE title screen (desktop). Sits under the ENTER VR button and the diagnostics panel. -->
+  <div id="title-screen">
+    <canvas id="title-logo" width="2048" height="900" aria-label="GRIMAPE"></canvas>
+    <div id="title-tag">Something in the woods is awake</div>
+    <button id="play-btn" type="button">PLAY</button>
+    <div id="title-hint">Desktop: click PLAY &nbsp;·&nbsp; VR: press ENTER VR, then touch PLAY or point at it and pull Trigger</div>
   </div>
   <div id="diag"></div>
 
@@ -2748,6 +2784,676 @@
       if (stroking && (strokeT -= dt) <= 0) { strokeT = 0.35; boatAudio.stroke(); }
     }
 
+    // =====================================================================
+    //  GRIMAPE title screen (self-contained). Plugs into the loop with titleBeforePhysics()
+    //  before locomotion and updateTitle() after it; the desktop overlay is the #title-screen div.
+    // =====================================================================
+    const TITLE_POS = new THREE.Vector3(0, 0, 34);        // dark start area behind the southern tree line (out of sight of the camp)
+    const TITLE_BOARD_W = 1.9;                            // logo board width (m)
+    const TITLE_BOARD_DIST = 1.5, TITLE_BOARD_Y = 0.72;   // board distance in front of you and its centre height
+    const TITLE_BOARD_TILT = 0.15;                        // the board leans towards you (rad)
+    const PLAY_BTN = { w: 0.26, h: 0.05, d: 0.14 };       // the pokeable 3D PLAY button (m)
+    const PLAY_PEDESTAL_H = 0.22, PLAY_DIST = 0.5, PLAY_TILT = 0.3;
+    const TITLE_ARM_DELAY = 0.8;                          // s before PLAY reacts (so you can't hit it by accident as you appear)
+    const TITLE_FADE_OUT = 0.35, TITLE_FADE_IN = 1.0;     // fade to black and back (s)
+    const LOGO_W = 2048, LOGO_H = 900;                    // logo canvas resolution (shared by the VR board and the desktop overlay)
+    const TITLE_FONT = 'Impact, Haettenschweiler, "Anton", "Oswald", "Arial Narrow", "Roboto Condensed", "Arial Black", sans-serif';
+
+    let titleActive = true;      // the title screen is up until PLAY is pressed (desktop or VR)
+    let titlePlaced = false;     // you've been put in the VR start area this session
+    let titleTime = 0, titleFadeInT = 0, titleTransition = null, titleOverlayVisible = true;
+    let playHover = 0, playPressT = 0;
+
+    // A tapered blood drip hanging from (x, y), with a round drop at the end and a wet highlight
+    function drawDrip(g, x, y, len, w, col) {
+      g.fillStyle = col;
+      g.beginPath();
+      g.moveTo(x - w / 2, y);
+      g.bezierCurveTo(x - w / 2, y + len * 0.55, x - w * 0.3, y + len * 0.8, x - w * 0.3, y + len);
+      g.arc(x, y + len, w * 0.6, Math.PI, 0, true);
+      g.bezierCurveTo(x + w * 0.3, y + len * 0.8, x + w / 2, y + len * 0.55, x + w / 2, y);
+      g.closePath();
+      g.fill();
+      g.fillStyle = 'rgba(255,120,120,0.3)';
+      g.fillRect(x - w * 0.22, y + 3, Math.max(1, w * 0.12), Math.max(0, len * 0.8));
+      g.beginPath(); g.arc(x - w * 0.2, y + len - w * 0.15, w * 0.16, 0, Math.PI * 2); g.fill();
+    }
+
+    // ---------- The GRIMAPE logo: drawn once into a high-res canvas ----------
+    function buildLogo() {
+      const W = LOGO_W, H = LOGO_H;
+      const rnd = mulberry32(6660);                  // its own seed, so the camp's random layout is unaffected
+      const r2 = (a, b) => a + rnd() * (b - a);
+      const mk = () => { const c = document.createElement('canvas'); c.width = W; c.height = H; return c; };
+
+      // 1) letter mask. Each letter is stretched into its own tall box, so any installed font gives the same chunky shape.
+      const mask = mk(), mg = mask.getContext('2d');
+      const letters = [['G', 1], ['R', 1], ['I', 0.42], ['M', 1.3], ['A', 1.05], ['P', 0.95], ['E', 0.88]];
+      const GAP = 48, TOP = 80, CAP = 400, usable = W * 0.88;
+      const unit = (usable - GAP * (letters.length - 1)) / letters.reduce((s, l) => s + l[1], 0);
+      let lx = (W - usable) / 2;
+      mg.fillStyle = '#fff';
+      mg.font = `900 200px ${TITLE_FONT}`;
+      mg.textAlign = 'left';
+      mg.textBaseline = 'alphabetic';
+      for (const [ch, wt] of letters) {
+        const bw = unit * wt;
+        const m = mg.measureText(ch);
+        const l = m.actualBoundingBoxLeft ?? 0, r = m.actualBoundingBoxRight ?? m.width;
+        const asc = m.actualBoundingBoxAscent ?? 145, desc = m.actualBoundingBoxDescent ?? 0;
+        const gw = Math.max(1, l + r), gh = Math.max(1, asc + desc);
+        mg.save();
+        mg.translate(lx + bw / 2, TOP + CAP / 2 + r2(-14, 14));
+        mg.rotate(r2(-0.035, 0.035));
+        mg.scale(bw / gw, CAP / gh);
+        mg.fillText(ch, -gw / 2 + l, gh / 2 - desc);
+        mg.restore();
+        lx += bw + GAP;
+      }
+
+      // 2) make it jagged: shred the edges, then add spikes and bites along the tops and sides, and a few scratches
+      const jag = mk(), jg = jag.getContext('2d');
+      for (let y = 0; y < H; y += 3) jg.drawImage(mask, 0, y, W, 3, r2(-4, 4), y, W, 3);
+      let data = jg.getImageData(0, 0, W, H).data;
+      const A = (px, py) => (px < 0 || py < 0 || px >= W || py >= H) ? 0 : data[(py * W + px) * 4 + 3];
+      jg.fillStyle = '#fff';
+      for (let k = 0; k < 12000; k++) {
+        const px = r2(0, W) | 0, py = r2(TOP - 40, TOP + CAP + 40) | 0;
+        if (A(px, py) < 128) continue;
+        let ox = 0, oy = 0;
+        if (A(px, py - 8) < 128) oy = -1; else if (A(px - 8, py) < 128) ox = -1; else if (A(px + 8, py) < 128) ox = 1; else continue;
+        // spikes only grow outwards into open space, never into the holes inside letters (so G, R, A, P stay readable)
+        const open = [20, 40, 60].every((k) => A(px + ox * k, py + oy * k) < 128);
+        const spike = open && rnd() < 0.62;
+        if (!spike && rnd() < 0.5) continue;
+        const len = spike ? r2(8, 26) : r2(5, 14), half = r2(3, 7), dir = spike ? 1 : -1;
+        jg.globalCompositeOperation = spike ? 'source-over' : 'destination-out';
+        jg.beginPath();
+        if (oy) {
+          const b = py + (spike ? 3 : -3);
+          jg.moveTo(px - half, b); jg.lineTo(px + half, b); jg.lineTo(px + r2(-4, 4), py - dir * len);
+        } else {
+          const b = px - ox * (spike ? 3 : -3);
+          jg.moveTo(b, py - half); jg.lineTo(b, py + half); jg.lineTo(px + ox * dir * len, py + r2(-4, 4));
+        }
+        jg.fill();
+      }
+      jg.globalCompositeOperation = 'destination-out';
+      jg.lineCap = 'round';
+      for (let k = 0; k < 22; k++) {
+        let sx = r2(W * 0.05, W * 0.95), sy = r2(TOP, TOP + CAP * 0.8);
+        jg.lineWidth = r2(1.5, 4);
+        jg.beginPath(); jg.moveTo(sx, sy);
+        for (let s = 0; s < 4; s++) { sx += r2(-30, 30); sy += r2(10, 45); jg.lineTo(sx, sy); }
+        jg.stroke();
+      }
+      jg.globalCompositeOperation = 'source-over';
+
+      // 3) top and bottom edge of the letters in every column (for the soaked tops, pools and drips)
+      data = jg.getImageData(0, 0, W, H).data;
+      const tops = new Int16Array(W).fill(-1), bottoms = new Int16Array(W).fill(-1);
+      for (let px = 0; px < W; px++) {
+        for (let py = TOP - 60; py < TOP + CAP + 60; py++) if (A(px, py) > 128) { tops[px] = py; break; }
+        for (let py = TOP + CAP + 60; py > TOP - 60; py--) if (A(px, py) > 128) { bottoms[px] = py; break; }
+      }
+
+      // 4) letter colour: dark crimson fading to near black, grime, blood soaked into the tops, runs down the faces
+      const fill = mk(), fg = fill.getContext('2d');
+      fg.drawImage(jag, 0, 0);
+      fg.globalCompositeOperation = 'source-in';
+      const grad = fg.createLinearGradient(0, TOP, 0, TOP + CAP);
+      grad.addColorStop(0, '#c0121a'); grad.addColorStop(0.5, '#8c0710'); grad.addColorStop(1, '#520309');
+      fg.fillStyle = grad; fg.fillRect(0, 0, W, H);
+      fg.globalCompositeOperation = 'source-atop';
+      for (let k = 0; k < 14000; k++) {
+        fg.fillStyle = rnd() < 0.7 ? `rgba(0,0,0,${r2(0.1, 0.45).toFixed(2)})` : `rgba(255,60,60,${r2(0.04, 0.14).toFixed(2)})`;
+        fg.fillRect(r2(0, W), r2(TOP - 40, TOP + CAP + 40), r2(1, 4), r2(1, 4));
+      }
+      for (let px = 0; px < W; px += 2) {
+        if (tops[px] < 0) continue;
+        const th = 18 + 12 * Math.sin(px * 0.021 + 1.3) + 8 * Math.sin(px * 0.067) + r2(0, 5);
+        fg.fillStyle = '#8f000c'; fg.fillRect(px, tops[px] - 4, 2, th);
+        fg.fillStyle = 'rgba(255,90,90,0.25)'; fg.fillRect(px, tops[px] - 2, 2, 3);
+      }
+      for (let k = 0; k < 30; k++) {
+        const px = r2(W * 0.06, W * 0.94) | 0;
+        if (tops[px] < 0) continue;
+        drawDrip(fg, px, tops[px] + 10, r2(40, 260), r2(5, 12), '#8a000b');
+      }
+      fg.globalCompositeOperation = 'source-over';
+
+      // 5) final logo: black drop shadow, red glow, letters, then blood pooled along the bottoms and hanging drips
+      const base = mk(), bg = base.getContext('2d');
+      bg.save();
+      bg.shadowColor = 'rgba(0,0,0,0.95)'; bg.shadowBlur = 30; bg.shadowOffsetX = 8; bg.shadowOffsetY = 12;
+      bg.drawImage(fill, 0, 0);
+      bg.shadowColor = 'rgba(200,0,10,0.55)'; bg.shadowBlur = 60; bg.shadowOffsetX = 0; bg.shadowOffsetY = 0;
+      bg.drawImage(fill, 0, 0);
+      bg.restore();
+      // pale chipped rim along the tops so the letter shapes read in the dark
+      const rim = mk(), rg = rim.getContext('2d');
+      rg.drawImage(jag, 0, -3);
+      rg.globalCompositeOperation = 'destination-out';
+      rg.drawImage(jag, 0, 2);
+      rg.globalCompositeOperation = 'source-in';
+      rg.fillStyle = 'rgba(255,150,140,0.55)'; rg.fillRect(0, 0, W, H);
+      bg.drawImage(rim, 0, 0);
+      for (let px = 0; px < W; px += 3) {
+        if (bottoms[px] < 0) continue;
+        const r = r2(4, 13);
+        bg.fillStyle = '#55000a'; bg.beginPath(); bg.ellipse(px, bottoms[px] - r * 0.2, r * 1.4, r, 0, 0, Math.PI * 2); bg.fill();
+      }
+      for (let px = 0; px < W; px += 3) {
+        if (bottoms[px] < 0) continue;
+        const r = r2(3, 8);
+        bg.fillStyle = '#86000d'; bg.beginPath(); bg.ellipse(px, bottoms[px] - r * 0.6, r * 1.3, r * 0.8, 0, 0, Math.PI * 2); bg.fill();
+        if (rnd() < 0.12) { bg.fillStyle = 'rgba(255,120,120,0.3)'; bg.fillRect(px - 2, bottoms[px] - r * 1.1, r2(3, 8), 2); }
+      }
+      for (let k = 0; k < 40; k++) {
+        const px = r2(W * 0.06, W * 0.94) | 0;
+        if (bottoms[px] < 0) continue;
+        const len = 12 + Math.pow(rnd(), 1.6) * 170;
+        drawDrip(bg, px, bottoms[px] - 6, len, r2(6, 16), rnd() < 0.5 ? '#7a000a' : '#640008');
+      }
+
+      // 6) where the animated drips hang from (canvas pixels)
+      const sources = [];
+      for (let tries = 0; tries < 600 && sources.length < 16; tries++) {
+        const px = r2(W * 0.06, W * 0.94) | 0;
+        if (bottoms[px] < 0 || bottoms[px - 6] < 0 || bottoms[px + 6] < 0) continue;
+        if (sources.some((s) => Math.abs(s.x - px) < 70)) continue;
+        sources.push({ x: px, y: bottoms[px] - 3, w: r2(8, 16) });
+      }
+      return { canvas: base, sources };
+    }
+    const logo = buildLogo();
+
+    // Drip animation, shared by the desktop overlay and the VR board (lengths in logo pixels)
+    function resetDrip(d, first) {
+      d.max = 30 + Math.random() * 110;
+      d.speed = 10 + Math.random() * 20;
+      d.wait = first ? Math.random() * 4 : 0.5 + Math.random() * 2.5;
+      return d;
+    }
+    function stepDrip(d, dt, onDetach) {
+      if (d.wait > 0) { d.wait -= dt; d.len = Math.max(0, d.len - 25 * dt); return; }
+      d.len += d.speed * (1 + 1.5 * d.len / d.max) * dt;   // creeps down, faster as the drop gets heavy
+      if (d.len >= d.max) { onDetach(d); d.len *= 0.3; resetDrip(d, false); }
+    }
+
+    // ---------- Desktop overlay (canvas logo + PLAY button) ----------
+    const titleScreenEl = document.getElementById('title-screen');
+    const titleLogoCtx = document.getElementById('title-logo').getContext('2d');
+    const playBtnEl = document.getElementById('play-btn');
+    const drips2D = logo.sources.map((s) => resetDrip({ x: s.x, y: s.y, w: s.w, len: 0 }, true));
+    const fall2D = [];
+    function drawTitleOverlay(dt) {
+      const g = titleLogoCtx;
+      g.clearRect(0, 0, LOGO_W, LOGO_H);
+      g.drawImage(logo.canvas, 0, 0);
+      for (const d of drips2D) {
+        stepDrip(d, dt, (dd) => fall2D.push({ x: dd.x, y: dd.y + dd.len, vy: 0, w: dd.w }));
+        if (d.len > d.w * 0.6) drawDrip(g, d.x, d.y, d.len, d.w, '#8c000d');
+      }
+      for (let i = fall2D.length - 1; i >= 0; i--) {
+        const f = fall2D[i];
+        f.vy += 1500 * dt; f.y += f.vy * dt;
+        if (f.y > LOGO_H + 30) { fall2D.splice(i, 1); continue; }
+        const st = Math.min(2.2, 1 + f.vy / 900);
+        g.fillStyle = '#8c000d'; g.beginPath(); g.ellipse(f.x, f.y, f.w * 0.5, f.w * 0.5 * st, 0, 0, Math.PI * 2); g.fill();
+        g.fillStyle = 'rgba(255,140,140,0.35)'; g.beginPath(); g.arc(f.x - f.w * 0.15, f.y - f.w * 0.15 * st, f.w * 0.14, 0, Math.PI * 2); g.fill();
+      }
+    }
+
+    // ---------- Title sounds (their own small Web Audio graph; the music code is untouched) ----------
+    const titleAudio = (() => {
+      let ctx = null, out = null, noise = null;
+      function build() {
+        ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const comp = ctx.createDynamicsCompressor();
+        comp.threshold.value = -16; comp.knee.value = 10; comp.ratio.value = 5;
+        out = ctx.createGain(); out.gain.value = 0.5;
+        out.connect(comp); comp.connect(ctx.destination);
+        const len = ctx.sampleRate * 3;
+        noise = ctx.createBuffer(1, len, ctx.sampleRate);
+        const d = noise.getChannelData(0);
+        for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+      }
+      return {
+        unlock() { try { if (!ctx) build(); ctx.resume(); } catch (e) { console.warn('Title audio could not start:', e); } },
+        // PLAY cue: an indrawn breath, a deep boom, a cracked bell that echoes away and a faint high whine
+        cue() {
+          this.unlock();
+          if (!ctx) return;
+          const t = ctx.currentTime + 0.03, hit = t + 0.5;
+          const delay = ctx.createDelay(2); delay.delayTime.value = 0.38;
+          const fb = ctx.createGain(); fb.gain.value = 0.4;
+          const dl = ctx.createBiquadFilter(); dl.type = 'lowpass'; dl.frequency.value = 1800;
+          delay.connect(dl); dl.connect(fb); fb.connect(delay);
+          const wet = ctx.createGain(); wet.gain.value = 0.5; delay.connect(wet); wet.connect(out);
+          setTimeout(() => { fb.disconnect(); wet.disconnect(); }, 8000); // let the echo die, then free it
+
+          const n = ctx.createBufferSource(); n.buffer = noise;
+          const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 2.5;
+          bp.frequency.setValueAtTime(300, t); bp.frequency.exponentialRampToValueAtTime(1600, hit);
+          const ng = ctx.createGain();
+          ng.gain.setValueAtTime(0.0001, t); ng.gain.exponentialRampToValueAtTime(0.2, hit - 0.02);
+          ng.gain.exponentialRampToValueAtTime(0.0001, hit + 0.08);
+          n.connect(bp); bp.connect(ng); ng.connect(out); n.start(t); n.stop(hit + 0.2);
+
+          const boom = ctx.createOscillator(); boom.type = 'sine';
+          boom.frequency.setValueAtTime(72, hit); boom.frequency.exponentialRampToValueAtTime(26, hit + 1.8);
+          const bg = ctx.createGain();
+          bg.gain.setValueAtTime(0.0001, hit); bg.gain.exponentialRampToValueAtTime(0.6, hit + 0.012);
+          bg.gain.exponentialRampToValueAtTime(0.0001, hit + 2.0);
+          boom.connect(bg); bg.connect(out); boom.start(hit); boom.stop(hit + 2.1);
+
+          for (const [f, a] of [[233.1, 0.06], [246.9, 0.05]]) {   // B♭3 + B3: a minor second, out of tune with itself
+            [1, 2.76, 5.4, 8.93].forEach((ratio, i) => {
+              const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = f * ratio;
+              const g = ctx.createGain(), dec = 3.2 / (1 + i * 0.7);
+              g.gain.setValueAtTime(0.0001, hit); g.gain.exponentialRampToValueAtTime(a / (i + 1), hit + 0.004);
+              g.gain.exponentialRampToValueAtTime(0.0001, hit + dec);
+              o.connect(g); g.connect(out); g.connect(delay); o.start(hit); o.stop(hit + dec + 0.05);
+            });
+          }
+
+          for (const f of [1318.5, 1396.9]) {
+            const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = f;
+            o.detune.setValueAtTime(0, hit); o.detune.linearRampToValueAtTime(-40, hit + 2.6);
+            const g = ctx.createGain();
+            g.gain.setValueAtTime(0, hit); g.gain.linearRampToValueAtTime(0.012, hit + 0.4); g.gain.linearRampToValueAtTime(0, hit + 2.6);
+            o.connect(g); g.connect(out); g.connect(delay); o.start(hit); o.stop(hit + 2.7);
+          }
+        },
+      };
+    })();
+    vrButton.addEventListener('click', () => titleAudio.unlock());
+
+    // ---------- VR start area ----------
+    function titleTextTexture(w, h, draw) {
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      draw(c.getContext('2d'), w, h);
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      return tex;
+    }
+    const titleGroup = new THREE.Group();   // hidden unless you're in the headset on the title screen
+    titleGroup.position.copy(TITLE_POS);
+    titleGroup.visible = false;
+    scene.add(titleGroup);
+    const BW = TITLE_BOARD_W, BH = TITLE_BOARD_W * LOGO_H / LOGO_W, PX = BW / LOGO_W; // PX = metres per logo pixel
+
+    // Floor that fades out into the dark, and a glossy pool of blood under the board
+    const titleFloorTex = titleTextTexture(256, 256, (g, s) => {
+      const grd = g.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+      grd.addColorStop(0, 'rgba(20,13,11,1)'); grd.addColorStop(0.6, 'rgba(13,9,8,0.95)'); grd.addColorStop(1, 'rgba(8,6,6,0)');
+      g.fillStyle = grd; g.fillRect(0, 0, s, s);
+      for (let i = 0; i < 2500; i++) {
+        const a = Math.random() * Math.PI * 2, d = Math.sqrt(Math.random()) * s * 0.45;
+        g.fillStyle = `rgba(${(25 + Math.random() * 20) | 0},${(14 + Math.random() * 12) | 0},${(10 + Math.random() * 8) | 0},0.5)`;
+        g.fillRect(s / 2 + Math.cos(a) * d, s / 2 + Math.sin(a) * d, 2, 2);
+      }
+    });
+    const titleFloor = new THREE.Mesh(new THREE.CircleGeometry(8, 48), new THREE.MeshStandardMaterial({
+      map: titleFloorTex, transparent: true, depthWrite: false, roughness: 1, polygonOffset: true, polygonOffsetFactor: -1 }));
+    titleFloor.rotation.x = -Math.PI / 2;
+    titleFloor.position.y = 0.003;
+    titleFloor.receiveShadow = true;
+    titleGroup.add(titleFloor);
+    {
+      const s = new THREE.Shape();
+      for (let k = 0; k <= 40; k++) {
+        const a = (k / 40) * Math.PI * 2, r = 1 + 0.18 * Math.sin(a * 3 + 1) + 0.1 * Math.sin(a * 7);
+        const x = Math.cos(a) * r * 0.95, y = Math.sin(a) * r * 0.3;
+        if (k === 0) s.moveTo(x, y); else s.lineTo(x, y);
+      }
+      const puddle = new THREE.Mesh(new THREE.ShapeGeometry(s), new THREE.MeshStandardMaterial({
+        color: 0x330004, roughness: 0.1, metalness: 0.4, polygonOffset: true, polygonOffsetFactor: -2 }));
+      puddle.rotation.x = -Math.PI / 2;
+      puddle.position.set(0, 0.005, -TITLE_BOARD_DIST + 0.12);
+      titleGroup.add(puddle);
+    }
+
+    // The floating logo board: the logo canvas on a dark plate in a rusted frame, hanging on chains from the dark
+    const boardGroup = new THREE.Group();
+    boardGroup.position.set(0, TITLE_BOARD_Y, -TITLE_BOARD_DIST);
+    boardGroup.rotation.x = TITLE_BOARD_TILT;
+    titleGroup.add(boardGroup);
+    const logoTex = new THREE.CanvasTexture(logo.canvas);
+    logoTex.colorSpace = THREE.SRGBColorSpace;
+    logoTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    const logoMesh = new THREE.Mesh(new THREE.PlaneGeometry(BW, BH),
+      new THREE.MeshBasicMaterial({ map: logoTex, transparent: true, depthWrite: false, fog: false }));
+    logoMesh.position.z = 0.002;
+    logoMesh.renderOrder = 1;
+    const titlePlate = new THREE.Mesh(new THREE.PlaneGeometry(BW * 1.05, BH * 1.08),
+      new THREE.MeshStandardMaterial({ color: 0x0b0607, roughness: 0.9, metalness: 0.2 }));
+    boardGroup.add(titlePlate, logoMesh);
+    rayTargets.push(titlePlate);
+    {
+      const rust = new THREE.MeshStandardMaterial({ color: 0x3a1a12, roughness: 0.7, metalness: 0.6 });
+      const fw = BW * 1.05, fh = BH * 1.08, T = 0.03;
+      for (const [w, h, x, y] of [[fw + T, T, 0, fh / 2], [fw + T, T, 0, -fh / 2], [T, fh, -fw / 2, 0], [T, fh, fw / 2, 0]]) {
+        const bar = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.04), rust);
+        bar.position.set(x, y, 0);
+        boardGroup.add(bar);
+      }
+      for (const side of [-1, 1]) {
+        const chain = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 3, 5), rust);
+        chain.position.set(side * fw * 0.42, fh / 2 + 1.5, -0.01);
+        boardGroup.add(chain);
+      }
+      const hint = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.084), new THREE.MeshBasicMaterial({
+        transparent: true, depthWrite: false, fog: false,
+        map: titleTextTexture(1024, 96, (g, w, h) => {
+          g.font = '600 40px system-ui, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+          g.fillStyle = '#b98c8c'; g.fillText('TOUCH  PLAY   ·   OR POINT AT IT AND PULL TRIGGER', w / 2, h / 2);
+        }) }));
+      hint.position.set(0, -fh / 2 - 0.07, 0.01);
+      boardGroup.add(hint);
+    }
+
+    // Animated 3D blood drips on the board (runners creep down, drops fall to the floor and splat)
+    const titleBloodMat = new THREE.MeshStandardMaterial({ color: 0x5a0007, emissive: 0x220002, roughness: 0.12, metalness: 0.25 });
+    const runnerGeo = new THREE.CylinderGeometry(0.5, 0.3, 1, 8, 1); runnerGeo.translate(0, -0.5, 0);
+    const dropGeo = new THREE.SphereGeometry(1, 10, 8);
+    const drips3D = logo.sources.map((s) => {
+      const runner = new THREE.Group();
+      const cyl = new THREE.Mesh(runnerGeo, titleBloodMat), bulb = new THREE.Mesh(dropGeo, titleBloodMat);
+      runner.add(cyl, bulb);
+      runner.position.set((s.x / LOGO_W - 0.5) * BW, (0.5 - s.y / LOGO_H) * BH, 0.005);
+      boardGroup.add(runner);
+      return resetDrip({ x: s.x, y: s.y, w: s.w, len: 0, runner, cyl, bulb }, true);
+    });
+    const titleDrops = Array.from({ length: 12 }, () => {
+      const mesh = new THREE.Mesh(dropGeo, titleBloodMat);
+      mesh.visible = false;
+      titleGroup.add(mesh);
+      return { mesh, vy: 0, r: 0, active: false };
+    });
+    const titleSplats = Array.from({ length: 10 }, () => {
+      const mat = new THREE.MeshStandardMaterial({ color: 0x4a0005, roughness: 0.15, metalness: 0.3, transparent: true,
+        depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3 });
+      const mesh = new THREE.Mesh(new THREE.CircleGeometry(1, 14), mat);
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.visible = false;
+      titleGroup.add(mesh);
+      return { mesh, mat, life: 0, r: 0 };
+    });
+    const _tWorld = new THREE.Vector3();
+    function spawnDrop3D(d) {
+      const f = titleDrops.find((x) => !x.active);
+      if (!f) return;
+      d.bulb.getWorldPosition(_tWorld);
+      titleGroup.worldToLocal(_tWorld);
+      f.mesh.position.copy(_tWorld);
+      f.mesh.position.z += 0.01;
+      f.vy = 0;
+      f.r = d.w * PX * 0.6;
+      f.mesh.scale.setScalar(f.r);
+      f.mesh.visible = f.active = true;
+    }
+    function spawnSplat(x, z, r) {
+      const s = titleSplats.find((q) => q.life <= 0) || titleSplats[0];
+      s.mesh.position.set(x, 0.006, z);
+      s.r = r * (2.5 + Math.random() * 2);
+      s.life = 4;
+      s.mesh.visible = true;
+    }
+
+    // Stone pedestal with the glowing PLAY button on top (the pedestal is solid; the button itself isn't, so your hand can press into it)
+    const pedestal = solidBox(TITLE_POS.x, 0, TITLE_POS.z - PLAY_DIST, 0.34, PLAY_PEDESTAL_H, 0.24,
+      new THREE.MeshStandardMaterial({ color: 0x2a2626, roughness: 0.95, flatShading: true }));
+    pedestal.visible = false;
+    const playGroup = new THREE.Group();
+    playGroup.position.set(0, PLAY_PEDESTAL_H, -PLAY_DIST);
+    playGroup.rotation.x = PLAY_TILT;           // top face tilts towards you
+    titleGroup.add(playGroup);
+    const bezel = new THREE.Mesh(new THREE.BoxGeometry(PLAY_BTN.w + 0.03, 0.012, PLAY_BTN.d + 0.03),
+      new THREE.MeshStandardMaterial({ color: 0x1e2022, roughness: 0.5, metalness: 0.7 }));
+    bezel.position.y = 0.006;
+    playGroup.add(bezel);
+    const playBtnMat = new THREE.MeshStandardMaterial({ color: 0x4a0006, emissive: 0xff1424, emissiveIntensity: 0.6, roughness: 0.35 });
+    const playBtnGeo = new THREE.BoxGeometry(PLAY_BTN.w, PLAY_BTN.h, PLAY_BTN.d); playBtnGeo.translate(0, PLAY_BTN.h / 2, 0);
+    const playBtnMesh = new THREE.Mesh(playBtnGeo, playBtnMat);
+    playBtnMesh.position.y = 0.012;
+    playGroup.add(playBtnMesh);
+    rayTargets.push(playBtnMesh);
+    const playLabel = new THREE.Mesh(new THREE.PlaneGeometry(PLAY_BTN.w * 0.94, PLAY_BTN.d * 0.9), new THREE.MeshBasicMaterial({
+      transparent: true, depthWrite: false, fog: false,
+      map: titleTextTexture(512, 256, (g, w, h) => {
+        g.font = `900 170px ${TITLE_FONT}`; g.textAlign = 'center'; g.textBaseline = 'middle';
+        g.shadowColor = 'rgba(255,30,30,0.9)'; g.shadowBlur = 28;
+        g.fillStyle = '#ffe8e8'; g.fillText('PLAY', w / 2, h / 2 + 6);
+      }) }));
+    playLabel.rotation.x = -Math.PI / 2;
+    playLabel.position.y = PLAY_BTN.h + 0.0015;
+    playBtnMesh.add(playLabel);
+    const playGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xff2030, transparent: true, opacity: 0.5,
+      blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+    playGlow.scale.set(0.55, 0.55, 1);
+    playGlow.position.y = 0.06;
+    playGroup.add(playGlow);
+    const playTargets = [playBtnMesh, playLabel];
+
+    // Candles on stones around you, drifting mist, and one red light (only counted while the title area is shown)
+    const titleFlames = [];
+    {
+      const candleMat = new THREE.MeshStandardMaterial({ color: 0xcfc4a8, roughness: 0.8, emissive: 0x2a1c0c });
+      for (let k = 0; k < 7; k++) {
+        const a = Math.PI * (0.12 + 0.76 * k / 6);
+        const x = Math.cos(a) * 1.05, z = -Math.sin(a) * 0.9 + 0.15;
+        const stone = new THREE.Mesh(new THREE.DodecahedronGeometry(0.06, 0), rockMat);
+        stone.position.set(x, 0.03, z);
+        stone.rotation.set(Math.random() * 3, Math.random() * 3, 0);
+        titleGroup.add(stone);
+        const hgt = 0.06 + Math.random() * 0.1;
+        const candle = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.018, hgt, 8), candleMat);
+        candle.position.set(x, 0.06 + hgt / 2, z);
+        titleGroup.add(candle);
+        const flame = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xffa040, transparent: true, opacity: 0.9,
+          blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+        flame.position.set(x, 0.075 + hgt, z);
+        titleGroup.add(flame);
+        titleFlames.push({ flame, ph: Math.random() * 10 });
+      }
+    }
+    const titleMist = Array.from({ length: 6 }, (_, k) => {
+      const m = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0x6a6f78, transparent: true, opacity: 0.06, depthWrite: false }));
+      m.scale.set(3.2, 1.3, 1);
+      titleGroup.add(m);
+      return { m, a: (k / 6) * Math.PI * 2, r: 1.2 + Math.random() * 1.6, s: 0.03 + Math.random() * 0.05 };
+    });
+    const titleLight = new THREE.PointLight(0xff2418, 5, 7, 2);
+    titleLight.position.set(0, 0.55, -0.9);
+    titleGroup.add(titleLight);
+
+    // Invisible walls so you can't wander off into the dark before pressing PLAY
+    addBoxCollider(TITLE_POS.x, -1, TITLE_POS.z - 2.6, 5.4, 5, 0.3);
+    addBoxCollider(TITLE_POS.x, -1, TITLE_POS.z + 2.6, 5.4, 5, 0.3);
+    addBoxCollider(TITLE_POS.x - 2.6, -1, TITLE_POS.z, 0.3, 5, 5.4);
+    addBoxCollider(TITLE_POS.x + 2.6, -1, TITLE_POS.z, 0.3, 5, 5.4);
+
+    // Black sphere round your head for the fades
+    const titleFadeMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0, side: THREE.BackSide,
+      depthTest: false, depthWrite: false, fog: false });
+    const titleFade = new THREE.Mesh(new THREE.SphereGeometry(0.3, 16, 12), titleFadeMat);
+    titleFade.renderOrder = 10000;
+    titleFade.frustumCulled = false;
+    titleFade.visible = false;
+    camera.add(titleFade);
+
+    // ---------- Title logic ----------
+    function hideTitleOverlay() {
+      if (!titleOverlayVisible) return;
+      titleOverlayVisible = false;
+      titleScreenEl.style.opacity = '0';
+      titleScreenEl.style.pointerEvents = 'none';
+      setTimeout(() => { titleScreenEl.style.display = 'none'; }, 950);
+    }
+    function finishTitle() {
+      titleGroup.visible = false;
+      pedestal.visible = false;
+      for (const f of titleDrops) { f.active = false; f.mesh.visible = false; }
+    }
+    function pressPlay(inVR) {
+      if (!titleActive) return;
+      titleActive = false;
+      titleAudio.cue();
+      hideTitleOverlay();
+      if (inVR) {
+        titleTransition = { t: 0, swapped: false };   // fade to black, move to the camp, fade back in
+        playPressT = 0.25;
+        controllers.forEach((c) => pulse(c, 0.8, 120));
+      } else {
+        finishTitle();                               // desktop: the camp view is already behind the overlay
+      }
+    }
+    playBtnEl.addEventListener('click', () => { titleAudio.unlock(); pressPlay(renderer.xr.isPresenting); });
+
+    // Put you in the start area (first VR frame while the title is up). Locomotion re-initialises from here.
+    function placeAtTitle() {
+      titlePlaced = true;
+      titleTime = 0;
+      titleGroup.visible = true;
+      pedestal.visible = true;
+      playerRig.position.x = TITLE_POS.x;
+      playerRig.position.z = TITLE_POS.z;
+      rigVelocity.set(0, 0, 0);
+      for (const v of velocityHistory) v.set(0, 0, 0);
+      denormalizedVelocityAverage.set(0, 0, 0);
+      locomotionReady = false;
+      for (const h of hands) h.tracked = false;
+      titleFadeInT = TITLE_FADE_IN;
+    }
+    function titleBeforePhysics() {
+      if (renderer.xr.isPresenting && titleActive && !titlePlaced) placeAtTitle();
+    }
+    renderer.xr.addEventListener('sessionstart', () => { titlePlaced = false; titleAudio.unlock(); });
+    renderer.xr.addEventListener('sessionend', () => {
+      titlePlaced = false;
+      if (titleTransition && !titleTransition.swapped) finishTitle();
+      titleTransition = null;
+      titleFadeInT = 0;
+      titleFadeMat.opacity = 0;
+      titleFade.visible = false;
+      if (titleActive) { titleGroup.visible = false; pedestal.visible = false; }
+    });
+
+    const titlePrevTrig = [false, false], titlePrevTouch = [false, false];
+    const _tRay = new THREE.Raycaster();
+    _tRay.far = 6;
+    const _tMat = new THREE.Matrix4(), _tLocal = new THREE.Vector3();
+    function handTouchesPlay(h) {
+      if (!h.tracked) return false;
+      _tLocal.copy(h.last);
+      playGroup.worldToLocal(_tLocal);
+      const r = MIN_RAYCAST_DISTANCE;
+      return Math.abs(_tLocal.x) < PLAY_BTN.w / 2 + r * 0.6 && Math.abs(_tLocal.z) < PLAY_BTN.d / 2 + r * 0.6 &&
+             _tLocal.y < 0.012 + PLAY_BTN.h + r * 1.1 && _tLocal.y > -0.1;
+    }
+
+    function updateTitleScene(dt) {
+      const t = titleTime;
+      boardGroup.position.y = TITLE_BOARD_Y + 0.015 * Math.sin(t * 0.9);
+      boardGroup.rotation.z = 0.008 * Math.sin(t * 0.6);
+      for (const d of drips3D) {
+        stepDrip(d, dt, spawnDrop3D);
+        const L = d.len * PX, w = d.w * PX;
+        d.runner.visible = L > 0.0008;
+        d.cyl.scale.set(w, Math.max(L, 0.0001), w * 0.55);
+        d.bulb.position.y = -L;
+        d.bulb.scale.set(w * 0.62, w * 0.78, w * 0.45);
+      }
+      for (const f of titleDrops) {
+        if (!f.active) continue;
+        f.vy -= GRAVITY * dt;
+        f.mesh.position.y += f.vy * dt;
+        f.mesh.scale.set(f.r, f.r * (1.2 + Math.min(1.5, -f.vy * 0.25)), f.r);
+        if (f.mesh.position.y <= 0.012) {
+          f.active = f.mesh.visible = false;
+          spawnSplat(f.mesh.position.x, f.mesh.position.z, f.r);
+        }
+      }
+      for (const s of titleSplats) {
+        if (s.life <= 0) continue;
+        s.life -= dt;
+        s.mesh.scale.setScalar(s.r * (0.4 + 0.6 * Math.min(1, (4 - s.life) / 0.15)));
+        s.mat.opacity = Math.min(0.9, s.life / 1.5);
+        if (s.life <= 0) s.mesh.visible = false;
+      }
+      for (const f of titleFlames) {
+        const k = 0.8 + 0.2 * Math.sin(t * 13 + f.ph) + Math.random() * 0.15;
+        f.flame.scale.set(0.09 * k, 0.13 * k, 1);
+      }
+      for (const m of titleMist) {
+        m.a += m.s * dt;
+        m.m.position.set(Math.cos(m.a) * m.r, 0.3 + 0.05 * Math.sin(t * 0.4 + m.a), Math.sin(m.a) * m.r * 0.7 - 0.6);
+      }
+      titleLight.intensity = 4.5 + 1.2 * Math.sin(t * 2.1) + Math.random() * 0.6;
+      // the button glows, brighter while touched or pointed at, and sinks in when pressed
+      playPressT = Math.max(0, playPressT - dt);
+      playBtnMesh.position.y = 0.012 - (playPressT > 0 ? 0.022 : 0);
+      playBtnMat.emissiveIntensity = 0.45 + 0.25 * Math.sin(t * 3) + playHover * 1.1 + (playPressT > 0 ? 1.5 : 0);
+      playGlow.material.opacity = 0.35 + 0.15 * Math.sin(t * 3) + playHover * 0.45;
+    }
+
+    function updateTitle(dt) {
+      // fades (from black when you arrive, and through black when you press PLAY)
+      let fade = 0;
+      if (titleFadeInT > 0) { titleFadeInT = Math.max(0, titleFadeInT - dt); fade = titleFadeInT / TITLE_FADE_IN; }
+      if (titleTransition) {
+        const tr = titleTransition;
+        tr.t += dt;
+        if (!tr.swapped) {
+          fade = Math.min(1, tr.t / TITLE_FADE_OUT);
+          if (tr.t >= TITLE_FADE_OUT) {
+            tr.swapped = true; tr.t = 0; fade = 1;
+            finishTitle();
+            resetLocomotion();   // camp starting point, no snap-turn, zero velocity; re-initialised next frame
+          }
+        } else {
+          fade = Math.max(0, 1 - tr.t / TITLE_FADE_IN);
+          if (tr.t >= TITLE_FADE_IN) titleTransition = null;
+        }
+      }
+      titleFadeMat.opacity = fade;
+      titleFade.visible = fade > 0.001;
+
+      if (titleOverlayVisible && !renderer.xr.isPresenting) drawTitleOverlay(dt);
+      if (!titleGroup.visible || !renderer.xr.isPresenting) return;
+      titleTime += dt;
+      updateTitleScene(dt);
+      if (!titleActive) return;
+
+      // PLAY: poke the button with either hand, or point a controller ray at it and pull Trigger
+      const armed = titleTime > TITLE_ARM_DELAY && !titleTransition;
+      let hover = false, pressed = false;
+      for (let i = 0; i < controllers.length; i++) {
+        const c = controllers[i], ud = c.userData;
+        const trig = btn(c, 0), trigEdge = trig && !titlePrevTrig[i];
+        titlePrevTrig[i] = trig;
+        const touch = handTouchesPlay(hands[i]);
+        if (touch) hover = true;
+        if (touch && !titlePrevTouch[i] && armed) pressed = true;
+        titlePrevTouch[i] = touch;
+        if (ud.inputSource && ud.ray.visible) {
+          _tMat.identity().extractRotation(c.matrixWorld);
+          _tRay.ray.origin.setFromMatrixPosition(c.matrixWorld);
+          _tRay.ray.direction.set(0, 0, -1).applyMatrix4(_tMat);
+          if (_tRay.intersectObjects(playTargets, false).length) {
+            hover = true;
+            if (trigEdge && armed) pressed = true;
+          }
+        }
+      }
+      playHover += ((hover ? 1 : 0) - playHover) * Math.min(1, dt * 10);
+      if (pressed) pressPlay(true);
+    }
+
     // ---------- XR session hooks ----------
     renderer.xr.addEventListener('sessionstart', () => {
       horrorAudio.start(); // backup in case the click handler didn't get to run
@@ -2786,12 +3492,14 @@
         camera.getWorldPosition(_camWorld);
         horrorAudio.setFireDistance(_camWorld.distanceTo(_fireSound));
 
+        titleBeforePhysics(); // title screen: put you in the VR start area on your first frame in the headset
         updateBoat(dt); // lake & boat: move the boat (and carry you if you're aboard) before the physics runs
         if (renderer.xr.isPresenting && dt > 0) {
           updateLocomotion(dt, frame);
           playerRig.updateMatrixWorld(true); // so the rays use this frame's rig position
         }
         updateLake(dt); // lake & boat: water, swimming, repair parts, steering wheel
+        updateTitle(dt); // title screen: logo drips, PLAY button, fades into the camp
 
         pollAButton();
         updateGenerator(dt);
