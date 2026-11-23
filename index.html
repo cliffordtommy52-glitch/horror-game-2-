@@ -140,6 +140,50 @@
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
     import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+    // ---------- text never runs off a canvas (signs, screens, posters, menus, HUD prompts) ----------
+    // Every fillText / strokeText on a 2D canvas is checked against the canvas edges with an inner margin
+    // (about 2.5% of the width, 4–24 px). Text that fits is drawn exactly as before; text that would run past the
+    // left or right edge is narrowed to fit (the canvas maxWidth argument), keeping its anchor and alignment.
+    // Canvases that ever get text are also marked, so their 3D planes can be lifted off the surface behind them.
+    const TEXT_PAD = (W) => Math.max(4, Math.min(24, Math.round(W * 0.025)));
+    function textFitWidth(g, text, x, maxW) {
+      if (maxW !== undefined) return maxW;
+      const cv = g.canvas; if (!cv || !cv.width) return undefined;
+      const t = g.getTransform();
+      if (Math.abs(t.b) > 1e-6 || Math.abs(t.c) > 1e-6 || t.a <= 0) return undefined;   // rotated/skewed text: left as drawn
+      const W = cv.width, pad = TEXT_PAD(W), w = g.measureText(text).width * t.a, dx = t.a * x + t.e;
+      const al = g.textAlign, right = al === 'right' || (al === 'end' && g.direction !== 'rtl') || (al === 'start' && g.direction === 'rtl');
+      const left = al === 'center' ? dx - w / 2 : right ? dx - w : dx;
+      if (left >= pad - 0.5 && left + w <= W - pad + 0.5) return undefined;            // fits: untouched
+      const avail = al === 'center' ? 2 * Math.min(dx - pad, W - pad - dx) : right ? dx - pad : W - pad - dx;
+      if (avail >= w) return undefined;                                                 // only starts in the margin: fine
+      if (dx < 0 || dx > W || avail <= 4) return undefined;                           // anchored off the canvas on purpose
+      return avail / t.a;
+    }
+    {
+      const P2D = CanvasRenderingContext2D.prototype, baseFill = P2D.fillText, baseStroke = P2D.strokeText;
+      P2D.fillText = function (text, x, y, maxW) {
+        if (this.canvas) this.canvas.__hasText = true;
+        const fw = textFitWidth(this, String(text), x, maxW);
+        return fw === undefined ? baseFill.call(this, text, x, y) : baseFill.call(this, text, x, y, fw);
+      };
+      P2D.strokeText = function (text, x, y, maxW) {
+        if (this.canvas) this.canvas.__hasText = true;
+        const fw = textFitWidth(this, String(text), x, maxW);
+        return fw === undefined ? baseStroke.call(this, text, x, y) : baseStroke.call(this, text, x, y, fw);
+      };
+    }
+    // wrap text into lines no wider than maxW (font already set on g)
+    function wrapLines(g, text, maxW) {
+      const lines = []; let line = '';
+      for (const w of String(text).split(' ')) {
+        const t = line ? line + ' ' + w : w;
+        if (line && g.measureText(t).width > maxW) { lines.push(line); line = w; } else line = t;
+      }
+      if (line) lines.push(line);
+      return lines;
+    }
     window.__appStarted = true; // imports succeeded
 
     // ---------- Locomotion settings (names match Player.cs) ----------
@@ -6170,7 +6214,7 @@
       if ((lightPoolT -= dt) <= 0) {
         lightPoolT = 0.3;
         const ranked = lightSources
-          .map((s) => ({ s, d: Math.hypot(s.x - _svCam.x, s.y - _svCam.y, s.z - _svCam.z) / s.weight }))
+          .map((s) => ({ s, d: Math.hypot(s.x - _svCam.x, s.y - _svCam.y, s.z - _svCam.z) / s.weight * (lightPool.some((slot) => slot.src === s) ? 0.75 : 1) }))
           .filter((r) => r.d < 14)
           .sort((a, b) => a.d - b.d).slice(0, LIGHT_POOL_SIZE).map((r) => r.s);
         for (const slot of lightPool) if (slot.src && !ranked.includes(slot.src)) slot.src = null;   // keep the ones still wanted
@@ -6283,11 +6327,16 @@
     function spacedText(g, text, x, y, spacing, align = 'left') {
       const ws = [...text].map((c) => g.measureText(c).width);
       const total = ws.reduce((a, b) => a + b, 0) + spacing * (text.length - 1);
+      // (squeezed sideways round its anchor if it would run past the canvas margins)
+      const fw = textFitWidth({ canvas: g.canvas, getTransform: () => g.getTransform(), measureText: () => ({ width: total }), textAlign: align, direction: 'ltr' }, text, x);
+      const k = fw === undefined ? 1 : fw / total;
+      if (k < 1) { g.save(); g.translate(x, 0); g.scale(k, 1); g.translate(-x, 0); }
       let cx = align === 'right' ? x - total : align === 'center' ? x - total / 2 : x;
       const prev = g.textAlign; g.textAlign = 'left';
       [...text].forEach((c, i) => { g.fillText(c, cx, y); cx += ws[i] + spacing; });
       g.textAlign = prev;
-      return total;
+      if (k < 1) g.restore();
+      return total * k;
     }
 
     function measureSpaced(g, text, spacing) {
@@ -6568,6 +6617,8 @@
         if (total <= R.h - 130 || tf <= 22) break;
         tf -= 2; df = Math.max(17, df - 1);   // (smaller floor now there are more entries)
       }
+      const fitTotal = (L) => L.reduce((a, e) => a + 52 + e.title.length * (tf + 6) + e.desc.length * (df + 8) + 26, 0);
+      while (layout.length > 1 && fitTotal(layout) > R.h - 130) layout.pop();   // never past the bottom of the card
       let ry = R.y + 112;
       layout.forEach(({ u, title, desc }, i) => {
         g.font = `700 28px ${LOBBY_MONO}`; g.textBaseline = 'middle';
@@ -8863,7 +8914,12 @@
       g.strokeStyle = 'rgba(216,200,160,0.6)'; g.lineWidth = 3; g.strokeRect(px, py, pw, ph);
       const ty = py + ph + 34;
       g.fillStyle = '#ffe2c8'; g.font = `bold 34px ${UI_FONT}`; g.fillText(m.name, px, ty);
-      g.fillStyle = '#c8b894'; g.font = `20px ${UI_FONT}`; wrapText(g, m.desc, px, ty + 34, pw, 24);
+      g.fillStyle = '#c8b894';
+      {
+        let fs = 20, lines;                                                   // shrink until it fits above LAUNCH
+        for (;;) { g.font = `${fs}px ${UI_FONT}`; lines = wrapLines(g, m.desc, pw - 8); if (ty + 34 + (lines.length - 1) * (fs + 4) + fs / 2 <= H - 98 || fs <= 13) break; fs--; }
+        lines.forEach((l, k) => g.fillText(l, px, ty + 34 + k * (fs + 4)));
+      }
       drawButton(g, px + pw - 300, H - 86, 300, 60, 'LAUNCH / ENTER MAP', { hover: uiButton(p, 'launch', px + pw - 300, H - 86, 300, 60), size: 24 });
       if (travel) { g.fillStyle = 'rgba(0,0,0,0.6)'; g.fillRect(0, 0, W, H); g.fillStyle = '#e8dcc0'; g.font = `bold 40px ${UI_FONT}`; g.textAlign = 'center'; g.fillText('LOADING...', W / 2, H / 2); g.textAlign = 'left'; }
     }, (id) => {
@@ -9902,8 +9958,9 @@
       g.fillText('OBJECTIVES', 24, 38);
       objectiveLines(map).forEach(([line, done], k) => {
         const lines = objectiveLines(map).length;
-        g.fillStyle = done ? '#6dff8a' : '#ffcf8a'; g.font = `${lines > 4 ? 19 : 22}px "Courier New", monospace`;
-        g.fillText((done ? '[X] ' : '[ ] ') + line, 24, lines > 4 ? 76 + k * 36 : 84 + k * 44);
+        const step = lines > 4 ? Math.min(36, (226 - 76) / Math.max(1, lines - 1)) : 44;
+        g.fillStyle = done ? '#6dff8a' : '#ffcf8a'; g.font = `${lines > 4 ? Math.min(19, Math.floor(step * 0.62)) : 22}px "Courier New", monospace`;
+        g.fillText((done ? '[X] ' : '[ ] ') + line, 24, lines > 4 ? 76 + k * step : 84 + k * 44);
       });
       s.tex.needsUpdate = true;
     }
@@ -15609,7 +15666,15 @@
     const survivorGlbGroup = new THREE.Group();       // dedicated group on the survivor rig (inside the body, turns with the torso)
     survivorGlbGroup.name = 'survivorGlbGroup';
     survivorGlbGroup.visible = false;
-    avatarBody.add(survivorGlbGroup);
+    // survivorBodyGroup: the playable body, in world space. It follows your head's X/Z, stands on the ground (or hangs
+    // under you in the air / in the water), and turns smoothly with your horizontal look direction only (yaw, never
+    // pitch or roll, so it never tips over when you look up or down).
+    const survivorBodyGroup = new THREE.Group();
+    survivorBodyGroup.name = 'survivorBodyGroup';
+    survivorBodyGroup.visible = false;
+    scene.add(survivorBodyGroup);
+    survivorBodyGroup.add(survivorGlbGroup);
+    let survivorEyeH = 0.38, survivorBodyYaw = 0, survivorBodyInit = false;
     let survivorGLBReady = false;
     let survivorGlbSource = SURVIVOR_GLB_URL;         // which file actually loaded
     // a small status badge on the 2D HUD (and a toast in the headset)
@@ -15652,12 +15717,13 @@
       const center = box.getCenter(new THREE.Vector3());
       model.position.set(-center.x, -box.min.y, -center.z);                     // X/Z pivot to (0, 0), base on y = 0
       const nSize = box.getSize(new THREE.Vector3());
-      // fit the 1.1-unit model to the body: base on the ground below your eyes, eyes at your eyes
+      // fit the 1.1-unit model to the body: base at the body group's origin (the ground), its eyes straight above it
       survivorGlbGroup.scale.setScalar(SURVIVOR_GLB_FIT);
-      survivorGlbGroup.position.set(0, -nSize.y * SURVIVOR_GLB_EYE.y * SURVIVOR_GLB_FIT, nSize.z * SURVIVOR_GLB_EYE.z * SURVIVOR_GLB_FIT);
+      survivorGlbGroup.position.set(0, 0, nSize.z * SURVIVOR_GLB_EYE.z * SURVIVOR_GLB_FIT);
+      survivorEyeH = nSize.y * SURVIVOR_GLB_EYE.y * SURVIVOR_GLB_FIT;
       const worldH = nSize.y * SURVIVOR_GLB_FIT, worldW = nSize.x * SURVIVOR_GLB_FIT;
       // the first-person clip planes, in the body's own space
-      _sgPlanesLocal[0].constant = -0.26 * worldH; _sgPlanesLocal[1].constant = 0.62 * worldW / 2; _sgPlanesLocal[2].constant = 0.62 * worldW / 2;
+      _sgPlanesLocal[0].constant = 0; _sgPlanesLocal[1].constant = 0.62 * worldW / 2; _sgPlanesLocal[2].constant = 0.62 * worldW / 2;
       const root = model;
       const mats = new Set();
       root.traverse((o) => {
@@ -15676,8 +15742,9 @@
           avatar.getWorldPosition(_sgHeadP);
           const firstPerson = renderer.xr.isPresenting && _sgCamP.distanceTo(_sgHeadP) < 0.35;
           for (let i = 0; i < _sgPlanes.length; i++) {
-            if (firstPerson) _sgPlanes[i].copy(_sgPlanesLocal[i]).applyMatrix4(avatarBody.matrixWorld);
-            else _sgPlanes[i].copy(_sgOff[i]);
+            if (!firstPerson) _sgPlanes[i].copy(_sgOff[i]);
+            else if (i === 0) _sgPlanes[0].set(_sgPlanes[0].normal.set(0, -1, 0), _sgCamP.y - 0.12);   // nothing within 12 cm below the lens or above it
+            else _sgPlanes[i].copy(_sgPlanesLocal[i]).applyMatrix4(survivorBodyGroup.matrixWorld);       // the model's own arms (your tracked hands show instead)
           }
         };
       });
@@ -15687,7 +15754,8 @@
       // the GLB replaces the built-in survivor body and head (the necklace and hand cosmetics stay)
       for (const o of avatarHead.children) o.visible = false;
       for (const o of avatarBody.children) if (o.isMesh) o.visible = false;
-      survivorGlbGroup.visible = playerRole !== 'monster' && !titleActive;
+      survivorGlbGroup.visible = true;
+      survivorBodyGroup.visible = playerRole !== 'monster' && !titleActive;
       let tris = 0; root.traverse((o) => { if (o.isMesh && o.geometry) tris += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3; });
       console.info(`[SurvivorGLB] loaded ${survivorGlbSource}: ${Math.round(tris).toLocaleString()} triangles, ${mats.size} material(s), normalised to ${SURVIVOR_GLB_HEIGHT} units, shown at ${worldH.toFixed(2)} world units`);
     }
@@ -15728,10 +15796,93 @@
       };
       tryLoad(0);
     }
-    // role switching: SURVIVOR shows the model, MONSTER hides it (the monster model takes over)
-    function updateSurvivorGLB() {
+    // role switching: SURVIVOR shows the body, MONSTER hides it (the monster model takes over). Each frame the body
+    // is placed under you: X/Z from your head, standing on the highest floor below you (colliders, the camp terrain),
+    // lifted with you when you're in the air or swimming, and turned smoothly to your yaw.
+    const _sbHead = new THREE.Vector3(), _sbQ = new THREE.Quaternion(), _sbE = new THREE.Euler(0, 0, 0, 'YXZ');
+    function survivorGroundY(x, z, headY) {
+      let g = -Infinity;
+      for (const c of colliders) {
+        const b = c.box;
+        if (x < b.min.x || x > b.max.x || z < b.min.z || z > b.max.z) continue;
+        if (b.max.y <= headY - 0.05 && b.max.y > g) g = b.max.y;            // the top of whatever is under you
+      }
+      if (currentMap === 'camp') { const f = floorAt(x, z); if (f <= headY - 0.05 && f > g) g = f; }
+      if (currentMap === 'mine') { const f = mineFloorAt(x, z); if (f <= headY - 0.05 && f > g) g = f; }
+      return g;
+    }
+    function updateSurvivorGLB(dt = 0.016) {
       if (!survivorGLBReady) return;
-      survivorGlbGroup.visible = playerRole !== 'monster' && !titleActive;
+      const show = playerRole !== 'monster' && !titleActive;
+      survivorBodyGroup.visible = show;
+      if (!show) { survivorBodyInit = false; return; }
+      let yaw;
+      if (renderer.xr.isPresenting && locomotionReady) {
+        headWorld(_sbHead);
+        camera.getWorldQuaternion(_sbQ); _sbE.setFromQuaternion(_sbQ, 'YXZ');
+        yaw = _sbE.y;                                                          // horizontal look direction only
+      } else {
+        _sbHead.set(0, SPAWN_HEAD_HEIGHT + 0.07, 0); yaw = 0;                 // desktop: standing at the camp spawn, as before
+      }
+      const ground = survivorGroundY(_sbHead.x, _sbHead.z, _sbHead.y);
+      const hang = _sbHead.y - survivorEyeH;                                  // where the base is when your eyes are its eyes
+      const y = Math.min(_sbHead.y - 0.1, isFinite(ground) ? Math.max(ground, hang) : hang);
+      if (!survivorBodyInit) { survivorBodyYaw = yaw; survivorBodyInit = true; }
+      let d = yaw - survivorBodyYaw; d = Math.atan2(Math.sin(d), Math.cos(d));
+      survivorBodyYaw += d * Math.min(1, dt * 8);
+      survivorBodyGroup.position.set(_sbHead.x, y, _sbHead.z);
+      survivorBodyGroup.rotation.set(0, survivorBodyYaw, 0);
+    }
+    // safety net: world lights never ride on the camera, the rig or the hands (only the flashlight does)
+    function keepLightsInWorld() {
+      const keep = new Set(); flashlight.traverse((o) => keep.add(o));
+      const strays = [];
+      for (const root of [camera, playerRig, ...hands.map((h) => h.follower)]) root.traverse((o) => { if (o.isLight && !keep.has(o)) strays.push(o); });
+      for (const o of strays) { scene.attach(o); console.warn('[Scene] moved a light off the player rig into the world:', o.name || o.type); }
+      return strays.length;
+    }
+    keepLightsInWorld();
+
+    // =====================================================================
+    //  Text clipping: 3D text planes lifted off their backing surface, and 2D overlays that can't crop their text
+    // =====================================================================
+    // 3D: every plane that shows a canvas with text gets polygon offset (so letters never flicker into the wall, board,
+    // frame or poster behind them), and loose flat text planes in the world sit 1.5 cm further off that surface
+    // (HUD planes on the camera and the curved lobby panel are left where they are).
+    function liftTextPlanes() {
+      const camStuff = new Set(); camera.traverse((o) => camStuff.add(o)); playerRig.traverse((o) => camStuff.add(o));
+      const titleStuff = new Set(); titleGroup.traverse((o) => titleStuff.add(o));
+      const n = new THREE.Vector3();
+      scene.traverse((o) => {
+        if (!o.isMesh || !o.material) return;
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        const textMats = mats.filter((m) => m.map && m.map.isCanvasTexture && m.map.image && m.map.image.__hasText);
+        if (!textMats.length) return;
+        for (const m of textMats) {
+          if (m.depthTest === false || m.polygonOffset) continue;
+          m.polygonOffset = true; m.polygonOffsetFactor = -1; m.polygonOffsetUnits = -1; m.needsUpdate = true;
+        }
+        if (o.userData.textLifted || camStuff.has(o) || titleStuff.has(o) || !o.geometry || o.geometry.type !== 'PlaneGeometry') return;
+        o.userData.textLifted = true;
+        n.set(0, 0, 1).applyQuaternion(o.quaternion);                    // its face normal, in its parent's space
+        const ps = o.parent ? o.parent.getWorldScale(new THREE.Vector3()).x || 1 : 1;
+        o.position.addScaledVector(n, 0.015 / ps);
+      });
+    }
+    liftTextPlanes();
+    setTimeout(liftTextPlanes, 3000);                                     // (anything built a moment later)
+    // 2D: overlays, badges and the victory / game-over screens never crop their text
+    {
+      const st = document.createElement('style');
+      st.textContent = `
+        #info, #diag, #lobby-hint, #hp-hud, #role-warn, #obj-hud, #survivor-glb-status, #victory, #caught,
+        #victory .v-inner, #caught .c-inner, #victory *, #caught * { box-sizing: border-box; overflow-wrap: break-word; word-wrap: break-word; }
+        #info, #diag, #lobby-hint, #role-warn, #obj-hud, #survivor-glb-status { max-width: calc(100vw - 20px); height: auto; max-height: calc(100vh - 20px); overflow-y: auto; }
+        #victory, #caught { padding: 16px; overflow-y: auto; }
+        #victory .v-inner, #caught .c-inner { max-width: 100%; max-height: 100%; height: auto; overflow-y: auto; text-align: center; }
+        #victory .v-title, #victory .v-sub, #caught .c-title { line-height: 1.1; }
+        #victory button, #caught button { max-width: 100%; white-space: normal; }`;
+      document.head.appendChild(st);
     }
 
     // ---------- XR session hooks ----------
@@ -15803,7 +15954,7 @@
         updateMapsAndRun(dt); // only the current map stays loaded (others freed); the sunrise boat-run minigame
         updateMenuAndPerf(dt); // live objectives + map in the menu; per-map far plane / shadow size; mine spark cues
         updateSurvivorExtras(dt); // hinged breaker doors, the monster's mine waypoints, lobby PLAY always on top
-        updateSurvivorGLB(); // the custom survivor model (survivor.glb): shown as SURVIVOR, hidden as MONSTER
+        updateSurvivorGLB(dt); // the playable survivor body (survivor.glb): follows you on the ground, yaw only; hidden as MONSTER
       } catch (err) {
         if (!loopErrorReported) {
           loopErrorReported = true;
