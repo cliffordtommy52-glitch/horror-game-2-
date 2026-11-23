@@ -6207,12 +6207,12 @@
       scene.add(light);
       return { light, src: null, fade: 0 };
     });
-    let lightPoolT = 0, lightPoolTime = 0;
+    let lightPoolT = 0, lightPoolTime = 0, lightPoolAt = null, lightPoolN = -1;
     function updateLightPool(dt) {
       lightPoolTime += dt;
       camera.getWorldPosition(_svCam);
-      if ((lightPoolT -= dt) <= 0) {
-        lightPoolT = 0.3;
+      if ((lightPoolT -= dt) <= 0 && (!lightPoolAt || lightPoolAt.distanceTo(_svCam) > 0.75 || lightSources.length !== lightPoolN)) {
+        lightPoolT = 0.3; (lightPoolAt = lightPoolAt || new THREE.Vector3()).copy(_svCam); lightPoolN = lightSources.length;
         const ranked = lightSources
           .map((s) => ({ s, d: Math.hypot(s.x - _svCam.x, s.y - _svCam.y, s.z - _svCam.z) / s.weight * (lightPool.some((slot) => slot.src === s) ? 0.75 : 1) }))
           .filter((r) => r.d < 14)
@@ -15728,7 +15728,18 @@
       survivorNeckH = nSize.y * SURVIVOR_NECK_FRAC * SURVIVOR_GLB_FIT;
       const worldH = nSize.y * SURVIVOR_GLB_FIT, worldW = nSize.x * SURVIVOR_GLB_FIT;
       // the first-person clip planes, in the body's own space
-      _sgPlanesLocal[0].constant = 0; _sgPlanesLocal[1].constant = 0.62 * worldW / 2; _sgPlanesLocal[2].constant = 0.62 * worldW / 2;
+      // the model's frozen arms are cut off at the shoulder (|x| > 52% of its half-width); tracked arms replace them
+      _sgPlanesLocal[0].constant = 0; _sgPlanesLocal[1].constant = 0.547 * worldW / 2; _sgPlanesLocal[2].constant = 0.547 * worldW / 2;
+      // its shoulder sockets (measured on the model: x ±0.50, y -0.02, z -0.17 of its own ±0.95 / ±0.80 / ±0.59 box),
+      // carried through the same turn / scale / centring, into survivorAvatarRoot's space
+      model.updateMatrix();
+      const sock = (sx) => new THREE.Vector3(sx * 0.50 * (size.x / 1.9), -0.02 * (size.y / 1.607), -0.17 * (size.z / 1.178)).add(new THREE.Vector3(0, 0, 0));
+      for (const [i, sx] of [[0, 1], [1, -1]]) {                         // [0] = the left shoulder (-X once turned), [1] = the right
+        // a point on the original model -> through model.matrix (half turn, k, centring) -> survivorGlbGroup's scale
+        const pOrig = sock(sx), pRoot = pOrig.clone().applyMatrix4(model.matrix).multiplyScalar(SURVIVOR_GLB_FIT);
+        survivorArms.sockets[i].copy(pRoot);
+      }
+      survivorArms.reach = 0.83 * k * SURVIVOR_GLB_FIT;                   // shoulder to hand on the model
       const root = model;
       const mats = new Set();
       root.traverse((o) => {
@@ -15743,13 +15754,13 @@
         }
         // pick the clip planes per camera: your own eye cameras are the ones right at the model's head
         o.onBeforeRender = (r, sc, cam) => {
-          cam.getWorldPosition(_sgCamP);
-          avatar.getWorldPosition(_sgHeadP);
-          const firstPerson = renderer.xr.isPresenting && _sgCamP.distanceTo(_sgHeadP) < 0.35;
+          // your own eyes: the headset's eye cameras (anything else, e.g. the Monster POV camera, sees the whole body)
+          const xrc = renderer.xr.isPresenting ? renderer.xr.getCamera() : null;
+          const firstPerson = !!xrc && (cam === xrc || xrc.cameras.includes(cam));
           for (let i = 0; i < _sgPlanes.length; i++) {
-            if (!firstPerson) _sgPlanes[i].copy(_sgOff[i]);
+            if (i === 0 && !firstPerson) _sgPlanes[0].copy(_sgOff[0]);
             else if (i === 0) _sgPlanes[0].set(_sgPlanes[0].normal.set(0, -1, 0), survivorBodyGroup.position.y + survivorNeckH);   // head and nose (above the neck) cut away
-            else _sgPlanes[i].copy(_sgPlanesLocal[i]).applyMatrix4(survivorBodyGroup.matrixWorld);       // the model's own arms (your tracked hands show instead)
+            else _sgPlanes[i].copy(_sgPlanesLocal[i]).applyMatrix4(survivorBodyGroup.matrixWorld);       // the frozen arms, for every camera (tracked arms replace them)
           }
         };
       });
@@ -15757,6 +15768,7 @@
       survivorGlbGroup.add(root);
       survivorGLBReady = true;
       matchHandsToSurvivor();
+      buildSurvivorArms();
       // the GLB replaces the built-in survivor body and head (the necklace and hand cosmetics stay)
       for (const o of avatarHead.children) o.visible = false;
       for (const o of avatarBody.children) if (o.isMesh) o.visible = false;
@@ -15802,6 +15814,117 @@
       };
       tryLoad(0);
     }
+    // ---------- tracked arms on the static model ----------
+    // survivor.glb is one unrigged mesh, so its frozen arms are cut off at the shoulders and replaced by two arms that
+    // run from the model's shoulder sockets to your controllers: an orange-brown upper arm and a grey-brown forearm
+    // (colours sampled from the model's texture) that bend at the elbow (two-bone IK) and stretch if you reach
+    // further, ending in a dark brown three-fingered hand (thumb + two fingers) on each controller. Grip curls the
+    // two fingers into the palm, the thumb stays open. The old controller hands are hidden.
+    const survivorArms = { sockets: [new THREE.Vector3(), new THREE.Vector3()], reach: 0.35, sides: [], built: false };
+    const armGroup = new THREE.Group(); armGroup.name = 'survivorArms'; armGroup.visible = false; scene.add(armGroup);
+    function buildSurvivorArms() {
+      if (survivorArms.built) return;
+      survivorArms.built = true;
+      const upperMat = new THREE.MeshStandardMaterial({ map: furTex, color: 0xba6d22, roughness: 0.92 });
+      const foreMat = new THREE.MeshStandardMaterial({ map: furTex, color: 0x7b6653, roughness: 0.92 });
+      const skinMat = new THREE.MeshStandardMaterial({ color: 0x574543, roughness: 0.75 });
+      const tipMat = new THREE.MeshStandardMaterial({ color: 0x3e3230, roughness: 0.7 });
+      const seg = (r0, r1, mat) => { const m = new THREE.Mesh(new THREE.CylinderGeometry(r1, r0, 1, 14, 1), mat); m.castShadow = false; m.frustumCulled = false; armGroup.add(m); return m; };
+      const ball = (r, mat) => { const m = new THREE.Mesh(new THREE.SphereGeometry(r, 14, 10), mat); m.castShadow = false; m.frustumCulled = false; armGroup.add(m); return m; };
+      // the old controller hands (the first human hand and the earlier monkey hands) go completely
+      for (const h of hands) for (const m of h.model.meshes) m.visible = false;
+      for (const H of monkeyHands) for (const m of H.mine) m.visible = false;
+      hands.forEach((h, i) => {
+        const S = {
+          side: i === 0 ? -1 : 1,                                          // (updated every frame from the controller's handedness)
+          upper: seg(0.04, 0.033, upperMat), fore: seg(0.033, 0.025, foreMat),
+          shoulder: ball(0.044, upperMat), elbow: ball(0.034, foreMat), wrist: ball(0.026, foreMat),
+          wristLocal: new THREE.Vector3(0.035, 0.07, 0.002),
+        };
+        // the new hand, in the controller's grip frame (same frame the hand model used): palm, two fingers, thumb
+        const g = h.model.group, mine = [];
+        const add = (parent, geo, mat, x, y, z, sx = 1, sy = 1, sz = 1) => {
+          const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.scale.set(sx, sy, sz); m.castShadow = false; m.userData.mat = mat; parent.add(m); mine.push(m); return m;
+        };
+        add(g, new THREE.SphereGeometry(1, 16, 12), skinMat, 0.034, 0.012, 0, 0.022, 0.052, 0.044);           // palm pad
+        add(g, new THREE.SphereGeometry(1, 12, 10), foreMat, 0.042, 0.03, 0, 0.016, 0.042, 0.04);              // furry back of the hand
+        const fingers = [-0.017, 0.018].map((fz) => {
+          const j0 = new THREE.Group(); j0.position.set(0.034, -0.036, fz); g.add(j0);
+          const g0 = new THREE.CapsuleGeometry(0.013, 0.03, 4, 10); g0.translate(0, -0.026, 0); add(j0, g0, skinMat, 0, 0, 0);
+          const j1 = new THREE.Group(); j1.position.set(0, -0.052, 0); j0.add(j1);
+          const g1 = new THREE.CapsuleGeometry(0.012, 0.022, 4, 10); g1.translate(0, -0.02, 0); add(j1, g1, skinMat, 0, 0, 0);
+          add(j1, new THREE.SphereGeometry(0.009, 8, 6), tipMat, -0.006, -0.036, 0);
+          return [j0, j1];
+        });
+        const t0 = new THREE.Group(); t0.position.set(0.026, 0.02, -0.036); t0.rotation.set(-0.45, -0.3, 0); g.add(t0);
+        const tg0 = new THREE.CapsuleGeometry(0.0125, 0.024, 4, 10); tg0.rotateX(-Math.PI / 2); tg0.translate(0, 0, -0.02); add(t0, tg0, skinMat, 0, 0, 0);
+        const t1 = new THREE.Group(); t1.position.set(0, 0, -0.04); t1.rotation.set(0, 0.2, 0); t0.add(t1);
+        const tg1 = new THREE.CapsuleGeometry(0.011, 0.016, 4, 10); tg1.rotateX(-Math.PI / 2); tg1.translate(0, 0, -0.016); add(t1, tg1, skinMat, 0, 0, 0);
+        let curl = 0, wire = null;
+        const basePose = h.model.pose, baseWire = h.model.setWire;
+        h.model.pose = function (grip, trig, dt) {
+          basePose.call(this, grip, trig, dt);
+          curl += (grip - curl) * Math.min(1, dt * 16);                      // Grip: the two fingers close, the thumb stays out
+          for (const [j0, j1] of fingers) { j0.rotation.z = -(0.18 + curl * 1.5); j1.rotation.z = -(0.22 + curl * 1.75); }
+        };
+        h.model.setWire = function (on) {
+          baseWire.call(this, on);
+          if (on === wire) return; wire = on;
+          for (const m of mine) m.material = on ? handWireMat : m.userData.mat;
+        };
+        S.hand = mine;
+        survivorArms.sides[i] = S;
+      });
+    }
+    const _arS = new THREE.Vector3(), _arW = new THREE.Vector3(), _arE = new THREE.Vector3(), _arD = new THREE.Vector3(), _arP = new THREE.Vector3(),
+          _arUp = new THREE.Vector3(0, 1, 0), _arQ = new THREE.Quaternion(), _arT = new THREE.Vector3();
+    function placeSeg(m, a, b) {
+      _arD.subVectors(b, a); const len = Math.max(1e-4, _arD.length());
+      m.position.addVectors(a, b).multiplyScalar(0.5);
+      m.quaternion.setFromUnitVectors(_arUp, _arD.multiplyScalar(1 / len));
+      m.scale.set(1, len, 1);
+    }
+    function updateSurvivorArms() {
+      armGroup.visible = survivorBodyGroup.visible && survivorArms.built;
+      if (!armGroup.visible) return;
+      survivorBodyGroup.updateMatrixWorld(true);
+      const vr = renderer.xr.isPresenting;
+      const yaw = survivorBodyGroup.rotation.y, cy = Math.cos(yaw), sy = Math.sin(yaw);
+      for (let i = 0; i < 2; i++) {
+        const S = survivorArms.sides[i]; if (!S) continue;
+        const hd = controllers[i].userData.inputSource?.handedness;
+        S.side = hd === 'left' ? -1 : hd === 'right' ? 1 : (i === 0 ? -1 : 1);                  // which shoulder this controller's arm hangs from
+        _arS.copy(survivorArms.sockets[S.side < 0 ? 0 : 1]).applyMatrix4(survivorBodyGroup.matrixWorld);   // shoulder socket (world)
+        if (vr) { hands[i].model.group.updateMatrixWorld(true); _arW.copy(S.wristLocal).applyMatrix4(hands[i].model.group.matrixWorld); }   // the controller's wrist
+        else {                                                                                  // desktop: arms hanging at its sides
+          const lx = S.side * 0.06, lz = 0.03;
+          _arW.set(_arS.x + lx * cy + lz * sy, _arS.y - survivorArms.reach * 0.9, _arS.z - lx * sy + lz * cy);
+        }
+        // two-bone IK: upper and forearm half the model's reach each; past full reach both stretch to meet the hand
+        const L = survivorArms.reach * 0.5;
+        _arD.subVectors(_arW, _arS); const d = Math.max(1e-4, _arD.length()); _arD.multiplyScalar(1 / d);
+        const lu = d > 2 * L ? d / 2 : L, lf = lu;
+        const a = d / 2, h = Math.sqrt(Math.max(0, lu * lu - a * a));
+        // the elbow points down, out to its side and a little back (in the body's frame)
+        const px = S.side * 0.6, pz = 0.35;
+        _arP.set(px * cy + pz * sy, -1, -px * sy + pz * cy);
+        _arP.addScaledVector(_arD, -_arP.dot(_arD));
+        if (_arP.lengthSq() < 1e-6) _arP.set(0, -1, 0).addScaledVector(_arD, -_arD.y);
+        _arP.normalize();
+        _arE.copy(_arS).addScaledVector(_arD, a).addScaledVector(_arP, h);
+        void lf;
+        placeSeg(S.upper, _arS, _arE); placeSeg(S.fore, _arE, _arW);
+        S.shoulder.position.copy(_arS); S.elbow.position.copy(_arE); S.wrist.position.copy(_arW);
+      }
+    }
+    // the old survivor (body, head, hands, its necklace) is hidden completely once survivor.glb is your body
+    {
+      const baseUpdateAvatar = updateAvatar;
+      updateAvatar = function (dt) {
+        baseUpdateAvatar(dt);
+        if (survivorGLBReady) avatar.visible = false;
+      };
+    }
     // role switching: SURVIVOR shows the body, MONSTER hides it (the monster model takes over). Each frame the body
     // is placed under you: X/Z from your head, standing on the highest floor below you (colliders, the camp terrain),
     // lifted with you when you're in the air or swimming, and turned smoothly to your yaw.
@@ -15821,7 +15944,7 @@
       if (!survivorGLBReady) return;
       const show = playerRole !== 'monster' && !titleActive;
       survivorBodyGroup.visible = show;
-      if (!show) { survivorBodyInit = false; return; }
+      if (!show) { survivorBodyInit = false; armGroup.visible = false; return; }
       let yaw;
       if (renderer.xr.isPresenting) {
         camera.getWorldPosition(_sbHead);                                       // the headset itself, in world space
@@ -15836,6 +15959,7 @@
       // straight under the headset, turning on the spot about its own centre (never swung out in front of you)
       survivorAvatarRoot.position.set(_sbHead.x, y, _sbHead.z);
       survivorAvatarRoot.rotation.set(0, survivorBodyYaw, 0);
+      updateSurvivorArms();
     }
     // the controller hands take the model's own colours (sampled from survivor.glb's texture: grey-brown forearm
     // fur, dark brown hands and fingers) once it's your body, so they match instead of looking like spare grey hands
