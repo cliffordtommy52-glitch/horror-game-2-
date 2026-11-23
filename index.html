@@ -3066,7 +3066,7 @@
       if (parent === camera) {
         // head-mounted lamp: just above and in front of your eyes, so it shines wherever you look
         // (the lamp's body would sit inside your head, so only the beam is shown)
-        flashlight.position.set(0, 0.04, -0.03);
+        flashlight.position.set(0, 0, 0); flashlight.rotation.set(0, 0, 0);
         flashlight.children[0].visible = false;
         flashlight.children[1].visible = false;
       } else {
@@ -15669,8 +15669,9 @@
     // survivorBodyGroup: the playable body, in world space. It follows your head's X/Z, stands on the ground (or hangs
     // under you in the air / in the water), and turns smoothly with your horizontal look direction only (yaw, never
     // pitch or roll, so it never tips over when you look up or down).
-    const survivorBodyGroup = new THREE.Group();
-    survivorBodyGroup.name = 'survivorBodyGroup';
+    const survivorBodyGroup = new THREE.Group();          // = survivorAvatarRoot: the model's centre and feet sit at its (0, 0, 0)
+    survivorBodyGroup.name = 'survivorAvatarRoot';
+    const survivorAvatarRoot = survivorBodyGroup;
     survivorBodyGroup.visible = false;
     scene.add(survivorBodyGroup);
     survivorBodyGroup.add(survivorGlbGroup);
@@ -15717,9 +15718,9 @@
       const center = box.getCenter(new THREE.Vector3());
       model.position.set(-center.x, -box.min.y, -center.z);                     // X/Z pivot to (0, 0), base on y = 0
       const nSize = box.getSize(new THREE.Vector3());
-      // fit the 1.1-unit model to the body: base at the body group's origin (the ground), its eyes straight above it
+      // fit the 1.1-unit model to the body: its centre (X/Z) and feet exactly at survivorAvatarRoot's (0, 0, 0), no offset
       survivorGlbGroup.scale.setScalar(SURVIVOR_GLB_FIT);
-      survivorGlbGroup.position.set(0, 0, nSize.z * SURVIVOR_GLB_EYE.z * SURVIVOR_GLB_FIT);
+      survivorGlbGroup.position.set(0, 0, 0);
       survivorEyeH = nSize.y * SURVIVOR_GLB_EYE.y * SURVIVOR_GLB_FIT;
       const worldH = nSize.y * SURVIVOR_GLB_FIT, worldW = nSize.x * SURVIVOR_GLB_FIT;
       // the first-person clip planes, in the body's own space
@@ -15817,8 +15818,8 @@
       survivorBodyGroup.visible = show;
       if (!show) { survivorBodyInit = false; return; }
       let yaw;
-      if (renderer.xr.isPresenting && locomotionReady) {
-        headWorld(_sbHead);
+      if (renderer.xr.isPresenting) {
+        camera.getWorldPosition(_sbHead);                                       // the headset itself, in world space
         camera.getWorldQuaternion(_sbQ); _sbE.setFromQuaternion(_sbQ, 'YXZ');
         yaw = _sbE.y;                                                          // horizontal look direction only
       } else {
@@ -15827,11 +15828,10 @@
       const ground = survivorGroundY(_sbHead.x, _sbHead.z, _sbHead.y);
       const hang = _sbHead.y - survivorEyeH;                                  // where the base is when your eyes are its eyes
       const y = Math.min(_sbHead.y - 0.1, isFinite(ground) ? Math.max(ground, hang) : hang);
-      if (!survivorBodyInit) { survivorBodyYaw = yaw; survivorBodyInit = true; }
-      let d = yaw - survivorBodyYaw; d = Math.atan2(Math.sin(d), Math.cos(d));
-      survivorBodyYaw += d * Math.min(1, dt * 8);
-      survivorBodyGroup.position.set(_sbHead.x, y, _sbHead.z);
-      survivorBodyGroup.rotation.set(0, survivorBodyYaw, 0);
+      survivorBodyYaw = yaw; survivorBodyInit = true;
+      // straight under the headset, turning on the spot about its own centre (never swung out in front of you)
+      survivorAvatarRoot.position.set(_sbHead.x, y, _sbHead.z);
+      survivorAvatarRoot.rotation.set(0, survivorBodyYaw, 0);
     }
     // safety net: world lights never ride on the camera, the rig or the hands (only the flashlight does)
     function keepLightsInWorld() {
