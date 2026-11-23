@@ -6290,6 +6290,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'FIX', date: '23/11/26', title: 'SEALED SHOULDERS, THICKER ARMS',
+        text: 'No more hollow shoulder holes: fur shoulder caps seal the survivor, and the upper arms are much thicker.' },
       { tag: 'FIX', date: '23/11/26', title: 'CLEAN ARMS ON THE RIGGED SURVIVOR',
         text: "The model's glitchy arms are gone: smooth orange fur arms and your 3-fingered hands on its shoulders, for everyone." },
       { tag: 'FIX', date: '23/11/26', title: 'SURVIVOR.GLB ALWAYS LOADS (OR SAYS WHY)',
@@ -16084,6 +16086,14 @@
         const core = new THREE.Mesh(new THREE.SphereGeometry(1, 28, 18), rigCoreMat());
         core.scale.set(0.44, 0.43, 0.31); core.position.set(0, -0.3, -0.2); core.frustumCulled = false; core.userData.rigCore = true;
         mesh.add(core);
+        // rounded fur caps sealing the left and right shoulder openings (where the model's own arms were removed), so no
+        // hollow inside of the shell shows from any angle; the clean fur arms are seated inside them
+        for (const sx of [1, -1]) {
+          const cap = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 16), rigCoreMat());
+          cap.scale.set(0.15, 0.19, 0.17); cap.position.set(sx * 0.45, -0.06, -0.13);
+          cap.frustumCulled = false; cap.userData.rigCore = true; cap.userData.shoulderCap = true;
+          mesh.add(cap);
+        }
       }
       let armsMesh = null;
       if (withArmsCopy) {
@@ -16279,6 +16289,7 @@
         const ms = Array.isArray(o.material) ? o.material : [o.material];
         for (const m of ms) {
           if (m.map) { m.map.colorSpace = THREE.SRGBColorSpace; m.map.anisotropy = 4; m.map.needsUpdate = true; survivorGlbMap = survivorGlbMap || m.map; }
+          m.side = THREE.DoubleSide; m.needsUpdate = true;                   // the shell's inside is never seen as a hole
           if (survivorRig && survivorRig.local) { m.clippingPlanes = null; mats.add(m); continue; }   // rigged: real arms, nothing to cut away
           m.clippingPlanes = _sgPlanes; m.clipShadows = false;
           mats.add(m);
@@ -16480,8 +16491,8 @@
       hands.forEach((h, i) => {
         const S = {
           side: i === 0 ? -1 : 1,                                          // (updated every frame from the controller's handedness)
-          upper: seg(0.062, 0.052, upperMat), fore: seg(0.052, 0.04, foreMat),       // thick, tapered
-          shoulder: ball(0.066, upperMat), elbow: ball(0.054, foreMat), wrist: ball(0.041, foreMat),
+          upper: seg(0.093, 0.052, upperMat), fore: seg(0.052, 0.04, foreMat),       // thick, tapered: 1.5x at the shoulder
+          shoulder: ball(0.099, upperMat), elbow: ball(0.054, foreMat), wrist: ball(0.041, foreMat),
           wristLocal: SURVIVOR_WRIST.clone(),                              // the forearm ends over the heel of the hand
         };
         // the new hand, in the controller's grip frame (same frame the hand model used): palm, two fingers, thumb
@@ -16530,6 +16541,7 @@
     function rigWristMat() { return rigWristMat.m || (rigWristMat.m = new THREE.MeshStandardMaterial({ map: furTex, color: 0x6d5e5a, roughness: 0.92 })); }
     const _arS = new THREE.Vector3(), _arW = new THREE.Vector3(), _arE = new THREE.Vector3(), _arD = new THREE.Vector3(), _arP = new THREE.Vector3(),
           _arUp = new THREE.Vector3(0, 1, 0), _arQ = new THREE.Quaternion(), _arT = new THREE.Vector3();
+    const _arT0 = new THREE.Vector3(), SHOULDER_SEAT = 0.035;
     function placeSeg(m, a, b) {
       _arD.subVectors(b, a); const len = Math.max(1e-4, _arD.length());
       m.position.addVectors(a, b).multiplyScalar(0.5);
@@ -16566,7 +16578,8 @@
         _arP.normalize();
         _arE.copy(_arS).addScaledVector(_arD, a).addScaledVector(_arP, h);
         void lf;
-        placeSeg(S.upper, _arS, _arE); placeSeg(S.fore, _arE, _arW);
+        _arT0.copy(_arS).addScaledVector(_arD, -SHOULDER_SEAT);                // the top of the arm seated inside the shoulder cap
+        placeSeg(S.upper, _arT0, _arE); placeSeg(S.fore, _arE, _arW);
         S.shoulder.position.copy(_arS); S.elbow.position.copy(_arE); S.wrist.position.copy(_arW);
         S.cuff.position.copy(_arW); S.cuff.quaternion.copy(S.fore.quaternion);   // local Y runs along the forearm, towards the hand
       }
@@ -17366,8 +17379,9 @@
       const mat = remoteHandMats.arm;
       const seg = (r0, r1) => { const m = new THREE.Mesh(new THREE.CylinderGeometry(r1, r0, 1, 14, 1), mat); m.castShadow = false; m.frustumCulled = false; g.add(m); return m; };
       const ball = (r) => { const m = new THREE.Mesh(new THREE.SphereGeometry(r, 14, 10), mat); m.castShadow = false; m.frustumCulled = false; g.add(m); return m; };
-      return { g, sides: [-1, 1].map((side) => ({ side, upper: seg(0.062, 0.052), fore: seg(0.052, 0.04), shoulder: ball(0.066), elbow: ball(0.054), wrist: ball(0.041) })) };
+      return { g, sides: [-1, 1].map((side) => ({ side, upper: seg(0.093, 0.052), fore: seg(0.052, 0.04), shoulder: ball(0.099), elbow: ball(0.054), wrist: ball(0.041) })) };
     }
+    const _raT0 = new THREE.Vector3();
     const _raS = new THREE.Vector3(), _raW = new THREE.Vector3(), _raE = new THREE.Vector3(), _raD = new THREE.Vector3(), _raP = new THREE.Vector3();
     const _rrW = new THREE.Vector3(), _rrBQ = new THREE.Quaternion(), _rrUp = new THREE.Vector3(0, 1, 0);
     function solveRemoteArms(r, s) {
@@ -17387,7 +17401,8 @@
         if (_raP.lengthSq() < 1e-6) _raP.set(0, -1, 0).addScaledVector(_raD, -_raD.y);
         _raP.normalize();
         _raE.copy(_raS).addScaledVector(_raD, a).addScaledVector(_raP, h);
-        placeSeg(S.upper, _raS, _raE); placeSeg(S.fore, _raE, _raW);
+        _raT0.copy(_raS).addScaledVector(_raD, -SHOULDER_SEAT);                // seated inside the shoulder cap
+        placeSeg(S.upper, _raT0, _raE); placeSeg(S.fore, _raE, _raW);
         S.shoulder.position.copy(_raS); S.elbow.position.copy(_raE); S.wrist.position.copy(_raW);
       }
     }
