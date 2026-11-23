@@ -6219,6 +6219,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'FIX', date: '23/11/26', title: 'SURVIVOR MODEL LOADS RELIABLY',
+        text: 'result_Ub5XHK.glb, with a LOADED / FAILED badge so a blocked load is never silent.' },
       { tag: 'UPDATE', date: '22/11/26', title: 'NEW SURVIVOR MODEL',
         text: 'A detailed proboscis monkey survivor, cut away from your own eyes in VR and whole everywhere else.' },
       { tag: 'UPDATE', date: '22/11/26', title: 'PROBOSCIS MONKEY SURVIVOR, WOODEN COAL CARTS, HANDS-ON TILLER',
@@ -15590,20 +15592,38 @@
     }
 
     // =====================================================================
-    //  Custom survivor model: result_CtlOqt.glb (loaded next to this page). Until it arrives, or if it can't be
+    //  Custom survivor model: result_Ub5XHK.glb (loaded next to this page). Until it arrives, or if it can't be
     //  loaded (e.g. the page was opened straight from disk without a local web server), the built-in proboscis
     //  monkey stays as the lightweight fallback.
     // =====================================================================
-    const SURVIVOR_GLB_URL = './result_CtlOqt.glb';
-    // How tall the model stands, in world units. The player's eyes sit 0.38 above the ground at this game's
-    // Gorilla scale (PLAYER_SCALE 0.6), so a 0.5-tall survivor puts its eyes at your eyes and its base on the
-    // ground; a larger value (e.g. 1.1) would push the body down through the floor and swallow the camera.
-    const SURVIVOR_GLB_HEIGHT = 0.5;
+    const SURVIVOR_GLB_URL = './result_Ub5XHK.glb';
+    // The model is normalised to 1.1 units tall inside survivorGlbGroup (base at its own y = 0, X/Z centred, facing -Z).
+    // survivorGlbGroup then fits that 1.1-unit model to this game's Gorilla-scale body: your eyes are 0.38 above the
+    // ground (PLAYER_SCALE 0.6), so the group shrinks it to 0.5 world units and sets its base on the ground under you,
+    // with its eyes at your eyes. Set SURVIVOR_GLB_FIT = 1 to see it at the full 1.1 (it will then stand through the floor).
+    const SURVIVOR_GLB_HEIGHT = 1.1;
+    const SURVIVOR_GLB_FIT = 0.5 / SURVIVOR_GLB_HEIGHT;
     const SURVIVOR_GLB_EYE = { y: 0.765, z: 0.25 };   // where its eyes are: fraction of its height up, fraction of its depth forward of centre
-    const survivorGLB = new THREE.Group();            // the loaded model lives in here, inside the survivor body (turns with the torso)
-    survivorGLB.visible = false;
-    avatarBody.add(survivorGLB);
+    const survivorGlbGroup = new THREE.Group();       // dedicated group on the survivor rig (inside the body, turns with the torso)
+    survivorGlbGroup.name = 'survivorGlbGroup';
+    survivorGlbGroup.visible = false;
+    avatarBody.add(survivorGlbGroup);
     let survivorGLBReady = false;
+    // a small status badge on the 2D HUD (and a toast in the headset)
+    const glbBadge = document.createElement('div');
+    glbBadge.id = 'survivor-glb-status';
+    glbBadge.style.cssText = 'position:fixed;top:10px;left:10px;z-index:9999;padding:6px 10px;border-radius:6px;font:bold 12px/1.3 monospace;' +
+      'color:#fff;background:rgba(40,40,40,0.85);border:1px solid #888;pointer-events:none;transition:opacity 0.6s;max-width:60vw';
+    document.body.appendChild(glbBadge);
+    let glbBadgeT = null;
+    function glbStatus(text, kind, hideAfter) {
+      glbBadge.textContent = text;
+      glbBadge.style.background = kind === 'ok' ? 'rgba(20,90,40,0.9)' : kind === 'err' ? 'rgba(140,20,20,0.92)' : 'rgba(40,40,40,0.85)';
+      glbBadge.style.borderColor = kind === 'ok' ? '#5f5' : kind === 'err' ? '#f66' : '#888';
+      glbBadge.style.opacity = 1; glbBadge.style.display = 'block';
+      clearTimeout(glbBadgeT);
+      if (hideAfter) glbBadgeT = setTimeout(() => { glbBadge.style.opacity = 0; setTimeout(() => { glbBadge.style.display = 'none'; }, 700); }, hideAfter);
+    }
     // first-person clipping: from your own eyes the head (and the model's own hanging arms, since your tracked
     // hands are drawn separately) are cut away; from any other camera (Monster POV, third person) it's whole
     const _sgPlanesLocal = [
@@ -15614,23 +15634,33 @@
     const _sgPlanes = _sgPlanesLocal.map((p) => p.clone());
     const _sgOff = _sgPlanesLocal.map((p) => new THREE.Plane(p.normal.clone(), 1e6));   // "keep everything"
     const _sgCamP = new THREE.Vector3(), _sgHeadP = new THREE.Vector3();
-    function setupSurvivorGLB(root) {
-      // orientation: the model faces +Z, the survivor faces -Z
-      root.rotation.set(0, Math.PI, 0);
-      root.updateMatrixWorld(true);
-      const box = new THREE.Box3().setFromObject(root), size = box.getSize(new THREE.Vector3()), centre = box.getCenter(new THREE.Vector3());
-      const s = SURVIVOR_GLB_HEIGHT / Math.max(1e-6, size.y);
-      root.scale.setScalar(s);
-      // centre X/Z under your head, eyes at the body's origin (your eyes), base on the ground below them
-      // (after the half turn the model's front is -z, so "forward of centre" is towards -z)
-      root.position.set(-centre.x * s, -(box.min.y + size.y * SURVIVOR_GLB_EYE.y) * s, -(centre.z - size.z * SURVIVOR_GLB_EYE.z) * s);
-      // the clip planes, in the body's own space
-      const neckY = -0.26 * SURVIVOR_GLB_HEIGHT, shoulder = 0.62 * (size.x * s) / 2;
-      _sgPlanesLocal[0].constant = neckY; _sgPlanesLocal[1].constant = shoulder; _sgPlanesLocal[2].constant = shoulder;
+    function setupSurvivorGLB(model) {
+      // normalise: face -Z (the model faces +Z), 1.1 tall, X/Z centred, base at y = 0
+      model.rotation.set(0, Math.PI, 0);
+      model.position.set(0, 0, 0); model.scale.setScalar(1);
+      model.updateMatrixWorld(true);
+      let box = new THREE.Box3().setFromObject(model);
+      const size = box.getSize(new THREE.Vector3());
+      if (!(size.y > 0) || !isFinite(size.y)) throw new Error('empty or invalid model bounds');
+      const k = SURVIVOR_GLB_HEIGHT / size.y;                                    // uniform scale so its height is 1.1
+      model.scale.setScalar(k);
+      model.updateMatrixWorld(true);
+      box = new THREE.Box3().setFromObject(model);
+      const center = box.getCenter(new THREE.Vector3());
+      model.position.set(-center.x, -box.min.y, -center.z);                     // X/Z pivot to (0, 0), base on y = 0
+      const nSize = box.getSize(new THREE.Vector3());
+      // fit the 1.1-unit model to the body: base on the ground below your eyes, eyes at your eyes
+      survivorGlbGroup.scale.setScalar(SURVIVOR_GLB_FIT);
+      survivorGlbGroup.position.set(0, -nSize.y * SURVIVOR_GLB_EYE.y * SURVIVOR_GLB_FIT, nSize.z * SURVIVOR_GLB_EYE.z * SURVIVOR_GLB_FIT);
+      const worldH = nSize.y * SURVIVOR_GLB_FIT, worldW = nSize.x * SURVIVOR_GLB_FIT;
+      // the first-person clip planes, in the body's own space
+      _sgPlanesLocal[0].constant = -0.26 * worldH; _sgPlanesLocal[1].constant = 0.62 * worldW / 2; _sgPlanesLocal[2].constant = 0.62 * worldW / 2;
+      const root = model;
       const mats = new Set();
       root.traverse((o) => {
         if (!o.isMesh) return;
         o.castShadow = false; o.receiveShadow = false;          // high-poly: no shadow passes
+        o.frustumCulled = false;
         const ms = Array.isArray(o.material) ? o.material : [o.material];
         for (const m of ms) {
           if (m.map) { m.map.colorSpace = THREE.SRGBColorSpace; m.map.anisotropy = 4; m.map.needsUpdate = true; }
@@ -15649,26 +15679,51 @@
         };
       });
       renderer.localClippingEnabled = true;
-      survivorGLB.add(root);
+      survivorGlbGroup.add(root);
       survivorGLBReady = true;
       // the GLB replaces the built-in survivor body and head (the necklace and hand cosmetics stay)
       for (const o of avatarHead.children) o.visible = false;
       for (const o of avatarBody.children) if (o.isMesh) o.visible = false;
-      survivorGLB.visible = true;
+      survivorGlbGroup.visible = playerRole !== 'monster' && !titleActive;
+      let tris = 0; root.traverse((o) => { if (o.isMesh && o.geometry) tris += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3; });
+      console.info(`[SurvivorGLB] loaded ${SURVIVOR_GLB_URL}: ${Math.round(tris).toLocaleString()} triangles, ${mats.size} material(s), normalised to ${SURVIVOR_GLB_HEIGHT} units, shown at ${worldH.toFixed(2)} world units`);
     }
     {
-      const loader = new GLTFLoader();
-      loader.load(SURVIVOR_GLB_URL, (gltf) => {
-        try { setupSurvivorGLB(gltf.scene); }
-        catch (e) { console.warn('GRIMAPE: survivor model could not be set up, keeping the built-in survivor', e); }
-      }, undefined, (err) => {
-        console.warn(`GRIMAPE: ${SURVIVOR_GLB_URL} could not be loaded (serve the page over http with the .glb beside it); using the built-in survivor`, err);
-      });
+      const failMsg = 'SURVIVOR MODEL: FAILED (Run local HTTP server, do not open via file://)';
+      const fail = (why, err, badge = failMsg) => {
+        console.error(`[SurvivorGLB] ${why}`, err || '');
+        glbStatus(badge, 'err', 15000);
+        showToast('SURVIVOR MODEL FAILED', 'Using the built-in survivor');
+      };
+      if (location.protocol === 'file:') {
+        // browsers block loading a .glb from a page opened via file:// (CORS); say so straight away
+        fail(`this page was opened via file://, so the browser blocks ${SURVIVOR_GLB_URL}. Serve the folder over http (e.g. "npx serve" or "python -m http.server") and open http://localhost:...`);
+      } else {
+        console.info(`[SurvivorGLB] loading ${SURVIVOR_GLB_URL} ...`);
+        glbStatus('SURVIVOR MODEL: LOADING...', 'info');
+        let lastPct = -10;
+        const gltfLoader = new GLTFLoader();
+        gltfLoader.load(SURVIVOR_GLB_URL, (gltf) => {
+          try {
+            setupSurvivorGLB(gltf.scene);
+            glbStatus('SURVIVOR MODEL: LOADED', 'ok', 5000);
+          } catch (e) { fail('the model loaded but could not be set up; keeping the built-in survivor', e, 'SURVIVOR MODEL: FAILED (model could not be set up - see console)'); }
+        }, (xhr) => {
+          if (xhr && xhr.total > 0) {
+            const pct = Math.floor(xhr.loaded / xhr.total * 100);
+            if (pct >= lastPct + 10 || pct === 100) { lastPct = pct; console.info(`[SurvivorGLB] ${pct}% (${(xhr.loaded / 1048576).toFixed(1)} / ${(xhr.total / 1048576).toFixed(1)} MB)`); }
+            glbStatus(`SURVIVOR MODEL: LOADING ${pct}%`, 'info');
+          } else if (xhr) glbStatus(`SURVIVOR MODEL: LOADING ${(xhr.loaded / 1048576).toFixed(1)} MB`, 'info');
+        }, (err) => {
+          const status = err && err.target && err.target.status;
+          fail(`could not load ${SURVIVOR_GLB_URL}${status ? ` (HTTP ${status}${status === 404 ? ': put the .glb in the same folder as this page, with exactly this name' : ''})` : ''}; using the built-in survivor`, err);
+        });
+      }
     }
     // role switching: SURVIVOR shows the model, MONSTER hides it (the monster model takes over)
     function updateSurvivorGLB() {
       if (!survivorGLBReady) return;
-      survivorGLB.visible = playerRole !== 'monster' && !titleActive;
+      survivorGlbGroup.visible = playerRole !== 'monster' && !titleActive;
     }
 
     // ---------- XR session hooks ----------
@@ -15740,7 +15795,7 @@
         updateMapsAndRun(dt); // only the current map stays loaded (others freed); the sunrise boat-run minigame
         updateMenuAndPerf(dt); // live objectives + map in the menu; per-map far plane / shadow size; mine spark cues
         updateSurvivorExtras(dt); // hinged breaker doors, the monster's mine waypoints, lobby PLAY always on top
-        updateSurvivorGLB(); // the custom survivor model (result_CtlOqt.glb): shown as SURVIVOR, hidden as MONSTER
+        updateSurvivorGLB(); // the custom survivor model (result_Ub5XHK.glb): shown as SURVIVOR, hidden as MONSTER
       } catch (err) {
         if (!loopErrorReported) {
           loopErrorReported = true;
