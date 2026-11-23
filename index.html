@@ -6290,6 +6290,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'UPDATE', date: '23/11/26', title: 'RIGGED SURVIVOR MODEL',
+        text: "survivor.glb's own skeleton: its real arms and hands follow your controllers, its head follows your headset." },
       { tag: 'UPDATE', date: '23/11/26', title: 'SHARED AI MONSTER, SHARED QUESTS & VOICE CHAT',
         text: 'In a room everyone sees the same AI monster, quests and carried items are shared, and proximity voice chat (menu).' },
       { tag: 'UPDATE', date: '23/11/26', title: 'MULTIPLAYER, VOLUME SLIDERS & CAMP SPEED',
@@ -15880,8 +15882,12 @@
     const SURVIVOR_BODY_LAYER = 3;
     camera.layers.enable(SURVIVOR_BODY_LAYER);                      // desktop / third person
     monsterPovCamera.layers.enable(SURVIVOR_BODY_LAYER);           // the Monster POV monitor
+    // rigged model: your eyes in the headset draw an arms-and-hands-only copy of the body (layer 4), so your own head
+    // and belly never block the view; everything else (Monster POV, desktop, other players) sees the whole body
+    const SURVIVOR_ARMS_LAYER = 4;
     function survivorHideBodyFromEyes(vr) {
       if (vr) camera.layers.disable(SURVIVOR_BODY_LAYER); else camera.layers.enable(SURVIVOR_BODY_LAYER);
+      if (vr) camera.layers.enable(SURVIVOR_ARMS_LAYER); else camera.layers.disable(SURVIVOR_ARMS_LAYER);
     }
     const SURVIVOR_BODY_DROP = 0.06, SURVIVOR_BODY_BACK = 0.08;   // the torso sits 6 cm lower and 8 cm behind the headset
     const SURVIVOR_GLB_FIT = (SPAWN_HEAD_HEIGHT - SURVIVOR_NECK_GAP) / SURVIVOR_NECK_FRAC / SURVIVOR_GLB_HEIGHT;
@@ -15935,7 +15941,196 @@
     // head, and stays inside the shoulders.)
     let survivorHeadPivot = null, survivorRemoteSrc = null;
     const SURVIVOR_NECK_PIVOT = new THREE.Vector3(0, 0.12, -0.05);
+    // ---------- the rigged survivor.glb (bones): arms and hands driven by your controllers, head by your headset ----------
+    // survivor.glb now comes with a skeleton. It's read on load (every bone name is logged), and turned into the rig the
+    // game drives: one body root, the head (with the jaw for talking) and, for each arm, three bones (upper arm,
+    // forearm, hand) solved with two-bone IK to your controllers every frame. NOTE on this particular rig (RigBake): it
+    // has no finger bones, and its bone names don't match the model: the chains named "UpLeg / Leg / Foot (/ ToeBase)"
+    // are the ones actually skinned to the monkey's arms and hands, the ones named "Arm / ForeArm / Hand" are skinned to
+    // bits of the belly and back, and "Head" only holds the top of the skull (the face and nose sit on the spine
+    // bones). So the arm chains are found by WHERE their bones are (out at the sides, running down to the hands),
+    // whatever they're called, and the head and jaw use the game's own neck / jaw weighting.
+    let survivorRig = null;
+    const RIG_PALM = new THREE.Vector3(0.034, 0.002, 0.003);          // where the model's hand bone sits, in your hand's grip frame
+    function survivorRigFrom(sm) {
+      if (survivorRig) return true;
+      const bones = sm.skeleton?.bones || [], names = bones.map((b) => b.name || '(unnamed)');
+      console.info(`[SurvivorGLB] skeleton: ${bones.length} bones: ${names.join(', ')}`);
+      if (bones.length < 6 || !sm.geometry?.attributes?.skinIndex) return false;
+      const bindPos = bones.map((b, i) => new THREE.Vector3().setFromMatrixPosition(sm.skeleton.boneInverses[i].clone().invert()));
+      const g = sm.geometry; g.computeBoundingBox();
+      const bb = g.boundingBox, H = bb.max.y - bb.min.y, Wd = bb.max.x - bb.min.x;
+      const SI = g.attributes.skinIndex, SW = g.attributes.skinWeight, pos = g.attributes.position, n = pos.count;
+      // which bones carry the arms: the skinned weight out at each side, below the shoulders ([0] its left = +X, [1] right)
+      const nb = bones.length, tot = new Float32Array(nb), side = [new Float32Array(nb), new Float32Array(nb)];
+      for (let i = 0; i < n; i++) {
+        const x = pos.getX(i), y = pos.getY(i), k = Math.abs(x) >= Wd * 0.25 && y <= bb.min.y + H * 0.62 ? (x > 0 ? 0 : 1) : -1;
+        for (let c = 0; c < 4; c++) { const w = SW.getComponent(i, c); if (w <= 0) continue; const j = SI.getComponent(i, c); tot[j] += w; if (k >= 0) side[k][j] += w; }
+      }
+      const kids = (b) => b.children.filter((c) => c.isBone).map((c) => bones.indexOf(c)).filter((j) => j >= 0);
+      const chain = (k) => {                                 // the 3-bone parent > child > grandchild run carrying the most arm
+        let best = null, bs = 0;
+        for (let a = 0; a < nb; a++) for (const b of kids(bones[a])) for (const c of kids(bones[b])) {
+          const m = side[k]; if (m[a] < 20 || m[b] < 20 || m[c] < 20) continue;
+          const sc = m[a] + m[b] + m[c]; if (sc > bs) { bs = sc; best = [a, b, c]; }
+        }
+        return best;
+      };
+      const L = chain(0), Rr = chain(1);
+      if (!L || !Rr) { console.warn('[SurvivorGLB] the skeleton has no usable arm chains'); return false; }
+      const armOf = new Int8Array(nb).fill(0);
+      bones.forEach((b, j) => {
+        if (L.includes(j)) armOf[j] = 3 + L.indexOf(j);
+        else if (Rr.includes(j)) armOf[j] = 6 + Rr.indexOf(j);
+        else {
+          for (let p = b.parent; p; p = p.parent) { const k = bones.indexOf(p); if (k === L[2]) { armOf[j] = 5; break; } if (k === Rr[2]) { armOf[j] = 8; break; } }   // toes / finger stubs: the hand
+          if (!armOf[j] && side[0][j] > 20 && side[0][j] > 0.65 * tot[j]) armOf[j] = 3;         // other bones skinned (almost) only to an arm: its upper arm
+          if (!armOf[j] && side[1][j] > 20 && side[1][j] > 0.65 * tot[j]) armOf[j] = 6;
+        }
+      });
+      const extra = bones.map((b, j) => j).filter((j) => armOf[j] && !L.includes(j) && !Rr.includes(j)).map((j) => names[j]);
+      console.info(`[SurvivorGLB] arm chains: left ${L.map((j) => names[j]).join(' > ')}, right ${Rr.map((j) => names[j]).join(' > ')}; also riding with the arms: ${extra.join(', ') || 'none'} (no finger bones in this rig)`);
+      // the game's weights: [root, head, jaw, L upper, L fore, L hand, R upper, R fore, R hand], 4 per vertex
+      const ss = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+      const si = new Uint16Array(n * 4), sw = new Float32Array(n * 4), armW = new Float32Array(n), acc = new Float32Array(9), ord = [0, 1, 2, 3, 4, 5, 6, 7, 8];
+      // the neck / jaw weighting is measured on survivor.glb's own shape (1.9 x 1.61 x 1.18, facing +Z)
+      const shapeOk = Math.abs(bb.max.y - 0.803) <= 0.05 && Math.abs(bb.min.y + 0.804) <= 0.05 && Math.abs(bb.max.x - 0.95) <= 0.06;
+      if (!shapeOk) console.info('[SurvivorGLB] head pivot: not survivor.glb\'s shape, the head and jaw stay fixed');
+      for (let i = 0; i < n; i++) {
+        acc.fill(0);
+        for (let c = 0; c < 4; c++) { const w = SW.getComponent(i, c); if (w > 0) acc[armOf[SI.getComponent(i, c)]] += w; }
+        let tot = 0; for (let k = 0; k < 9; k++) tot += acc[k]; if (tot <= 0) { acc[0] = 1; tot = 1; }
+        for (let k = 0; k < 9; k++) acc[k] /= tot;
+        armW[i] = 1 - acc[0];
+        const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+        const cut = 0.17 - 0.22 * z;
+        const w = shapeOk ? ss(cut - 0.07, cut + 0.07, y) * (1 - ss(0.3, 0.42, Math.abs(x))) : 0;
+        const wj = shapeOk ? ss(0.15, 0.23, z) * (1 - ss(0.17, 0.23, y)) * ss(0.02, 0.07, y) * (1 - ss(0.12, 0.19, Math.abs(x))) * (1 - ss(0.36, 0.43, z)) : 0;
+        const body = acc[0]; acc[0] = body * (1 - w); acc[1] = body * w * (1 - wj); acc[2] = body * w * wj;
+        ord.sort((a, b) => acc[b] - acc[a]);
+        let s4 = 0; for (let c = 0; c < 4; c++) s4 += acc[ord[c]];
+        for (let c = 0; c < 4; c++) { si[i * 4 + c] = ord[c]; sw[i * 4 + c] = s4 > 0 ? acc[ord[c]] / s4 : (c === 0 ? 1 : 0); }
+      }
+      const mk = (index) => {
+        const geo = new THREE.BufferGeometry();
+        for (const k of ['position', 'normal', 'uv']) if (g.attributes[k]) geo.setAttribute(k, g.attributes[k]);
+        geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(si, 4));
+        geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
+        geo.setIndex(index); geo.boundingBox = bb.clone(); geo.computeBoundingSphere();
+        return geo;
+      };
+      const full = mk(g.index ? g.index : null);
+      // the arms-only copy your own eyes see: every triangle that's mostly arm or hand
+      const idx = g.index ? g.index.array : null, tris = idx ? idx.length / 3 : n / 3, keep = [];
+      for (let t = 0; t < tris; t++) {
+        const a = idx ? idx[t * 3] : t * 3, b = idx ? idx[t * 3 + 1] : t * 3 + 1, c = idx ? idx[t * 3 + 2] : t * 3 + 2;
+        if (armW[a] > 0.5 && armW[b] > 0.5 && armW[c] > 0.5) keep.push(a, b, c);
+      }
+      const arms = mk(new THREE.BufferAttribute(n > 65535 ? new Uint32Array(keep) : new Uint16Array(keep), 1));
+      const P = (j) => bindPos[j].clone();
+      survivorRig = { full, arms, bind: { L: { u: P(L[0]), l: P(L[1]), h: P(L[2]) }, R: { u: P(Rr[0]), l: P(Rr[1]), h: P(Rr[2]) } }, local: null, height: H };
+      return true;
+    }
+    // one rigged body (the local player's, or another player's): a SkinnedMesh with its own bones on the shared geometry
+    function makeRigInstance(material, withArmsCopy) {
+      const B = survivorRig.bind;
+      const root = new THREE.Bone(); root.name = 'survivorBodyRoot';
+      const head = new THREE.Bone(); head.name = 'survivorHeadPivot'; head.position.copy(SURVIVOR_NECK_PIVOT); root.add(head);
+      const jaw = new THREE.Bone(); jaw.name = 'survivorJaw'; jaw.position.set(0, 0.2, 0.12).sub(SURVIVOR_NECK_PIVOT); head.add(jaw);
+      head.userData.jaw = jaw;
+      const arm = (b, tag) => {
+        const u = new THREE.Bone(), l = new THREE.Bone(), h = new THREE.Bone();
+        u.name = tag + 'UpperArm'; l.name = tag + 'ForeArm'; h.name = tag + 'Hand';
+        u.position.copy(b.u); l.position.subVectors(b.l, b.u); h.position.subVectors(b.h, b.l);
+        root.add(u); u.add(l); l.add(h);
+        return { u, l, h, bind: b };
+      };
+      const Lb = arm(B.L, 'Left'), Rb = arm(B.R, 'Right');
+      const mesh = new THREE.SkinnedMesh(survivorRig.full, material);
+      mesh.add(root); mesh.frustumCulled = false; mesh.userData.rig = true;
+      mesh.updateMatrixWorld(true);
+      mesh.bind(new THREE.Skeleton([root, head, jaw, Lb.u, Lb.l, Lb.h, Rb.u, Rb.l, Rb.h]));
+      let armsMesh = null;
+      if (withArmsCopy) {
+        armsMesh = new THREE.SkinnedMesh(survivorRig.arms, material);
+        armsMesh.frustumCulled = false; armsMesh.userData.rig = true; armsMesh.userData.armsOnly = true;
+        mesh.add(armsMesh); mesh.updateMatrixWorld(true);
+        armsMesh.bind(mesh.skeleton, mesh.matrixWorld.clone());
+      }
+      return { mesh, armsMesh, bones: { root, head, jaw, L: Lb, R: Rb } };
+    }
+    // two-bone IK on one rigged arm: shoulder fixed on the body, the hand bone on your controller (W, its orientation
+    // handQ), the elbow bowed down / out / back; the arm stretches up to 1.7x if the controller is further than it reaches
+    const _svrM = new THREE.Matrix4(), _svrQ0 = new THREE.Quaternion(), _svrSh = new THREE.Vector3(), _svrEl = new THREE.Vector3(), _svrD = new THREE.Vector3(),
+          _svrP = new THREE.Vector3(), _svrT = new THREE.Vector3(), _svrSc = new THREE.Vector3(), _svrQ = new THREE.Quaternion(), _svrQb = new THREE.Quaternion(),
+          _svrMu = new THREE.Matrix4(), _svrMl = new THREE.Matrix4(), _svrMh = new THREE.Matrix4(), _svrInv = new THREE.Matrix4(), _svrSd = new THREE.Matrix4(),
+          _svrD0 = new THREE.Vector3(), _svrOne = new THREE.Vector3(1, 1, 1);
+    function rigStretch(out, d0, k) {                        // scale by k along the (bone-local) unit direction d0
+      const a = k - 1, x = d0.x, y = d0.y, z = d0.z;
+      return out.set(1 + a * x * x, a * x * y, a * x * z, 0, a * y * x, 1 + a * y * y, a * y * z, 0, a * z * x, a * z * y, 1 + a * z * z, 0, 0, 0, 0, 1);
+    }
+    function solveRigArm(inst, side, W, handQ, bodyQ, bodyYaw) {
+      const A = inst.bones[side === 'L' ? 'L' : 'R'], b = A.bind;
+      if (!W) { A.u.matrixAutoUpdate = A.l.matrixAutoUpdate = A.h.matrixAutoUpdate = true; return; }   // resting: hanging as modelled
+      inst.mesh.updateWorldMatrix(true, false);
+      inst.mesh.matrixWorld.decompose(_svrT, _svrQ0, _svrSc);
+      const s = _svrSc.x, sgn = side === 'L' ? -1 : 1;
+      _svrSh.copy(b.u).applyMatrix4(inst.mesh.matrixWorld);                                // the shoulder
+      const lu0 = b.l.distanceTo(b.u) * s, ll0 = b.h.distanceTo(b.l) * s;
+      _svrD.subVectors(W, _svrSh); const d = Math.max(1e-4, _svrD.length()); _svrD.multiplyScalar(1 / d);
+      const k = Math.min(1.7, Math.max(1, d / (lu0 + ll0 - 1e-4))), lu = lu0 * k, ll = ll0 * k;
+      const a = Math.min(lu, (lu * lu - ll * ll + d * d) / (2 * d)), h = Math.sqrt(Math.max(0, lu * lu - a * a));
+      const cy = Math.cos(bodyYaw), sy = Math.sin(bodyYaw), px = sgn * 0.6, pz = 0.35;
+      _svrP.set(px * cy + pz * sy, -1, -px * sy + pz * cy).addScaledVector(_svrD, -_svrP.dot(_svrD));
+      if (_svrP.lengthSq() < 1e-6) _svrP.set(0, -1, 0).addScaledVector(_svrD, -_svrD.y);
+      _svrP.normalize();
+      _svrEl.copy(_svrSh).addScaledVector(_svrD, a).addScaledVector(_svrP, h);                // the elbow
+      // upper arm: its rest direction (shoulder -> elbow) turned onto shoulder -> elbow now, stretched by k
+      _svrD0.subVectors(b.l, b.u).normalize();
+      _svrQ.setFromUnitVectors(_svrT.copy(_svrD0).applyQuaternion(_svrQ0), _svrP.subVectors(_svrEl, _svrSh).normalize()).multiply(_svrQ0);
+      _svrMu.compose(_svrSh, _svrQ, _svrSc).multiply(rigStretch(_svrSd, _svrD0, k));
+      // forearm: elbow -> hand
+      _svrD0.subVectors(b.h, b.l).normalize();
+      _svrQ.setFromUnitVectors(_svrT.copy(_svrD0).applyQuaternion(_svrQ0), _svrP.subVectors(W, _svrEl).normalize()).multiply(_svrQ0);
+      _svrMl.compose(_svrEl, _svrQ, _svrSc).multiply(rigStretch(_svrSd, _svrD0, k));
+      // hand: on the controller, turned with it (its rest pose = your hand hanging relaxed at your side)
+      _svrQ.copy(handQ).multiply(_svrQb.copy(bodyQ).invert()).multiply(_svrQ0);
+      _svrMh.compose(W, _svrQ, _svrSc);
+      const set = (bone, M, parentM) => { bone.matrixAutoUpdate = false; bone.matrix.copy(_svrInv.copy(parentM).invert()).multiply(M); bone.matrixWorld.copy(M); bone.matrixWorldNeedsUpdate = false; };
+      inst.bones.root.updateWorldMatrix(true, false);
+      set(A.u, _svrMu, inst.bones.root.matrixWorld); set(A.l, _svrMl, _svrMu); set(A.h, _svrMh, _svrMl);
+      inst.cuffAt = inst.cuffAt || {};
+      inst.cuffAt[side] = { e: _svrEl.clone(), w: W.clone() };
+    }
+    // a clone of the loaded scene with any skinned mesh swapped for a plain mesh in its modelled pose (the shopkeeper,
+    // and the source for other players' bodies when the model isn't rigged)
+    function staticCopyOf(scene) {
+      const c = scene.clone(true), swaps = [];
+      c.traverse((o) => { if (o.isSkinnedMesh) swaps.push(o); });
+      for (const o of swaps) {
+        const m = new THREE.Mesh(o.geometry, o.material); m.name = o.name;
+        m.position.copy(o.position); m.quaternion.copy(o.quaternion); m.scale.copy(o.scale);
+        const p = o.parent; p.add(m); p.remove(o);
+      }
+      return c;
+    }
     function rigSurvivorHead(model) {
+      // a rigged survivor.glb: build the game's rig from its skeleton and use it in place of the loaded skinned mesh
+      let skinned = null;
+      model.traverse((o) => { if (!skinned && o.isSkinnedMesh) skinned = o; });
+      if (skinned) {
+        let ok = false; try { ok = survivorRigFrom(skinned); } catch (e) { console.warn('[SurvivorGLB] could not read the skeleton', e); }
+        if (ok) {
+          const inst = makeRigInstance(skinned.material, true);
+          inst.mesh.name = skinned.name; inst.mesh.position.copy(skinned.position); inst.mesh.quaternion.copy(skinned.quaternion); inst.mesh.scale.copy(skinned.scale);
+          const parent = skinned.parent; parent.add(inst.mesh); parent.remove(skinned);
+          survivorRig.local = inst;
+          return inst.bones.head;
+        }
+        // not usable: carry on with it as a plain mesh, as before
+        const m = new THREE.Mesh(skinned.geometry, skinned.material); m.position.copy(skinned.position); m.quaternion.copy(skinned.quaternion); m.scale.copy(skinned.scale);
+        const parent = skinned.parent; parent.add(m); parent.remove(skinned);
+      }
       let mesh = null;
       model.traverse((o) => { if (!mesh && o.isMesh && !o.isSkinnedMesh) mesh = o; });
       if (!mesh || !mesh.geometry?.attributes?.position) return null;
@@ -16040,13 +16235,15 @@
         if (!o.isMesh) return;
         o.castShadow = false; o.receiveShadow = false;          // high-poly: no shadow passes
         o.frustumCulled = false;
-        o.layers.set(SURVIVOR_BODY_LAYER);                      // first-person: the headset's eyes don't draw this layer
+        o.layers.set(o.userData.armsOnly ? SURVIVOR_ARMS_LAYER : SURVIVOR_BODY_LAYER);   // your eyes see only the arms-only copy
         const ms = Array.isArray(o.material) ? o.material : [o.material];
         for (const m of ms) {
           if (m.map) { m.map.colorSpace = THREE.SRGBColorSpace; m.map.anisotropy = 4; m.map.needsUpdate = true; survivorGlbMap = survivorGlbMap || m.map; }
+          if (survivorRig && survivorRig.local) { m.clippingPlanes = null; mats.add(m); continue; }   // rigged: real arms, nothing to cut away
           m.clippingPlanes = _sgPlanes; m.clipShadows = false;
           mats.add(m);
         }
+        if (survivorRig && survivorRig.local) return;
         // pick the clip planes per camera: your own eye cameras are the ones right at the model's head
         o.onBeforeRender = (r, sc, cam) => {
           // your own eyes: the headset's eye cameras (anything else, e.g. the Monster POV camera, sees the whole body)
@@ -16092,8 +16289,8 @@
         gltfLoader.load(url, (gltf) => {
           try {
             survivorGlbSource = url;
-            const keeperSrc = gltf.scene.clone(true);                         // (a second copy for the shopkeeper)
-            survivorRemoteSrc = gltf.scene.clone(true);                       // (and one to copy for other players in a room)
+            const keeperSrc = staticCopyOf(gltf.scene);                       // (a second copy for the shopkeeper)
+            survivorRemoteSrc = staticCopyOf(gltf.scene);                     // (and one to copy for other players in a room)
             setupSurvivorGLB(gltf.scene);
             try { buildShopkeeper(keeperSrc); } catch (e) { console.warn('[SurvivorGLB] shopkeeper could not be set up', e); }
             glbStatus('SURVIVOR MODEL: LOADED', 'ok', 5000);
@@ -16189,6 +16386,23 @@
     function buildSurvivorArms() {
       if (survivorArms.built) return;
       survivorArms.built = true;
+      if (survivorRig && survivorRig.local) {
+        for (const h of hands) for (const m of h.model.meshes) m.visible = false;              // the model's own hands replace them
+        for (const H of monkeyHands) for (const m of H.mine) m.visible = false;
+        hands.forEach((h, i) => {
+          const S = { side: i === 0 ? -1 : 1, hand: [], cuff: new THREE.Group() };
+          armGroup.add(S.cuff); survivorArms.sides[i] = S;
+          // the finger buttons are still read (and sent to other players), but this rig has no finger bones to bend
+          const basePose = h.model.pose; let ci = 0, co = 0, th = 0;
+          h.model.pose = function (grip, trig, dt) {
+            basePose.call(this, grip, trig, dt);
+            ci += ((trig || 0) - ci) * Math.min(1, dt * 16); co += ((grip || 0) - co) * Math.min(1, dt * 16);
+            const b = controllers[i].userData.inputSource?.gamepad?.buttons?.[4]; th += ((b && b.pressed ? 1 : 0) - th) * Math.min(1, dt * 14);
+            S.curl = [ci, co, th];
+          };
+        });
+        return;
+      }
       // colours sampled from survivor.glb's texture: upper arm fur #ba6e24, forearm #655650, hand #534141
       // warm orange-brown fur from shoulder to wrist (#c96a2b; the model's own fur samples at #ba6e24) and compact
       // dark charcoal-brown paws (#2b2523; the model's hands sample #534141 before lighting)
@@ -16261,9 +16475,33 @@
       m.quaternion.setFromUnitVectors(_arUp, _arD.multiplyScalar(1 / len));
       m.scale.set(1, len, 1);
     }
+    const _svrW = new THREE.Vector3(), _svrHQ = new THREE.Quaternion(), _svrBQ = new THREE.Quaternion(), _svrUp = new THREE.Vector3(0, 1, 0);
     function updateSurvivorArms() {
       armGroup.visible = survivorBodyGroup.visible && survivorArms.built;
       if (!armGroup.visible) return;
+      if (survivorRig && survivorRig.local) {
+        // the rigged arms: each controller drives the arm on its side (by handedness), the wrist charm rides the forearm
+        const inst = survivorRig.local, vr = renderer.xr.isPresenting;
+        survivorBodyGroup.updateMatrixWorld(true);
+        survivorBodyGroup.getWorldQuaternion(_svrBQ);
+        for (let i = 0; i < 2; i++) {
+          const S = survivorArms.sides[i]; if (!S) continue;
+          const hd = controllers[i].userData.inputSource?.handedness;
+          const side = hd === 'left' ? 'L' : hd === 'right' ? 'R' : (i === 0 ? 'L' : 'R');
+          if (vr && hands[i].tracked) {
+            hands[i].follower.updateMatrixWorld(true);
+            _svrW.copy(RIG_PALM).applyMatrix4(hands[i].model.group.matrixWorld);
+            solveRigArm(inst, side, _svrW, hands[i].follower.getWorldQuaternion(_svrHQ), _svrBQ, survivorBodyGroup.rotation.y);
+          } else solveRigArm(inst, side, null);
+          const c = inst.cuffAt && inst.cuffAt[side];
+          if (vr && hands[i].tracked && c) {
+            S.cuff.position.lerpVectors(c.e, c.w, 0.72);                                         // round the forearm, just above the hand
+            S.cuff.quaternion.setFromUnitVectors(_svrUp, _svrW.subVectors(c.w, c.e).normalize());
+            S.cuff.visible = true;
+          } else S.cuff.visible = false;
+        }
+        return;
+      }
       survivorBodyGroup.updateMatrixWorld(true);
       const vr = renderer.xr.isPresenting;
       const yaw = survivorBodyGroup.rotation.y, cy = Math.cos(yaw), sy = Math.sin(yaw);
@@ -16320,8 +16558,9 @@
     // The band / chain wraps the end of the orange forearm itself (a ring 4.3 cm in radius round the 4 cm forearm, 1.4 cm
     // back from the wrist), parented to a cuff group that's placed with the arm segments in the same pass, so it can
     // never lag or drift off the arm. The charm's chain hooks onto the ring's lowest point and hangs under it.
-    const CUFF_R = 0.043, CUFF_Y = -0.014, CHARM_WORLD = CHARM_SIZE * PLAYER_SCALE;
+    let CUFF_R = 0.043, CUFF_Y = -0.014, CHARM_WORLD = CHARM_SIZE * PLAYER_SCALE;
     function fitWristWear() {
+      if (survivorRig && survivorRig.local) { CUFF_R = 0.15 * SURVIVOR_GLB_HEIGHT / survivorRig.height * SURVIVOR_GLB_FIT; CUFF_Y = 0; }   // the model's forearm
       wear.forEach((w, i) => {
         const S = survivorArms.sides[i]; if (!S || !S.cuff) return;
         const b = w.c.band;
@@ -17081,7 +17320,7 @@
       const charmHolder = new THREE.Group(); charmHolder.position.set(SURVIVOR_WRIST.x - WRIST_RING_R - 0.01, SURVIVOR_WRIST.y - 0.005, SURVIVOR_WRIST.z); root.add(charmHolder);
       root.traverse((o) => { if (o.isMesh) o.castShadow = false; });
       root.visible = false; scene.add(root);
-      return { root, fingers: [[hb.f[0][0], hb.f[0][1]], [hb.f[1][0], hb.f[1][1]]], thumb: [hb.t[0], hb.t[1]], band, charmHolder, charmKind: 'none', bandKind: '' };
+      return { root, mesh, fingers: [[hb.f[0][0], hb.f[0][1]], [hb.f[1][0], hb.f[1][1]]], thumb: [hb.t[0], hb.t[1]], band, charmHolder, charmKind: 'none', bandKind: '' };
     }
     // full-size arms from their shoulders to their hands, exactly like yours: thick tapered orange-fur upper arm and
     // forearm with round shoulder / elbow / wrist joints (built when they first appear, solved every frame below)
@@ -17093,7 +17332,23 @@
       return { g, sides: [-1, 1].map((side) => ({ side, upper: seg(0.062, 0.052), fore: seg(0.052, 0.04), shoulder: ball(0.066), elbow: ball(0.054), wrist: ball(0.041) })) };
     }
     const _raS = new THREE.Vector3(), _raW = new THREE.Vector3(), _raE = new THREE.Vector3(), _raD = new THREE.Vector3(), _raP = new THREE.Vector3();
+    const _rrW = new THREE.Vector3(), _rrBQ = new THREE.Quaternion(), _rrUp = new THREE.Vector3(0, 1, 0);
     function solveRemoteArms(r, s) {
+      if (r.rig) {
+        // the rigged model's own arms on their hands (and the procedural paws hidden)
+        _rrBQ.setFromAxisAngle(_rrUp, r.yaw);
+        for (let k = 0; k < 2; k++) {
+          const paw = r.paws[k], side = k === 0 ? 'L' : 'R';
+          paw.mesh.visible = false;
+          paw.band.scale.setScalar(CUFF_R / (WRIST_RING_R * PLAYER_SCALE));        // the band sized to the model's wrist
+          if (paw.root.visible) {
+            paw.root.updateMatrixWorld(true);
+            _rrW.copy(RIG_PALM).applyMatrix4(paw.root.matrixWorld);
+            solveRigArm(r.rig, side, _rrW, r.hand[k].q, _rrBQ, r.yaw);
+          } else solveRigArm(r.rig, side, null);
+        }
+        return;
+      }
       const A = r.arms; if (!A) return;
       A.g.visible = !!r.glb;
       if (!r.glb) return;
@@ -17135,6 +17390,25 @@
     }
     function buildRemoteSurvivorBody(r) {
       if (r.glb || typeof survivorRemoteSrc === 'undefined' || !survivorRemoteSrc) return;
+      if (survivorRig && survivorRig.local) {
+        // a rigged survivor.glb: their own copy of the rig, arms and hands on their controllers, head on their headset
+        const srcMat = survivorRig.local.mesh.material;
+        const mat = Array.isArray(srcMat) ? srcMat.map((m) => Object.assign(m.clone(), { clippingPlanes: null })) : Object.assign(srcMat.clone(), { clippingPlanes: null });
+        const inst = makeRigInstance(mat, false);
+        const model = new THREE.Group(); model.add(inst.mesh);
+        model.rotation.set(0, Math.PI, 0); model.updateMatrixWorld(true);
+        let box = new THREE.Box3().setFromObject(model);
+        const sy = box.getSize(new THREE.Vector3()).y; if (!(sy > 0)) return;
+        model.scale.setScalar(SURVIVOR_GLB_HEIGHT * SURVIVOR_GLB_FIT / sy); model.updateMatrixWorld(true);
+        box = new THREE.Box3().setFromObject(model);
+        const c = box.getCenter(new THREE.Vector3());
+        model.position.set(-c.x, -box.min.y, -c.z);
+        inst.mesh.castShadow = false; inst.mesh.layers.set(0);
+        r.body.add(model);
+        r.glb = model; r.head = inst.bones.head; r.rig = inst;
+        if (r.fallback) r.fallback.visible = false;
+        return;
+      }
       const src = survivorRemoteSrc.clone(true);
       let head = null; try { head = rigSurvivorHead(src); } catch (e) { head = null; }
       src.rotation.set(0, Math.PI, 0); src.position.set(0, 0, 0); src.scale.setScalar(1); src.updateMatrixWorld(true);
