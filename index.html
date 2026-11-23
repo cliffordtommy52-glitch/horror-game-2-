@@ -1250,34 +1250,60 @@
       lb.build(scene, { rayTarget: true });
     }
 
-    // ---------- Pitched A-frame tents (stepped box colliders follow the slope so you can climb them) ----------
-    function addTent(x, z, color, w = 2.2 * S, h = 1.5 * S, len = 2.6 * S) {
-      const shape = new THREE.Shape();
-      shape.moveTo(-w / 2, 0); shape.lineTo(w / 2, 0); shape.lineTo(0, h); shape.closePath();
-      const geo = new THREE.ExtrudeGeometry(shape, { depth: len, bevelEnabled: false });
-      geo.translate(0, 0, -len / 2);
-      const tent = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color, roughness: 0.95, side: THREE.DoubleSide }));
-      tent.position.set(x, 0, z);
-      tent.castShadow = tent.receiveShadow = true;
-      scene.add(tent);
-      rayTargets.push(tent);
-      // dark open door flap on the side facing the fire
-      const door = new THREE.Shape();
-      door.moveTo(-w * 0.22, 0); door.lineTo(w * 0.22, 0); door.lineTo(0, h * 0.72); door.closePath();
-      const doorMesh = new THREE.Mesh(new THREE.ShapeGeometry(door), new THREE.MeshBasicMaterial({ color: 0x030303 }));
-      doorMesh.position.set(x, 0.01, z + len / 2 + 0.01);
-      scene.add(doorMesh);
-      // ridge poles
-      for (const dz of [-len / 2 - 0.05, len / 2 + 0.05]) {
-        const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, h + 0.15, 6), plankMat);
-        pole.position.set(x, (h + 0.15) / 2, z + dz);
-        scene.add(pole);
+    // ---------- Pitched A-frame tents: hollow inside, front flaps rolled back and tied, so you can crawl in and hide ----------
+    // The canvas is a thin shell (two sloping roof panels, a back wall and a front wall with a big triangular doorway).
+    // Thin stepped colliders follow each panel (so you can still climb over the roof) and the walls, leaving the inside
+    // free. While you're inside, the monster can't see you, unless it was watching you as you went in (see canSee).
+    const campTents = [];
+    function addTent(x, z, color, w = 2.86 * S, h = 1.95 * S, len = 3.1 * S) {   // (30% roomier, so you fit inside)
+      const hw = w / 2, hl = len / 2, dw = w * 0.32, dh = h * 0.82;   // doorway: half-width at the ground, height
+      const canvasMat = new THREE.MeshStandardMaterial({ color, roughness: 0.95, side: THREE.DoubleSide });
+      const flapMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(color).multiplyScalar(0.8), roughness: 1, side: THREE.DoubleSide });
+      const floorMat = new THREE.MeshStandardMaterial({ color: 0x1e1a14, roughness: 1 });
+      const tb = makeBatch(), M = new THREE.Matrix4().makeTranslation(x, 0, z);
+      // the two roof panels
+      const slant = Math.hypot(hw, h), th = Math.atan2(hw, h);
+      for (const sx of [-1, 1]) {
+        const g = new THREE.PlaneGeometry(len, slant);
+        g.rotateY(Math.PI / 2); g.rotateZ(sx * th); g.translate(sx * hw / 2, h / 2, 0);
+        tb.addMatrix(g, canvasMat, M);
       }
-      const steps = 3;
+      // back wall, and the front wall round the doorway (a triangle with a triangular notch cut up from the ground)
+      const back = new THREE.Shape(); back.moveTo(-hw, 0); back.lineTo(hw, 0); back.lineTo(0, h); back.closePath();
+      const bg = new THREE.ShapeGeometry(back); bg.translate(0, 0, -hl); tb.addMatrix(bg, canvasMat, M);
+      const front = new THREE.Shape();
+      front.moveTo(-hw, 0); front.lineTo(-dw, 0); front.lineTo(0, dh); front.lineTo(dw, 0); front.lineTo(hw, 0); front.lineTo(0, h); front.closePath();
+      const fg = new THREE.ShapeGeometry(front); fg.translate(0, 0, hl); tb.addMatrix(fg, canvasMat, M);
+      // the flaps, rolled up along each side of the doorway and tied back
+      const edge = Math.hypot(dw, dh), ea = Math.atan2(dw, dh);
+      for (const sx of [-1, 1]) {
+        tb.add(new THREE.CylinderGeometry(0.028, 0.028, edge, 10), flapMat, x + sx * (dw / 2 + 0.02), dh / 2, z + hl + 0.03, 0, 0, sx * ea);
+        for (const t of [0.3, 0.7]) tb.add(new THREE.TorusGeometry(0.031, 0.005, 5, 12), plankMat, x + sx * (dw * (1 - t) + 0.02), dh * t, z + hl + 0.03, Math.PI / 2, 0, sx * ea);
+        tb.add(new THREE.CylinderGeometry(0.008, 0.008, 0.07, 5), plankMat, x + sx * (hw + 0.05), 0.02, z + hl + 0.12, 0.5, 0, 0);   // tent pegs
+        tb.add(new THREE.CylinderGeometry(0.008, 0.008, 0.07, 5), plankMat, x + sx * (hw + 0.05), 0.02, z - hl - 0.12, -0.5, 0, 0);
+      }
+      // groundsheet, a bedroll and a pillow inside
+      tb.add(UNIT_BOX, floorMat, x, 0.006, z, 0, 0, 0, w - 0.08, 0.012, len - 0.04);
+      tb.add(new THREE.CylinderGeometry(0.07, 0.07, len * 0.62, 10), flapMat, x + hw * 0.32, 0.07, z - hl * 0.2, Math.PI / 2, 0, 0);
+      tb.add(UNIT_BOX, new THREE.MeshStandardMaterial({ color: 0xcfc6b0, roughness: 1 }), x + hw * 0.32, 0.04, z - hl + 0.16, 0, 0, 0, 0.2, 0.06, 0.12);
+      // ridge poles: the back one full height, the front one only above the doorway
+      tb.add(new THREE.CylinderGeometry(0.02, 0.02, h + 0.15, 6), plankMat, x, (h + 0.15) / 2, z - hl - 0.05);
+      tb.add(new THREE.CylinderGeometry(0.02, 0.02, h + 0.15 - dh, 6), plankMat, x, (dh + h + 0.15) / 2, z + hl + 0.05);
+      tb.add(new THREE.CylinderGeometry(0.014, 0.014, len + 0.1, 6), plankMat, x, h - 0.01, z, Math.PI / 2, 0, 0);   // ridge
+      tb.build(scene, { rayTarget: true });
+      // thin stepped colliders: along each roof panel, across the back, and either side of (and above) the doorway
+      const steps = 5, T = 0.04;
       for (let k = 0; k < steps; k++) {
-        const y0 = (h * k) / steps, y1 = (h * (k + 1)) / steps;
-        addBoxCollider(x, y0, z, w * (1 - (k + 0.5) / steps), y1 - y0, len);
+        const y0 = (h * k) / steps, y1 = (h * (k + 1)) / steps, ym = (y0 + y1) / 2;
+        const xo = hw * (1 - y0 / h), xi = Math.max(0, hw * (1 - y1 / h) - T);
+        for (const sx of [-1, 1]) addBoxCollider(x + sx * (xo + xi) / 2, y0, z, xo - xi, y1 - y0, len);
+        const half = hw * (1 - ym / h);
+        addBoxCollider(x, y0, z - hl, 2 * half, y1 - y0, T);
+        const door = ym < dh ? dw * (1 - ym / dh) : 0;
+        if (door <= 0) addBoxCollider(x, y0, z + hl, 2 * half, y1 - y0, T);
+        else if (half - door > 0.02) for (const sx of [-1, 1]) addBoxCollider(x + sx * (half + door) / 2, y0, z + hl, half - door, y1 - y0, T);
       }
+      campTents.push({ x, z, hw, hl, h });
     }
     addTent(-4.8 * S, -7.6 * S, 0x3a4a2e);
     addTent(4.6 * S, -7.3 * S, 0x5a3a1e);
@@ -1864,7 +1890,7 @@
         [px, pz] = at(lx, 0.12);                                                                          // front legs
         batch.add(new THREE.CylinderGeometry(0.013, 0.017, 0.26, 6), furnDark, px, floorY + 0.13, pz);
         [px, pz] = at(lx, -0.125);                                                                        // back legs run up into the back
-        batch.add(new THREE.CylinderGeometry(0.014, 0.017, 0.72, 6), furnDark, px, floorY + 0.36, pz, -0.06 * Math.cos(ry), 0, 0.06 * Math.sin(ry));
+        batch.add(new THREE.CylinderGeometry(0.015, 0.017, 0.72, 6), furnDark, px, floorY + 0.36, pz);   // straight up, flat on the floor
         [px, pz] = at(lx, 0);                                                                             // side stretchers
         batch.add(UNIT_BOX, furnDark, px, floorY + 0.08, pz, 0, ry, 0, 0.014, 0.018, 0.24);
       }
@@ -6263,6 +6289,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'UPDATE', date: '23/11/26', title: 'HIDE IN THE TENTS, EASY DOORS',
+        text: 'Crawl into a tent to hide, doors swing at a touch, smaller SHOTGUN that stops at walls, new tools at BOAT REPAIRS.' },
       { tag: 'UPDATE', date: '23/11/26', title: 'SHOTGUN, GAZEBO & 2-ESCAPE STRUGGLE',
         text: 'Wood-and-steel pump SHOTGUN, a shopkeeper at THE TRADER, oak benches, a lakeside gazebo, finger-by-finger hands.' },
       { tag: 'UPDATE', date: '23/11/26', title: 'PLAY AS THE PROBOSCIS MONKEY',
@@ -7489,7 +7517,6 @@
       box(roofMat, 0, W.h, 0, W.w + 2 * T, 0.2, W.d + 2 * T);                              // ceiling
       for (let k = -1; k <= 1; k++) box(trimMat, k * 2.6, W.h - 0.16, 0, 0.16, 0.16, W.d, false);   // ceiling beams
       for (const s of [-1, 1]) for (const zz of [-1, 1]) box(trimMat, s * (W.w / 2 - 0.1), 0, zz * (W.d / 2 - 0.1), 0.18, W.h, 0.18, false);   // corner posts
-      box(trimMat, 0, 0, 0, W.w, 0.08, 0.001, false);                                       // (keeps the batch non-empty)
       // skirting and a dado rail all round
       for (const [x, z, w, d] of [[0, -W.d / 2 + 0.02, W.w, 0.04], [0, W.d / 2 - 0.02, W.w, 0.04], [-W.w / 2 + 0.02, 0, 0.04, W.d], [W.w / 2 - 0.02, 0, 0.04, W.d]]) {
         box(trimMat, x, 0, z, w, 0.12, d, false);
@@ -7562,15 +7589,8 @@
       roomBulb = { mat: bulbMat, glow: bulbGlow, level: 1, t: 0, drop: 0 };
       roomBulb.src = { x: W.x, y: W.h - 0.6, z: W.z + 0.6, color: 0xffd2a0, intensity: 16, distance: 12, weight: 6 };   // warm overhead bulb, much brighter
       lightSources.push(roomBulb.src);
-      const lantMat = new THREE.MeshStandardMaterial({ color: 0x2a1a08, emissive: 0xffa040, emissiveIntensity: 2.4 });
-      for (const s of [-1, 1]) {
-        const lx = W.x + s * (W.w / 2 - 0.12), lz = W.z - 1.6;
-        const l = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.14, 10), lantMat);
-        l.position.set(lx, 1.35, lz); scene.add(l);
-        const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xffa040, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false }));
-        sp.scale.set(0.9, 0.9, 1); sp.position.set(lx, 1.37, lz); scene.add(sp);
-        lightSources.push({ x: lx, y: 1.4, z: lz, color: 0xffb060, intensity: 7, distance: 7, weight: 5, fire: true });
-      }
+      // (the two bare glowing blobs that floated on the side walls are gone; their warm fill light stays)
+      for (const s of [-1, 1]) lightSources.push({ x: W.x + s * (W.w / 2 - 0.12), y: 1.4, z: W.z - 1.6, color: 0xffb060, intensity: 7, distance: 7, weight: 5, fire: true });
       // drifting dust
       const n = 160, pos = new Float32Array(n * 3);
       for (let i = 0; i < n; i++) pos.set([W.x + wpr(-W.w / 2, W.w / 2), wpr(0.1, W.h - 0.1), W.z + wpr(-W.d / 2, W.d / 2)], i * 3);
@@ -12787,15 +12807,35 @@
     }
 
     // ---------- the brain ----------
+    // hiding in a camp tent: your head inside the canvas hides you from its eyes, unless it was watching you go in
+    const tentHide = { inside: false, spotted: false };
+    function inCampTent(p) {
+      if (currentMap !== 'camp' || !p) return false;
+      for (const t of campTents) {
+        if (p.y >= t.h - 0.02 || Math.abs(p.z - t.z) > t.hl - 0.02) continue;
+        if (Math.abs(p.x - t.x) < t.hw * (1 - Math.max(0, p.y) / t.h)) return true;
+      }
+      return false;
+    }
     function canSee(playerHead) {
       if (!playerHead || caught || ai.state === 'stunned') return false;
       if (headSubmerged(playerHead)) return false;            // diving under the water hides you
+      const inTent = inCampTent(playerHead);
+      if (!inTent) tentHide.inside = false;
+      else if (!tentHide.inside) {                            // just crawled in: was it watching?
+        tentHide.inside = true;
+        tentHide.spotted = ai.map === currentMap && (ai.state === 'chase' || ai.state === 'stare') && ai.lostT < 0.5;
+        if (!tentHide.spotted) showToast('HIDING IN THE TENT', "It can't see you in here. Stay quiet.");
+        else showToast('IT SAW YOU GO IN!', 'The tent won\'t hide you this time');
+      }
+      if (inTent && !tentHide.spotted) return false;         // hidden
       const nav = NAV[ai.map];
       _aiEye.set(ai.pos.x, ai.pos.y + AI_HEAD_H, ai.pos.z);
       _aiTo.subVectors(playerHead, _aiEye);
       const d = _aiTo.length();
       const range = flashlight.userData.on ? AI_SIGHT_LIT : AI_SIGHT;
       if (d > range) return false;
+      if (inTent) return true;                                // it knows you're in there (the canvas doesn't stop it)
       if (d > AI_SENSE) {
         const fx = Math.sin(ai.heading + ai.headYaw), fz = Math.cos(ai.heading + ai.headYaw);
         if ((_aiTo.x * fx + _aiTo.z * fz) / Math.max(1e-4, Math.hypot(_aiTo.x, _aiTo.z)) < AI_FOV_COS) return false;
@@ -13706,18 +13746,81 @@
       bb.add(UNIT_BOX, benchWood, 0, 0.52, 0, 0, 0, 0, W, 0.06, D);                          // top
       for (const sx of [-1, 1]) for (const sz of [-1, 1]) bb.add(UNIT_BOX, benchWood, sx * (W / 2 - 0.06), 0.25, sz * (D / 2 - 0.06), 0, 0, 0, 0.07, 0.5, 0.07);
       bb.add(UNIT_BOX, benchWood, 0, 0.14, 0, 0, 0, 0, W - 0.1, 0.03, D - 0.1);               // shelf
-      bb.add(UNIT_BOX, ironMat, -0.5, 0.6, 0.12, 0, 0, 0, 0.14, 0.1, 0.12);                   // a vice
-      bb.add(UNIT_BOX, ironMat, -0.5, 0.6, 0.21, 0, 0, 0, 0.12, 0.08, 0.03);
-      bb.add(new THREE.CylinderGeometry(0.008, 0.008, 0.16, 6), steel, -0.5, 0.6, 0.27, 0, 0, Math.PI / 2);
-      bb.add(UNIT_BOX, steel, 0.42, 0.558, -0.18, 0, 0.4, 0, 0.18, 0.012, 0.03);               // spanner
-      bb.add(UNIT_BOX, steel, 0.36, 0.558, -0.06, 0, -0.3, 0, 0.14, 0.012, 0.025);             // screwdriver
-      bb.add(UNIT_BOX, new THREE.MeshStandardMaterial({ color: 0xb02a1a, roughness: 0.5 }), 0.31, 0.558, -0.06, 0, -0.3, 0, 0.06, 0.02, 0.03);
+      // the tools, laid out either side of the propeller (bench top at y = 0.55; its front, +z, faces the camp)
+      const T0 = 0.55;
+      const hickory = new THREE.MeshStandardMaterial({ map: woodTex, color: 0xc89058, roughness: 0.5 });
+      const rubberGrip = new THREE.MeshStandardMaterial({ color: 0x1c1c1c, roughness: 0.85 });
+      const forged = new THREE.MeshStandardMaterial({ color: 0x4a4e55, roughness: 0.35, metalness: 0.9 });
+      const chrome = new THREE.MeshStandardMaterial({ color: 0xc8ccd2, roughness: 0.15, metalness: 1 });
+      const drillBody = new THREE.MeshStandardMaterial({ color: 0xe0a21a, roughness: 0.45 });
+      const drillDark = new THREE.MeshStandardMaterial({ color: 0x2a2c30, roughness: 0.6 });
+      const sdHandle = new THREE.MeshStandardMaterial({ color: 0xc0281a, roughness: 0.35, transparent: true, opacity: 0.92 });
+      const tool = (x, z, ry, parts) => {                              // place parts given in the tool's own frame
+        const c = Math.cos(ry), s2 = Math.sin(ry);
+        for (const [geo, mat, lx, ly, lz, rx = 0, ryy = 0, rz = 0, sx = 1, sy = 1, sz = 1] of parts)
+          bb.add(geo, mat, x + lx * c + lz * s2, T0 + ly, z - lx * s2 + lz * c, rx, ry + ryy, rz, sx, sy, sz);
+      };
+      const cyl = (r0, r1, len, seg = 10) => new THREE.CylinderGeometry(r0, r1, len, seg);
+      const ALONG = [0, 0, Math.PI / 2];                               // (a cylinder lying along the tool's x)
+      // claw hammer: hickory handle with a rubber grip, a forged head with a round striking face and a split, curved claw
+      tool(-0.43, 0.13, 0.25, [
+        [cyl(0.0105, 0.012, 0.26), hickory, 0, 0.012, 0, ...ALONG],
+        [cyl(0.0135, 0.0135, 0.09), rubberGrip, 0.085, 0.012, 0, ...ALONG],
+        [bevelBox(0.026, 0.026, 0.05, 0.004), forged, -0.13, 0.014, 0],                     // the eye block round the handle
+        [cyl(0.014, 0.012, 0.035, 14), forged, -0.13, 0.014, 0.04, Math.PI / 2, 0, 0],     // neck to the face
+        [cyl(0.0155, 0.0155, 0.008, 14), chrome, -0.13, 0.014, 0.06, Math.PI / 2, 0, 0],   // striking face
+        ...[-1, 1].map((sd) => [new THREE.TorusGeometry(0.03, 0.0045, 6, 12, Math.PI / 2.2), forged, -0.13 + sd * 0.005, 0.014 - 0.03, -0.02, 0, Math.PI / 2, Math.PI / 2]),   // the two claw prongs
+      ]);
+      // cordless drill, standing on its battery: battery pack, pistol grip, motor housing, keyless chuck and a bit
+      tool(-0.42, -0.1, -0.5, [
+        [bevelBox(0.075, 0.035, 0.1, 0.008), drillDark, 0, 0.0175, 0],                       // battery
+        [bevelBox(0.07, 0.008, 0.09, 0.003), drillBody, 0, 0.038, 0],
+        [bevelBox(0.036, 0.11, 0.042, 0.01), drillBody, 0.005, 0.095, 0, 0, 0, 0.18],        // grip
+        [bevelBox(0.038, 0.06, 0.03, 0.008), rubberGrip, 0.002, 0.09, 0.0, 0, 0, 0.18, 1.06, 1, 1.05],   // rubber overmould
+        [bevelBox(0.016, 0.028, 0.012, 0.004), drillDark, -0.02, 0.13, 0, 0, 0, 0.18],       // trigger
+        [cyl(0.03, 0.03, 0.13, 16), drillBody, -0.035, 0.168, 0, ...ALONG],                   // motor housing
+        [cyl(0.031, 0.031, 0.03, 16), drillDark, 0.035, 0.168, 0, ...ALONG],                  // vented motor end
+        [cyl(0.022, 0.026, 0.02, 14), drillDark, -0.11, 0.168, 0, ...ALONG],                  // clutch ring
+        [cyl(0.014, 0.02, 0.035, 14), chrome, -0.135, 0.168, 0, ...ALONG],                    // chuck
+        [cyl(0.003, 0.003, 0.07, 6), chrome, -0.185, 0.168, 0, ...ALONG],                     // drill bit
+      ]);
+      // combination wrench: an open jaw on one end, a closed ring on the other, on a flat chrome shank
+      tool(0.43, -0.13, -0.35, [
+        [bevelBox(0.15, 0.006, 0.017, 0.002), chrome, 0, 0.004, 0],
+        [new THREE.TorusGeometry(0.017, 0.0065, 6, 16, Math.PI * 1.35), chrome, -0.094, 0.004, 0, Math.PI / 2, 0, Math.PI * 0.17],   // open jaw
+        [new THREE.TorusGeometry(0.0145, 0.0055, 6, 16), chrome, 0.09, 0.004, 0, Math.PI / 2, 0, 0],                               // ring end
+      ]);
+      // screwdriver: fluted, translucent red handle, a steel ferrule, a long shaft and a flat tip
+      tool(0.4, 0.12, 0.3, [
+        [cyl(0.014, 0.012, 0.095, 8), sdHandle, 0.07, 0.014, 0, ...ALONG],
+        [cyl(0.0155, 0.0155, 0.012, 12), sdHandle, 0.112, 0.014, 0, ...ALONG],
+        [cyl(0.008, 0.01, 0.014, 10), chrome, 0.016, 0.014, 0, ...ALONG],
+        [cyl(0.0032, 0.0032, 0.12, 8), chrome, -0.05, 0.014, 0, ...ALONG],
+        [bevelBox(0.016, 0.002, 0.008, 0.0005), chrome, -0.115, 0.014, 0],
+      ]);
       bb.add(UNIT_BOX, benchWood, 0, 0.14 + 0.06, -0.1, 0, 0.2, 0, 0.3, 0.1, 0.2);           // a crate of oily rags on the shelf
       // a pegboard behind with a lantern, so it catches your eye across the beach
       bb.add(UNIT_BOX, benchWood, 0, 0.85, -D / 2 + 0.02, 0, 0, 0, W, 0.6, 0.03);
       for (const sx of [-1, 1]) bb.add(UNIT_BOX, benchWood, sx * (W / 2 - 0.03), 0.8, -D / 2 + 0.02, 0, 0, 0, 0.05, 0.6, 0.05);
-      const lantMat = new THREE.MeshStandardMaterial({ color: 0x2a1a08, emissive: 0xffb050, emissiveIntensity: 2 });
-      bb.add(new THREE.CylinderGeometry(0.035, 0.035, 0.09, 10), lantMat, 0.5, 1.05, -D / 2 + 0.07);
+      // a camp lantern hanging on a hook on the board: base and fuel fount, a glass globe with a small flame inside,
+      // four wire guards, a vented top cap, and a wire bail handle over the hook
+      const LX = 0.45, LY = 0.93, LZ = -D / 2 + 0.085;
+      const lanSteel = new THREE.MeshStandardMaterial({ color: 0x2c4a3a, roughness: 0.45, metalness: 0.7 });   // green enamelled steel
+      const lanGlass = new THREE.MeshStandardMaterial({ color: 0xfff2d8, roughness: 0.05, metalness: 0, transparent: true, opacity: 0.28, depthWrite: false });
+      const lanFlame = new THREE.MeshStandardMaterial({ color: 0x2a1a08, emissive: 0xffb050, emissiveIntensity: 3 });
+      bb.add(cyl(0.045, 0.05, 0.04, 18), lanSteel, LX, LY + 0.02, LZ);                       // fount
+      bb.add(cyl(0.05, 0.05, 0.008, 18), lanSteel, LX, LY + 0.004, LZ);                      // base ring
+      bb.add(cyl(0.034, 0.04, 0.01, 18), lanSteel, LX, LY + 0.045, LZ);                       // globe seat
+      bb.add(cyl(0.032, 0.032, 0.1, 18), lanGlass, LX, LY + 0.1, LZ);                         // glass globe
+      bb.add(new THREE.SphereGeometry(0.009, 8, 6), lanFlame, LX, LY + 0.085, LZ, 0, 0, 0, 1, 1.8, 1);   // the flame
+      bb.add(cyl(0.004, 0.004, 0.02, 6), drillDark, LX, LY + 0.06, LZ);                       // wick holder
+      for (let k = 0; k < 4; k++) { const a = (k / 4) * Math.PI * 2 + Math.PI / 4; bb.add(cyl(0.0025, 0.0025, 0.11, 4), lanSteel, LX + Math.cos(a) * 0.037, LY + 0.1, LZ + Math.sin(a) * 0.037); }
+      bb.add(new THREE.TorusGeometry(0.037, 0.0025, 4, 20), lanSteel, LX, LY + 0.1, LZ, Math.PI / 2, 0, 0);   // mid guard ring
+      bb.add(cyl(0.024, 0.042, 0.03, 18), lanSteel, LX, LY + 0.165, LZ);                      // top cap
+      bb.add(cyl(0.012, 0.016, 0.02, 12), lanSteel, LX, LY + 0.19, LZ);                       // vent chimney
+      bb.add(new THREE.TorusGeometry(0.045, 0.0025, 5, 20, Math.PI), lanSteel, LX, LY + 0.17, LZ);              // bail handle
+      bb.add(cyl(0.004, 0.004, 0.05, 6), ironMat, LX, LY + 0.215, LZ - 0.02, Math.PI / 2, 0, 0);               // the hook in the board
+      bb.add(new THREE.TorusGeometry(0.008, 0.002, 4, 10, Math.PI), ironMat, LX, LY + 0.214, LZ + 0.004, 0, Math.PI / 2, Math.PI);
       const signTex = canvasTexture(256, (g, s) => {
         g.fillStyle = '#3a2a1a'; g.fillRect(0, s * 0.3, s, s * 0.4);
         g.fillStyle = '#f0e0b0'; g.font = 'bold 40px Georgia, serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
@@ -13726,7 +13829,7 @@
       bb.add(new THREE.PlaneGeometry(0.6, 0.6), new THREE.MeshStandardMaterial({ map: signTex, transparent: true, alphaTest: 0.1, roughness: 0.9 }), -0.2, 1.02, -D / 2 + 0.04);
       bb.build(group, { rayTarget: true });
       const lg = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xffa040, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false }));
-      lg.scale.set(0.9, 0.9, 1); group.add(lg); lg.position.set(0.5, 1.05, -D / 2 + 0.07);
+      lg.scale.set(0.5, 0.5, 1); group.add(lg); lg.position.set(LX, LY + 0.09, LZ);          // a soft halo round the globe
       group.updateMatrixWorld(true);
       const lw = lg.getWorldPosition(new THREE.Vector3());
       lightSources.push({ x: lw.x, y: lw.y, z: lw.z, color: 0xffa858, intensity: 3, distance: 5, weight: 1.4 });
@@ -13793,6 +13896,7 @@
     }
 
     // ---------- the shotgun ----------
+    const SG_SCALE = 0.78, SG_MUZZLE = 0.68 * SG_SCALE;               // model scale, and grip-to-muzzle length (m)
     const gunAudio = (() => {
       let ctx = null, out = null, noiseBuf = null;
       function init() {
@@ -13889,6 +13993,7 @@
       flash.position.set(0, 0.05, -0.7); flash.scale.set(0.4, 0.4, 1); g.add(flash);
       const flash2 = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xffb060, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
       flash2.position.set(0, 0.05, -0.76); flash2.scale.set(0.7, 0.7, 1); g.add(flash2);
+      g.scale.setScalar(SG_SCALE);                                   // 22% smaller than before: sits naturally in the hand
       return { group: g, canvas: cv, tex, flash, flash2 };
     }
     const gunSmokeTex = canvasTexture(64, (g, s) => {
@@ -14018,10 +14123,7 @@
         ai.knock = new THREE.Vector3(_sgDir.x, 0, _sgDir.z).normalize().multiplyScalar(THREE.MathUtils.clamp(6 - dist * 0.35, 2, 6));
         ai.heading = Math.atan2(-_sgDir.x, -_sgDir.z);       // thrown back, still facing you
         chaseAudio.setTarget(0);
-        for (let k = 0; k < 60; k++) {
-          const a = Math.random() * Math.PI * 2, u = Math.random() * 2 - 1, sp = 1 + Math.random() * 3;
-          fxSparks.spawn(ai.pos.x, ai.pos.y + AI_HEAD_H * (0.3 + Math.random() * 0.7) * 0.5, ai.pos.z, Math.cos(a) * sp, u * sp + 1, Math.sin(a) * sp, 0.3 + Math.random() * 0.5, Math.random() < 0.3 ? C_SPARK2 : C_SPARK, { grav: 4, drag: 2 });
-        }
+        // (no burst of sparks on the monster any more: it just goes down)
         showToast('DIRECT HIT!', `It's stunned for ${STUN_TIME} seconds. RUN!`);
       } else {
         showToast('BOOM — missed', '0/1 SHELLS. It heard that...');
@@ -14032,6 +14134,30 @@
     stunGlow.scale.set(1.6, 1.6, 1); stunGlow.visible = false; scene.add(stunGlow);
     let zapT = 0;
     const _sgCam = new THREE.Vector3();
+    // The held gun can't poke through solid things: a ray from the grip along the barrel finds the nearest wall, door,
+    // floor or piece of furniture, and if the muzzle would be inside it the gun slides back through your hand so the
+    // muzzle rests against the surface.
+    const _gcRay = new THREE.Ray(), _gcO = new THREE.Vector3(), _gcD = new THREE.Vector3(), _gcP = new THREE.Vector3(), _gcH = new THREE.Vector3();
+    const _gcSeen = new Set();
+    function clampGunToWalls(sg) {
+      const nav = NAV[currentMap]; if (!nav) return;
+      const g = sg.gun.group;
+      _gcO.set(0, 0.04, 0).applyQuaternion(g.quaternion).multiplyScalar(SG_SCALE).add(g.position);   // the barrel's line, at the grip
+      _gcD.set(0, 0, -1).applyQuaternion(g.quaternion);
+      _gcRay.set(_gcO, _gcD);
+      let best = Infinity; _gcSeen.clear();
+      for (let k = 0; k <= 4; k++) {
+        _gcP.copy(_gcO).addScaledVector(_gcD, (k / 4) * (SG_MUZZLE + 0.02));
+        for (const c of nav.bucketAt(_gcP.x, _gcP.z)) {
+          if (_gcSeen.has(c)) continue; _gcSeen.add(c);
+          if (c === aiCol || c.box.max.y < -500 || (dynamicCols.has(c) && c !== mineCart.col)) continue;
+          if (c.box.containsPoint(_gcO)) continue;                    // (the hand is already in it: nothing sensible to do)
+          if (_gcRay.intersectBox(c.box, _gcH)) best = Math.min(best, _gcH.distanceTo(_gcO));
+        }
+      }
+      const over = SG_MUZZLE + 0.015 - best;
+      if (over > 0) g.position.addScaledVector(_gcD, -Math.min(0.42, over));
+    }
     function updateStunGuns(dt) {
       const vr = renderer.xr.isPresenting && locomotionReady;
       for (const sg of stunGuns) {
@@ -14072,6 +14198,7 @@
           sg.gun.group.quaternion.copy(_sgQ);
           sg.gun.group.rotateX(0.12 + sg.kick * 0.55);           // a slight natural cant, plus the recoil flip
           sg.gun.group.position.copy(h.last).addScaledVector(_sgT.set(0, 0, 1).applyQuaternion(sg.gun.group.quaternion), sg.kick * 0.05);
+          clampGunToWalls(sg);
         } else if (!sg.onRack) {                               // dropped: fall and lie on the ground
           const p = sg.gun.group.position;
           const floor = mapFloor(sg.map, p.x, p.z) + 0.025;
@@ -14100,24 +14227,12 @@
         s.sp.scale.set(s.size, s.size, 1);
         s.sp.material.opacity = 0.5 * f;
       }
-      // the stunned monster crackles and spits sparks
+      // the stunned monster crackles (no spark particles or glow any more)
       const stunned = ai.active && ai.state === 'stunned';
       if (!stunned) ai.stunNoFx = false;
-      const showStun = stunned && ai.map === currentMap && !ai.stunNoFx;   // (fighting him off is a shove: no sparks)
-      stunGlow.visible = showStun;
+      const showStun = stunned && ai.map === currentMap && !ai.stunNoFx;   // (fighting him off is a shove: silent)
+      stunGlow.visible = false;
       if (showStun) {
-        _sgT.copy(ai.pos).lerp(aiRoot.position, 0.5);                 // the middle of the (fallen) body
-        stunGlow.position.copy(_sgT).setY(_sgT.y + 0.1);
-        stunGlow.material.opacity = (Math.random() < 0.5 ? 0.15 : 0.55) * Math.min(1, ai.stunT);
-        if (Math.random() < 0.8) {
-          const n = 1 + ((Math.random() * 4) | 0);
-          for (let k = 0; k < n; k++) {
-            const a = Math.random() * Math.PI * 2, r = 0.15 + Math.random() * 0.25, sp = 0.6 + Math.random() * 2.2;
-            _sgV.copy(ai.pos).lerp(aiRoot.position, Math.random());      // anywhere along the body, standing or lying
-            fxSparks.spawn(_sgV.x + Math.cos(a) * r * 0.6, _sgV.y + 0.05 + Math.random() * 0.15, _sgV.z + Math.sin(a) * r * 0.6,
-              Math.cos(a) * sp, Math.random() * 2, Math.sin(a) * sp, 0.15 + Math.random() * 0.3, Math.random() < 0.25 ? C_SPARK2 : C_SPARK, { grav: 5, drag: 1.5 });
-          }
-        }
         if ((zapT -= dt) <= 0) {
           zapT = 0.06 + Math.random() * 0.22;
           camera.getWorldPosition(_sgCam);
@@ -16139,8 +16254,9 @@
     let struggle = null, struggleWins = 0, struggleKey = false;
     const strCanvas = document.createElement('canvas'); strCanvas.width = 512; strCanvas.height = 160;
     const strTex = new THREE.CanvasTexture(strCanvas); strTex.colorSpace = THREE.SRGBColorSpace;
-    const strPanel = new THREE.Mesh(new THREE.PlaneGeometry(0.27, 0.084), new THREE.MeshBasicMaterial({ map: strTex, transparent: true, depthTest: false, depthWrite: false, fog: false }));
-    strPanel.position.set(0, -0.06, -0.34); strPanel.renderOrder = 9010; strPanel.visible = false; camera.add(strPanel);
+    const strPanel = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 0.094), new THREE.MeshBasicMaterial({ map: strTex, transparent: true, depthTest: false, depthWrite: false, fog: false }));
+    strPanel.position.set(0, -0.035, -0.34); strPanel.renderOrder = 9010; strPanel.visible = false; strPanel.frustumCulled = false; camera.add(strPanel);
+    strPanel.name = 'struggleHUD';
     function drawStruggle() {
       const g = strCanvas.getContext('2d'), S = struggle;
       g.clearRect(0, 0, 512, 160);
@@ -16150,7 +16266,7 @@
       g.fillStyle = '#ff6a4a'; g.font = 'bold 34px system-ui, sans-serif';
       g.fillText(renderer.xr.isPresenting ? 'SPAM TRIGGERS TO ESCAPE!' : 'SPAM SPACE / CLICK TO ESCAPE!', 256, 36, 484);
       g.fillStyle = '#ffd8c8'; g.font = 'bold 20px system-ui, sans-serif';
-      g.fillText(struggleWins === 0 ? 'ESCAPE 1 OF 2' : 'LAST ESCAPE: PULL HARDER!', 256, 70);
+      g.fillText(struggleWins === 0 ? '1 ESCAPE LEFT' : '0 ESCAPES LEFT: PULL HARDER!', 256, 70);
       // the progress bar: thick, with a bright fill and its percentage
       g.fillStyle = '#2a0806'; g.fillRect(22, 92, 468, 50);
       g.fillStyle = S.meter > 0.75 ? '#6dff8a' : S.meter > 0.4 ? '#ffd040' : '#ff7a30'; g.fillRect(22, 92, 468 * S.meter, 50);
@@ -16186,6 +16302,8 @@
       if (presses) { gameAudio.thud?.(0.5); redFlash.material.opacity = Math.min(0.9, redFlash.material.opacity + 0.12); }
       S.meter = Math.min(1, Math.max(0, S.meter + presses / S.need - dt * S.drain));
       redFlash.material.opacity = Math.max(0.35, redFlash.material.opacity - dt * 0.8);
+      if (strPanel.parent !== camera) camera.add(strPanel);
+      strPanel.position.set(0, -0.035, -0.34); strPanel.quaternion.identity(); strPanel.visible = true;
       // he holds you in place
       if (renderer.xr.isPresenting) { playerRig.position.copy(S.pin); rigVelocity.set(0, 0, 0); }
       drawStruggle();
@@ -16320,7 +16438,7 @@
       for (const c of controllers) allow(c);
       for (const h of hands) { allow(h.grip); allow(h.follower); }
       for (const P of lobbyPointers) { allow(P.pointer); allow(P.reticle); }
-      for (const f of [() => toast, () => vignette, () => deathCard, () => blackout, () => titleFade, () => travelFade, () => warnToast, () => redFlash, () => underTint]) {
+      for (const f of [() => toast, () => vignette, () => deathCard, () => blackout, () => titleFade, () => travelFade, () => warnToast, () => redFlash, () => underTint, () => strPanel]) {
         try { allow(f()); } catch (e) { }
       }
       const strays = [];
@@ -16347,6 +16465,56 @@
         if (_cb.max.y - _cb.min.y < 0.7) { o.castShadow = false; n++; }
       });
       console.log('[camp perf] shadow casting turned off on', n, 'small static meshes');
+    }
+
+    // ---------- cabin doors swing at a touch ----------
+    // A hand (or your body) moving into a closed or half-open door now hands it its speed: the door swings away at the
+    // pace you push it, from the first touch (no need to push your hand into it), and coasts on its well-oiled
+    // hinges, slowing gently. The old slow push, the monster's shove and E / click on the desktop are unchanged.
+    {
+      const DOOR_TOUCH = 0.09, DOOR_BODY = 0.17, HINGE_FRICTION = 2.0;
+      const _dmL = new THREE.Vector3(), _dmL0 = new THREE.Vector3(), _dmB = new THREE.Vector3(), _dmB0 = new THREE.Vector3(), _dmC = new THREE.Vector3();
+      let bodyOk = false;
+      const shove = (d, L, L0, dt, zone) => {
+        if (L.x < 0.03 || L.x > d.w + 0.03 || L.y < -0.05 || L.y > d.h + 0.05) return;
+        const side = L0.z >= 0 ? 1 : -1, gap = side * L.z - d.t / 2;
+        if (gap > zone || gap < -0.25) return;
+        const vin = -side * (L.z - L0.z) / dt;                          // speed towards the door's face
+        if (!(vin > 0.03)) return;
+        const want = Math.min(6, (vin * 1.15) / Math.max(0.2, L.x));     // angular speed that keeps up with the hand
+        if (Math.sign(d.av) !== side || Math.abs(d.av) < want) d.av = side * want;
+      };
+      const baseDoors = updateDoorsAndWindows;
+      updateDoorsAndWindows = function (dt) {
+        const r = baseDoors(dt);
+        if (dt <= 0) return r;
+        camera.getWorldPosition(_dmC);
+        _dmB.set(_dmC.x, _dmC.y - 0.12, _dmC.z);                         // your chest
+        for (const d of doors) {
+          if (d.broken) continue;
+          if (d.av === undefined) d.av = 0;
+          if (d.grabbed >= 0 || d.target !== null) { d.av = 0; continue; }
+          for (let i = 0; i < hands.length; i++) {
+            if (!doorRawOk[i]) continue;
+            toDoorLocal(d, doorRaw[i], _dmL); toDoorLocal(d, doorRawPrev[i], _dmL0);
+            shove(d, _dmL, _dmL0, dt, DOOR_TOUCH);
+          }
+          if (bodyOk && renderer.xr.isPresenting) { toDoorLocal(d, _dmB, _dmL); toDoorLocal(d, _dmB0, _dmL0); shove(d, _dmL, _dmL0, dt, DOOR_BODY); }
+          if (d.av === 0) continue;
+          d.angle += d.av * dt;
+          d.av *= Math.exp(-HINGE_FRICTION * dt);
+          if (Math.abs(d.av) < 0.03) d.av = 0;
+          if (Math.abs(d.angle) >= DOOR_OPEN_MAX) { d.angle = Math.sign(d.angle) * DOOR_OPEN_MAX; d.av = 0; }
+          if (d.wasOpen && Math.abs(d.angle) < 0.06 && Math.sign(d.av) !== Math.sign(d.angle)) d.av = 0;   // swung shut: it latches
+          if (Math.abs(d.angle) > 0.15) d.wasOpen = true;
+          if (Math.abs(d.av) > 0.6 && d.creakT <= 0) { d.creakT = 1.3; cabinAudio.creak(_dmC.distanceTo(d.hinge)); }
+          d.pivot.rotation.y = d.yaw + d.angle;
+          if (Math.abs(d.angle) > DOOR_PASS_ANGLE) { d.col.box.min.set(0, -1000, 0); d.col.box.max.set(0, -1000, 0); }
+          else d.col.box.copy(d.closedBox);
+        }
+        _dmB0.copy(_dmB); bodyOk = true;
+        return r;
+      };
     }
 
     // =====================================================================
