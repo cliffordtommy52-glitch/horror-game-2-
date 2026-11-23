@@ -6219,6 +6219,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'UPDATE', date: '23/11/26', title: 'LIGHTER SURVIVOR MODEL FOR QUEST',
+        text: 'survivor.glb: 24,000 triangles (was 876,000) and 0.9 MB (was 37 MB), same look.' },
       { tag: 'FIX', date: '23/11/26', title: 'SURVIVOR MODEL LOADS RELIABLY',
         text: 'result_Ub5XHK.glb, with a LOADED / FAILED badge so a blocked load is never silent.' },
       { tag: 'UPDATE', date: '22/11/26', title: 'NEW SURVIVOR MODEL',
@@ -15592,11 +15594,11 @@
     }
 
     // =====================================================================
-    //  Custom survivor model: result_Ub5XHK.glb (loaded next to this page). Until it arrives, or if it can't be
+    //  Custom survivor model: survivor.glb (loaded next to this page). Until it arrives, or if it can't be
     //  loaded (e.g. the page was opened straight from disk without a local web server), the built-in proboscis
     //  monkey stays as the lightweight fallback.
     // =====================================================================
-    const SURVIVOR_GLB_URL = './result_Ub5XHK.glb';
+    const SURVIVOR_GLB_URL = './survivor.glb';           // decimated from result_Ub5XHK.glb: 24k triangles, 1024 texture, 0.9 MB
     // The model is normalised to 1.1 units tall inside survivorGlbGroup (base at its own y = 0, X/Z centred, facing -Z).
     // survivorGlbGroup then fits that 1.1-unit model to this game's Gorilla-scale body: your eyes are 0.38 above the
     // ground (PLAYER_SCALE 0.6), so the group shrinks it to 0.5 world units and sets its base on the ground under you,
@@ -15795,7 +15797,7 @@
         updateMapsAndRun(dt); // only the current map stays loaded (others freed); the sunrise boat-run minigame
         updateMenuAndPerf(dt); // live objectives + map in the menu; per-map far plane / shadow size; mine spark cues
         updateSurvivorExtras(dt); // hinged breaker doors, the monster's mine waypoints, lobby PLAY always on top
-        updateSurvivorGLB(); // the custom survivor model (result_Ub5XHK.glb): shown as SURVIVOR, hidden as MONSTER
+        updateSurvivorGLB(); // the custom survivor model (survivor.glb): shown as SURVIVOR, hidden as MONSTER
       } catch (err) {
         if (!loopErrorReported) {
           loopErrorReported = true;
