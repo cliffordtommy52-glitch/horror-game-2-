@@ -6201,7 +6201,7 @@
     }
 
     // ---------- Light pool: lend a few real warm point lights to the lanterns and hearths nearest you ----------
-    const LIGHT_POOL_SIZE = 3;
+    const LIGHT_POOL_SIZE = 2;                // (2 live point lights at a time keeps the camp smooth)
     const lightPool = Array.from({ length: LIGHT_POOL_SIZE }, () => {
       const light = new THREE.PointLight(0xffa858, 0, 5, 2);
       scene.add(light);
@@ -6263,6 +6263,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'UPDATE', date: '23/11/26', title: 'SHOTGUN, GAZEBO & 2-ESCAPE STRUGGLE',
+        text: 'Wood-and-steel pump SHOTGUN, a shopkeeper at THE TRADER, oak benches, a lakeside gazebo, finger-by-finger hands.' },
       { tag: 'UPDATE', date: '23/11/26', title: 'PLAY AS THE PROBOSCIS MONKEY',
         text: 'survivor.glb first-person body, zero-lag arms, 3-fingered hands (Grip fingers, X/A thumb), wrist charm fit, objectives + live map in the menu.' },
       { tag: 'UPDATE', date: '23/11/26', title: 'LIGHTER SURVIVOR MODEL FOR QUEST',
@@ -6283,8 +6285,8 @@
         text: 'Ripple rings, arcing droplets and foam bursts scaled to impact speed, splash sounds and haptic ticks.' },
       { tag: 'UPDATE', date: '22/11/26', title: 'BOAT RUN MINIGAME, ONE MAP AT A TIME, NEW FURNITURE & TREES',
         text: 'High floating, steerable swim strokes, leaner monster, tasks reset on death, WANTED posters.' },
-      { tag: 'UPDATE', date: '22/11/26', title: 'DIVING, STUN SHOTGUNS, HUGE GRAVEYARD & MINE, SLOWER AI',
-        text: 'Swim under water, one-shell stun shotguns, a fixed moon and stars, and the propeller on a dockside bench.' },
+      { tag: 'UPDATE', date: '22/11/26', title: 'DIVING, SHOTGUNS, HUGE GRAVEYARD & MINE, SLOWER AI',
+        text: 'Swim under water, one-shell shotguns, a fixed moon and stars, and the propeller on a dockside bench.' },
       { tag: 'UPDATE', date: '22/11/26', title: 'MACHETE HACKING, SUNRISE ENDING, MAP QUESTS, POV MONITOR & SHOP',
         text: 'New mask, machete grip and branch slicing; floating swim, lakes everywhere, mechanical outboard, coins.' },
       { tag: 'UPDATE', date: '22/11/26', title: 'REALISTIC BOAT & GAS POURING, DEEP LAKE, HEALTH & DROWNING, VR HANDS & BRIGHTER LIGHTS',
@@ -7501,14 +7503,29 @@
       // a boarded-up window on the east wall
       box(windowVoidMat, W.w / 2 - 0.01, 0.8, -0.6, 0.02, 0.8, 1.0, false);
       for (let k = 0; k < 4; k++) rb.add(UNIT_BOX, plankMat, W.x + W.w / 2 - 0.04, 0.95 + k * 0.17, W.z - 0.6, 0.06 * (k - 1.5), 0, 0, 0.04, 0.1, 1.2);
-      // benches facing the screen
+      // benches facing the screen: sturdy light-oak benches. Each end has a thick rear post (floor to backrest) and a
+      // front leg, joined by a horizontal seat bracket and a low rail; two wide seat planks sit on the brackets and two
+      // horizontal backrest slats are screwed to the rear posts.
+      const oakMat = new THREE.MeshStandardMaterial({ map: woodTex, color: 0xd2a56c, roughness: 0.55 });
+      const oakDark = new THREE.MeshStandardMaterial({ map: woodTex, color: 0xb88a52, roughness: 0.6 });
       for (const [x, z] of [[-1.8, 0.8], [1.8, 0.8], [-1.8, 2.2], [1.8, 2.2]]) {
-        box(plankMat, x, 0.34, z, 1.6, 0.06, 0.4);
-        box(plankMat, x, 0.5, z + 0.18, 1.6, 0.3, 0.05, false);
-        for (const s of [-1, 1]) box(trimMat, x + s * 0.7, 0, z, 0.06, 0.34, 0.36, false);
-        addBoxCollider(W.x + x, 0, W.z + z, 1.6, 0.34, 0.4);
+        const L = 1.7, seatY = 0.42, back = 0.2;                         // the bench faces -z (the screen); its back is +z
+        for (const s of [-1, 1]) {
+          const ex = x + s * (L / 2 - 0.12);
+          box(oakDark, ex, 0, z + back, 0.09, 0.92, 0.09, false);          // thick rear post, floor to backrest
+          box(oakDark, ex, 0, z - 0.17, 0.08, seatY - 0.05, 0.08, false);  // front leg
+          box(oakMat, ex, seatY - 0.1, z + 0.01, 0.07, 0.06, 0.48, false); // seat support bracket
+          box(oakDark, ex, 0.1, z + 0.01, 0.06, 0.05, 0.36, false);        // low rail between the legs
+          box(oakDark, ex, 0, z + 0.01, 0.12, 0.02, 0.5, false);           // floor plate it's anchored on
+        }
+        box(oakMat, x, seatY - 0.045, z - 0.085, L, 0.045, 0.19, false);   // seat plank (front)
+        box(oakMat, x, seatY - 0.045, z + 0.115, L, 0.045, 0.19, false);   // seat plank (back)
+        box(oakMat, x, 0.6, z + back - 0.055, L, 0.1, 0.035, false);       // backrest slat (lower)
+        box(oakMat, x, 0.77, z + back - 0.055, L, 0.1, 0.035, false);      // backrest slat (upper)
+        addBoxCollider(W.x + x, 0, W.z + z, L, seatY, 0.44);
+        addBoxCollider(W.x + x, seatY, W.z + z + back - 0.03, L, 0.47, 0.1);
       }
-      // a table with dripping candles and a tipped-over chair
+      // a table with dripping candles
       box(plankMat, -3.0, 0.6, -2.0, 0.9, 0.05, 0.6);
       for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) box(trimMat, -3.0 + sx * 0.4, 0, -2.0 + sz * 0.25, 0.05, 0.6, 0.05, false);
       addBoxCollider(W.x - 3.0, 0, W.z - 2.0, 0.9, 0.6, 0.6);
@@ -7517,8 +7534,6 @@
         rb.add(new THREE.CylinderGeometry(0.018, 0.02, ch, 8), candleMat, W.x + cx, 0.65 + ch / 2, W.z + cz);
         rb.add(new THREE.SphereGeometry(0.012, 6, 4), glowMatFlame, W.x + cx, 0.665 + ch, W.z + cz, 0, 0, 0, 1, 2, 1);
       }
-      rb.add(UNIT_BOX, plankMat, W.x + 2.9, 0.12, W.z - 2.2, 0, 0.6, Math.PI / 2, 0.45, 0.05, 0.45);         // the toppled chair
-      rb.add(UNIT_BOX, plankMat, W.x + 3.1, 0.25, W.z - 2.35, 0, 0.6, Math.PI / 2, 0.05, 0.5, 0.45);
       // faded portraits
       const portraitTex = canvasTexture(128, (g, s) => {
         const grd = g.createLinearGradient(0, 0, 0, s); grd.addColorStop(0, '#3a3128'); grd.addColorStop(1, '#1a1510');
@@ -7531,12 +7546,6 @@
       for (const [x, z, ry] of [[-W.w / 2 + 0.02, -1.2, Math.PI / 2], [W.w / 2 - 0.02, 1.6, -Math.PI / 2]]) {
         rb.add(new THREE.PlaneGeometry(0.5, 0.62), portraitMat, W.x + x + Math.sin(ry) * 0.02, 1.45, W.z + z, 0, ry, 0.05);
         rb.add(UNIT_BOX, trimMat, W.x + x, 1.45, W.z + z, 0, ry, 0.05, 0.6, 0.72, 0.02);
-      }
-      // cobwebs in the top corners
-      const webMat = new THREE.MeshBasicMaterial({ color: 0xbdb8ae, transparent: true, opacity: 0.25, side: THREE.DoubleSide, depthWrite: false });
-      for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
-        const web = new THREE.CircleGeometry(0.5, 8, 0, Math.PI / 2);
-        rb.add(web, webMat, W.x + sx * (W.w / 2 - 0.01), W.h - 0.01, W.z + sz * (W.d / 2 - 0.01), Math.PI / 2 * sz * -1, 0, 0, 1, 1, 1);
       }
       rb.build(scene, { rayTarget: true });
       // lights: a bare bulb hanging from the middle (cold, it flickers and drops out) and two wall lanterns (warm)
@@ -8725,6 +8734,73 @@
       if (currentMap === 'waiting') placeDesktopCamera([WAIT_ROOM.x + 0.5, 1.05, WAIT_ROOM.z + 2.9], [WAIT_ROOM.x, 0.95, WAIT_ROOM.z - WAIT_ROOM.d / 2]);
       else placeDesktopCamera(mapById(currentMap).desk.cam, mapById(currentMap).desk.target);
     });
+
+    // ---------- LAKESIDE RIDGE: an open wooden gazebo over the generator ----------
+    // A 3.2 m square plank deck on the ridge, four corner posts with decorative top braces, perimeter beams, low
+    // railings on three sides and the lake (west) side (with an entry opening in the middle facing the lake), and a
+    // pitched, shingled four-sided roof. The generator stays where it was, under the roof in the middle.
+    {
+      const GZ = { x: RIDGE.x, z: RIDGE.z, s: 3.2, y: RIDGE.h, post: 1.55 };
+      const gzWood = new THREE.MeshStandardMaterial({ map: woodTex, color: 0x8a6440, roughness: 0.8 });
+      const gzDeck = new THREE.MeshStandardMaterial({ map: woodTex, color: 0x6e4f33, roughness: 0.85 });
+      const shingleTex = canvasTexture(256, (g, s) => {
+        g.fillStyle = '#2a2420'; g.fillRect(0, 0, s, s);
+        const rows = 10, rh = s / rows;
+        for (let r = 0; r < rows; r++) for (let c = -1; c < 9; c++) {
+          const v = 50 + ((r * 7 + c * 13) % 5) * 9;
+          g.fillStyle = `rgb(${v + 14},${v},${v - 8})`;
+          g.fillRect(c * (s / 8) + (r % 2) * (s / 16) + 1, r * rh + 1, s / 8 - 2, rh - 2);
+          g.fillStyle = 'rgba(0,0,0,0.45)'; g.fillRect(c * (s / 8) + (r % 2) * (s / 16), r * rh + rh - 3, s / 8, 3);
+        }
+      }, 3);
+      const shingleMat = new THREE.MeshStandardMaterial({ map: shingleTex, color: 0x8a7a70, roughness: 0.95, side: THREE.DoubleSide });
+      const gb = makeBatch(), h = GZ.s / 2, top = GZ.y + GZ.post;
+      // deck: planks across, on two joists
+      for (let k = 0; k < 16; k++) gb.add(UNIT_BOX, gzDeck, GZ.x - h + 0.1 + k * 0.2, GZ.y + 0.02, GZ.z, 0, 0, 0, 0.185, 0.04, GZ.s);
+      for (const sz of [-1, 1]) gb.add(UNIT_BOX, gzWood, GZ.x, GZ.y + 0.02, GZ.z + sz * (h - 0.05), 0, 0, 0, GZ.s + 0.06, 0.06, 0.1);
+      // corner posts, with the decorative 45-degree braces up into the beams
+      for (const px of [-1, 1]) for (const pz of [-1, 1]) {
+        const x = GZ.x + px * (h - 0.06), z = GZ.z + pz * (h - 0.06);
+        gb.add(UNIT_BOX, gzWood, x, GZ.y + GZ.post / 2, z, 0, 0, 0, 0.12, GZ.post, 0.12);
+        gb.add(UNIT_BOX, gzWood, x, top + 0.07, z, 0, 0, 0, 0.17, 0.05, 0.17);              // post cap
+        gb.add(UNIT_BOX, gzWood, x - px * 0.17, top - 0.2, z, 0, 0, px * Math.PI / 4, 0.06, 0.48, 0.06);   // brace along X
+        gb.add(UNIT_BOX, gzWood, x, top - 0.2, z - pz * 0.17, -pz * Math.PI / 4, 0, 0, 0.06, 0.48, 0.06);  // brace along Z
+        addBoxCollider(x, GZ.y, z, 0.12, GZ.post, 0.12);
+      }
+      // the beams round the top
+      for (const s of [-1, 1]) {
+        gb.add(UNIT_BOX, gzWood, GZ.x, top, GZ.z + s * (h - 0.06), 0, 0, 0, GZ.s, 0.12, 0.09);
+        gb.add(UNIT_BOX, gzWood, GZ.x + s * (h - 0.06), top, GZ.z, 0, 0, 0, 0.09, 0.12, GZ.s);
+      }
+      // low railings (top rail, bottom rail, balusters); the west side has an entry opening in the middle
+      const rail = (x0, z0, x1, z1) => {
+        const len = Math.hypot(x1 - x0, z1 - z0), cx = (x0 + x1) / 2, cz = (z0 + z1) / 2, alongX = Math.abs(x1 - x0) > Math.abs(z1 - z0);
+        const w = alongX ? len : 0.07, d = alongX ? 0.07 : len;
+        gb.add(UNIT_BOX, gzWood, cx, GZ.y + 0.55, cz, 0, 0, 0, w, 0.06, d);
+        gb.add(UNIT_BOX, gzWood, cx, GZ.y + 0.12, cz, 0, 0, 0, alongX ? len : 0.05, 0.05, alongX ? 0.05 : len);
+        const n = Math.max(1, Math.round(len / 0.22));
+        for (let k = 1; k < n; k++) { const t = k / n; gb.add(UNIT_BOX, gzWood, x0 + (x1 - x0) * t, GZ.y + 0.34, z0 + (z1 - z0) * t, 0, 0, 0, 0.035, 0.42, 0.035); }
+        addBoxCollider(cx, GZ.y, cz, alongX ? len : 0.08, 0.58, alongX ? 0.08 : len);
+      };
+      const e = h - 0.06, gap = 0.6;
+      rail(GZ.x - e, GZ.z + e, GZ.x + e, GZ.z + e);                  // south
+      rail(GZ.x - e, GZ.z - e, GZ.x + e, GZ.z - e);                  // north
+      rail(GZ.x + e, GZ.z - e, GZ.x + e, GZ.z + e);                  // east (behind the generator)
+      rail(GZ.x - e, GZ.z - e, GZ.x - e, GZ.z - gap);                // west, either side of the entry
+      rail(GZ.x - e, GZ.z + gap, GZ.x - e, GZ.z + e);
+      // the entry step down to the ridge path
+      gb.add(UNIT_BOX, gzDeck, GZ.x - h - 0.12, GZ.y - 0.02, GZ.z, 0, 0, 0, 0.24, 0.04, 2 * gap - 0.1);
+      gb.build(scene, { rayTarget: true });
+      // the pitched, shingled roof: a four-sided pyramid with a little overhang, a ridge cap and a finial
+      const roof = new THREE.Mesh(new THREE.ConeGeometry(GZ.s * 0.84, 0.95, 4, 1, true), shingleMat);
+      roof.rotation.y = Math.PI / 4;
+      roof.position.set(GZ.x, top + 0.06 + 0.475, GZ.z);
+      roof.castShadow = true; roof.receiveShadow = true;
+      scene.add(roof); rayTargets.push(roof);
+      const finial = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.22, 4), gzWood);
+      finial.position.set(GZ.x, top + 1.08 + 0.1, GZ.z); finial.rotation.y = Math.PI / 4;
+      scene.add(finial);
+    }
 
     // =====================================================================
     //  3D UI PANELS (map screen + settings menu), TURN MODES, PLAYER ROLE and the PLAYER-DRIVEN MONSTER
@@ -10791,7 +10867,8 @@
       charm: { label: 'CHARM', items: [['none', 'NONE', 0], ['foot', "RABBIT'S FOOT", 30], ['skull', 'TINY SKULL', 60], ['lantern', 'MINI LANTERN', 80]] },
     };
     let shopMsg = '', shopMsgT = 0;
-    const SB = { x: WAIT_ROOM.x - WAIT_ROOM.w / 2 + 0.035, y: 1.12, z: WAIT_ROOM.z + 2.0, w: 1.6, h: 1.0 };
+    const SHOP_COUNTER_X = WAIT_ROOM.x - WAIT_ROOM.w / 2 + 0.9;      // the counter, 0.9 m out from the west wall
+    const SB = { x: WAIT_ROOM.x - WAIT_ROOM.w / 2 + 0.035, y: 1.36, z: WAIT_ROOM.z + 2.0, w: 1.6, h: 1.0 };   // (raised so the shopkeeper stands below it)
     const shopPanel = makePanel(SB.w, SB.h, 1024, 640, (g, p) => {
       const W = p.cw, H = p.ch;
       const grd = g.createLinearGradient(0, 0, 0, H); grd.addColorStop(0, '#1d150f'); grd.addColorStop(1, '#0c0907');
@@ -10843,7 +10920,7 @@
     {
       // the counter, a few curios on it, a sign and a candle
       const W = WAIT_ROOM, cb = makeBatch();
-      const cx = W.x - W.w / 2 + 0.55, cz = SB.z;
+      const cx = SHOP_COUNTER_X, cz = SB.z;                            // (out from the wall: the shopkeeper stands behind it)
       cb.add(UNIT_BOX, plankMat, cx, 0.24, cz, 0, 0, 0, 0.5, 0.48, 1.7);
       cb.add(UNIT_BOX, trimMat, cx, 0.5, cz, 0, 0, 0, 0.6, 0.04, 1.8);
       for (let k = 0; k < 5; k++) cb.add(UNIT_BOX, trimMat, cx + 0.251, 0.24, cz - 0.7 + k * 0.35, 0, 0, 0, 0.01, 0.44, 0.05);
@@ -11596,7 +11673,9 @@
     const AI_SCALE = 1.0;                                   // bigger than a player monster: it towers over a survivor
     const AI_TORSO = new THREE.Vector3(0.98, 1.22, 0.96);    // a broader, taller chest and shoulders
     const AI_HEAD_H = (0.47 * AI_TORSO.y + 0.02) * AI_SCALE + 0.03;   // eye height above the ground
-    const AI_R = 0.27;                                      // body radius for collisions and the nav grid
+    const AI_R = 0.27;
+    const AI_R_MINE = 0.22;                                 // (slimmer in the mine's tight tunnels, stairs and rails)
+    const aiBodyR = () => (ai.map === 'mine' ? AI_R_MINE : AI_R);                                      // body radius for collisions and the nav grid
     const AI_SPEED = { patrol: 0.7, investigate: 1.05, search: 1.15, chase: 1.5, chaseMax: 1.75 };   // slower, so you can get away
     const AI_SIGHT = 11, AI_SIGHT_LIT = 14, AI_FOV_COS = Math.cos(THREE.MathUtils.degToRad(45)), AI_SENSE = 1.8;   // a narrower vision cone
     const AI_LOSE_T = 0.9;                                  // seconds out of sight before a chase gives up
@@ -11924,7 +12003,7 @@
       let x = ai.lastSeen.x, z = ai.lastSeen.z, got = null;
       for (let t = 0.5; t <= dist; t += 0.5) {
         const nx = ai.lastSeen.x + dir.x * t, nz = ai.lastSeen.z + dir.z * t;
-        if (!circleFree(nav, nx, nz, AI_R, groundY(ai.map, nx, nz), true) || inAnyLake(ai.map, nx, nz, 0.2)) break;
+        if (!circleFree(nav, nx, nz, aiBodyR(), groundY(ai.map, nx, nz), true) || inAnyLake(ai.map, nx, nz, 0.2)) break;
         x = nx; z = nz; got = true;
       }
       return got ? new THREE.Vector3(x, 0, z) : null;
@@ -11975,10 +12054,11 @@
           if (b.max.y < ai.pos.y + 0.12 || b.min.y > ai.pos.y + 1.0 || b.max.y < -500) continue;
           const cx = THREE.MathUtils.clamp(ai.pos.x, b.min.x, b.max.x), cz = THREE.MathUtils.clamp(ai.pos.z, b.min.z, b.max.z);
           let dx = ai.pos.x - cx, dz = ai.pos.z - cz, d = Math.hypot(dx, dz);
-          if (d >= AI_R) continue;
+          const R = aiBodyR();
+          if (d >= R) continue;
           if (doorCols.has(c)) doorHit = doors.find((x) => x.col === c);
           if (d < 1e-5) { dx = ai.pos.x - (b.min.x + b.max.x) / 2; dz = ai.pos.z - (b.min.z + b.max.z) / 2; d = Math.hypot(dx, dz) || 1; ai.pos.x += dx / d * 0.05; ai.pos.z += dz / d * 0.05; continue; }
-          ai.pos.x += (dx / d) * (AI_R - d); ai.pos.z += (dz / d) * (AI_R - d);
+          ai.pos.x += (dx / d) * (R - d); ai.pos.z += (dz / d) * (R - d);
         }
       }
       // never into the lakes
@@ -12765,7 +12845,7 @@
         if (ai.knock && ai.knock.lengthSq() > 1e-4) {
           const ox = ai.pos.x, oz = ai.pos.z;
           ai.pos.x += ai.knock.x * dt; ai.pos.z += ai.knock.z * dt;
-          if (!circleFree(nav, ai.pos.x, ai.pos.z, AI_R, groundY(ai.map, ai.pos.x, ai.pos.z), false) || inAnyLake(ai.map, ai.pos.x, ai.pos.z, 0.2)) { ai.pos.x = ox; ai.pos.z = oz; ai.knock.set(0, 0, 0); }
+          if (!circleFree(nav, ai.pos.x, ai.pos.z, aiBodyR(), groundY(ai.map, ai.pos.x, ai.pos.z), false) || inAnyLake(ai.map, ai.pos.x, ai.pos.z, 0.2)) { ai.pos.x = ox; ai.pos.z = oz; ai.knock.set(0, 0, 0); }
           ai.knock.multiplyScalar(Math.exp(-4.5 * dt));
         }
         if (ai.stunT <= 0) {                                   // it shakes it off, dazed: looks round, then back to its patrol
@@ -13712,7 +13792,7 @@
       };
     }
 
-    // ---------- the stun shotgun ----------
+    // ---------- the shotgun ----------
     const gunAudio = (() => {
       let ctx = null, out = null, noiseBuf = null;
       function init() {
@@ -13766,34 +13846,49 @@
     function makeShotgun() {
       const g = new THREE.Group();
       const gb = makeBatch();
-      const gunMetal = new THREE.MeshStandardMaterial({ color: 0x23262b, roughness: 0.35, metalness: 0.9 });
-      const stockWood = new THREE.MeshStandardMaterial({ map: woodTex, color: 0x7a4a26, roughness: 0.6 });
-      const stunBand = new THREE.MeshStandardMaterial({ color: 0x103040, emissive: 0x30d0ff, emissiveIntensity: 1.6, roughness: 0.4 });
+      // a classic wood-and-blued-steel pump-action shotgun
+      const blued = new THREE.MeshStandardMaterial({ color: 0x15171c, roughness: 0.32, metalness: 0.85 });          // blued steel
+      const matteBlack = new THREE.MeshStandardMaterial({ color: 0x0e0f12, roughness: 0.6, metalness: 0.5 });       // the receiver
+      const varnish = new THREE.MeshStandardMaterial({ map: woodTex, color: 0x9a5a2a, roughness: 0.32, metalness: 0.02 });   // warm varnished walnut
+      const rubber = new THREE.MeshStandardMaterial({ color: 0x0b0b0b, roughness: 0.9 });
+      const cyl = (r0, r1, len, seg = 14) => new THREE.CylinderGeometry(r0, r1, len, seg);
       // local frame: the pistol grip at the origin, the barrel pointing down -Z
-      gb.add(UNIT_BOX, gunMetal, 0, 0.02, -0.06, 0, 0, 0, 0.045, 0.06, 0.17);                         // receiver
-      gb.add(new THREE.CylinderGeometry(0.013, 0.013, 0.42, 12), gunMetal, 0, 0.04, -0.355, Math.PI / 2, 0, 0);   // barrel
-      gb.add(new THREE.CylinderGeometry(0.01, 0.01, 0.3, 10), gunMetal, 0, 0.012, -0.29, Math.PI / 2, 0, 0);      // magazine tube
-      gb.add(UNIT_BOX, stockWood, 0, 0.014, -0.25, 0, 0, 0, 0.036, 0.034, 0.11);                       // pump
-      for (let k = 0; k < 4; k++) gb.add(UNIT_BOX, gunMetal, 0, 0.014, -0.21 - k * 0.025, 0, 0, 0, 0.038, 0.036, 0.005);
-      gb.add(UNIT_BOX, stockWood, 0, -0.005, 0.11, 0.12, 0, 0, 0.038, 0.062, 0.2);                     // stock
-      gb.add(UNIT_BOX, gunMetal, 0, -0.012, 0.21, 0.12, 0, 0, 0.04, 0.072, 0.012);                     // butt plate
-      gb.add(UNIT_BOX, stockWood, 0, -0.04, 0.0, -0.32, 0, 0, 0.034, 0.08, 0.04);                      // pistol grip
-      gb.add(UNIT_BOX, gunMetal, 0, -0.02, -0.035, 0, 0, 0, 0.006, 0.03, 0.05);                       // trigger guard
-      gb.add(UNIT_BOX, gunMetal, 0, -0.012, -0.03, 0.4, 0, 0, 0.004, 0.022, 0.006);                   // trigger
-      gb.add(new THREE.CylinderGeometry(0.016, 0.016, 0.02, 12), stunBand, 0, 0.04, -0.54, Math.PI / 2, 0, 0);   // glowing stun-shell muzzle band
-      gb.add(new THREE.CylinderGeometry(0.0145, 0.0145, 0.03, 12), stunBand, 0, 0.04, -0.12, Math.PI / 2, 0, 0);
-      gb.add(UNIT_BOX, gunMetal, 0, 0.058, -0.55, 0, 0, 0, 0.004, 0.008, 0.008);                     // front sight
+      // receiver: a flat-sided rectangular block with a rounded top, ejection port, trigger guard and trigger
+      gb.add(bevelBox(0.04, 0.064, 0.2, 0.006), matteBlack, 0, 0.03, -0.075);
+      gb.add(cyl(0.02, 0.02, 0.2, 14), matteBlack, 0, 0.056, -0.075, Math.PI / 2, 0, 0, 1, 1, 0.55);                  // rounded top
+      gb.add(UNIT_BOX, blued, 0.0205, 0.04, -0.1, 0, 0, 0, 0.002, 0.022, 0.07);                                       // ejection port
+      gb.add(UNIT_BOX, blued, 0, -0.004, -0.05, 0, 0, 0, 0.014, 0.008, 0.1);                                          // guard base
+      gb.add(new THREE.TorusGeometry(0.024, 0.0035, 6, 18, Math.PI), blued, 0, -0.004, -0.052, Math.PI, Math.PI / 2, 0);   // trigger guard loop
+      gb.add(UNIT_BOX, blued, 0, -0.012, -0.045, 0.35, 0, 0, 0.004, 0.024, 0.006);                                   // trigger
+      // the long barrel with its vent rib and bead, and the magazine tube under it
+      gb.add(cyl(0.0115, 0.0115, 0.5), blued, 0, 0.05, -0.425, Math.PI / 2, 0, 0);
+      gb.add(UNIT_BOX, blued, 0, 0.064, -0.42, 0, 0, 0, 0.006, 0.004, 0.48);                                         // vent rib
+      gb.add(new THREE.SphereGeometry(0.0032, 8, 6), brassMat, 0, 0.068, -0.66);                                       // brass bead
+      gb.add(cyl(0.0125, 0.0125, 0.012), blued, 0, 0.05, -0.672, Math.PI / 2, 0, 0);                                  // muzzle
+      gb.add(cyl(0.0105, 0.0105, 0.42), blued, 0, 0.017, -0.385, Math.PI / 2, 0, 0);                                 // magazine tube
+      gb.add(cyl(0.012, 0.0115, 0.022), blued, 0, 0.017, -0.6, Math.PI / 2, 0, 0);                                    // magazine cap
+      gb.add(UNIT_BOX, blued, 0, 0.034, -0.575, 0, 0, 0, 0.024, 0.048, 0.014);                                       // barrel clamp
+      // the ribbed, varnished wooden pump forend on the magazine tube, with its action bars back into the receiver
+      gb.add(cyl(0.021, 0.021, 0.16, 18), varnish, 0, 0.019, -0.29, Math.PI / 2, 0, 0, 1.08, 1, 1.12);
+      for (let k = 0; k < 8; k++) gb.add(new THREE.TorusGeometry(0.0222, 0.0016, 6, 18), matteBlack, 0, 0.019, -0.224 - k * 0.018, 0, 0, 0, 1.08, 1.12, 1);
+      for (const sx of [-1, 1]) gb.add(UNIT_BOX, blued, sx * 0.012, 0.017, -0.19, 0, 0, 0, 0.003, 0.008, 0.08);
+      // the buttstock: a curved pistol-grip neck, the comb and belly sweeping back, and a dark buttplate
+      gb.add(bevelBox(0.034, 0.09, 0.05, 0.008), varnish, 0, -0.022, 0.035, -0.55, 0, 0);                            // pistol grip neck
+      gb.add(bevelBox(0.036, 0.018, 0.04, 0.006), rubber, 0, -0.06, 0.055, -0.55, 0, 0);                             // grip cap
+      gb.add(bevelBox(0.036, 0.05, 0.27, 0.01), varnish, 0, 0.026, 0.19, 0.06, 0, 0);                                // comb
+      gb.add(bevelBox(0.036, 0.07, 0.22, 0.01), varnish, 0, -0.008, 0.225, 0.2, 0, 0);                               // belly, deepening towards the butt
+      gb.add(bevelBox(0.04, 0.128, 0.016, 0.005), rubber, 0, -0.002, 0.336, 0.12, 0, 0);                              // buttplate
       gb.build(g, { rayTarget: true });
       // the shell counter on top of the receiver, angled up at your eye
       const cv = document.createElement('canvas'); cv.width = 256; cv.height = 96;
       const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
       const panel = new THREE.Mesh(new THREE.PlaneGeometry(0.075, 0.028), new THREE.MeshBasicMaterial({ map: tex, transparent: true, fog: false, toneMapped: false }));
-      panel.position.set(0, 0.052, 0.0); panel.rotation.x = -Math.PI / 2 + 0.55;
+      panel.position.set(0, 0.076, -0.02); panel.rotation.x = -Math.PI / 2 + 0.55;   // (just above the receiver's rounded top)
       g.add(panel);
       const flash = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xfff0b0, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
-      flash.position.set(0, 0.04, -0.6); flash.scale.set(0.4, 0.4, 1); g.add(flash);
-      const flash2 = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0x60d8ff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
-      flash2.position.set(0, 0.04, -0.68); flash2.scale.set(0.7, 0.7, 1); g.add(flash2);
+      flash.position.set(0, 0.05, -0.7); flash.scale.set(0.4, 0.4, 1); g.add(flash);
+      const flash2 = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xffb060, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+      flash2.position.set(0, 0.05, -0.76); flash2.scale.set(0.7, 0.7, 1); g.add(flash2);
       return { group: g, canvas: cv, tex, flash, flash2 };
     }
     const gunSmokeTex = canvasTexture(64, (g, s) => {
@@ -13886,7 +13981,7 @@
       if (sg.shells <= 0) {                                   // empty: just a click
         gunAudio.click(); pulse(c, 0.15, 20);
         const now = performance.now();
-        if (now - sg.emptyNoteT > 2500) { sg.emptyNoteT = now; showToast('*CLICK*  0/1 SHELLS', 'The stun shotgun is empty'); }
+        if (now - sg.emptyNoteT > 2500) { sg.emptyNoteT = now; showToast('*CLICK*  0/1 SHELLS', 'The shotgun is empty'); }
         return;
       }
       sg.shells = 0; drawShells(sg);
@@ -13919,7 +14014,7 @@
       }
       if (hit) {
         const dist = Math.hypot(ai.pos.x - _sgMuz.x, ai.pos.z - _sgMuz.z);
-        ai.state = 'stunned'; ai.stunT = STUN_TIME; ai.stunAge = 0; ai.slash = null; ai.path = []; ai.goal = null; ai.lostT = 0;
+        ai.state = 'stunned'; ai.stunT = STUN_TIME; ai.stunAge = 0; ai.slash = null; ai.path = []; ai.goal = null; ai.lostT = 0; ai.stunNoFx = false;
         ai.knock = new THREE.Vector3(_sgDir.x, 0, _sgDir.z).normalize().multiplyScalar(THREE.MathUtils.clamp(6 - dist * 0.35, 2, 6));
         ai.heading = Math.atan2(-_sgDir.x, -_sgDir.z);       // thrown back, still facing you
         chaseAudio.setTarget(0);
@@ -13965,7 +14060,7 @@
               if (monsterBlocked(c)) continue;
               sg.held = i; sg.onRack = false;
               gunAudio.rack(); pulse(c, 0.5, 50);
-              if (!sg.told) { sg.told = true; showToast(`STUN SHOTGUN  ${sg.shells}/1 SHELLS`, 'Trigger to fire. A hit stuns the monster for 15 s'); }
+              if (!sg.told) { sg.told = true; showToast(`SHOTGUN  ${sg.shells}/1 SHELLS`, 'Trigger to fire. A hit stuns the monster for 15 s'); }
             }
           }
           if (sg.held === i && trigEdge) fireStunGun(sg, i);
@@ -14007,7 +14102,8 @@
       }
       // the stunned monster crackles and spits sparks
       const stunned = ai.active && ai.state === 'stunned';
-      const showStun = stunned && ai.map === currentMap;
+      if (!stunned) ai.stunNoFx = false;
+      const showStun = stunned && ai.map === currentMap && !ai.stunNoFx;   // (fighting him off is a shove: no sparks)
       stunGlow.visible = showStun;
       if (showStun) {
         _sgT.copy(ai.pos).lerp(aiRoot.position, 0.5);                 // the middle of the (fallen) body
@@ -14031,7 +14127,7 @@
       }
     }
     // desktop: clicking the rack just explains it (the gun's for VR hands)
-    for (const sg of stunGuns) addDeskClick([sg.gun.group, sg.rack], () => showToast('STUN SHOTGUN  1 SHELL', 'In VR: Grip to take it, Trigger to fire'), sg.map);
+    for (const sg of stunGuns) addDeskClick([sg.gun.group, sg.rack], () => showToast('SHOTGUN  1 SHELL', 'In VR: Grip to take it, Trigger to fire'), sg.map);
     // arriving anywhere: every gun is back on its rack with its shell, and the water effects are off
     {
       const baseArrive = arrive;
@@ -14378,7 +14474,7 @@
     }
     // ---------- at THE TRADER: a velvet tray with every charm, and a wooden stand with the chains draped over it ----------
     const shopDisplay = (() => {
-      const W = WAIT_ROOM, cx = W.x - W.w / 2 + 0.55, cz = SB.z, top = 0.52;
+      const W = WAIT_ROOM, cx = SHOP_COUNTER_X, cz = SB.z, top = 0.52;
       const g = new THREE.Group(); scene.add(g);
       const b = makeBatch();
       const velvet = new THREE.MeshStandardMaterial({ color: 0x5a0c14, roughness: 1 });
@@ -15148,7 +15244,7 @@
       if (camera.far !== far) { camera.far = far; camera.updateProjectionMatrix(); }
       if (perfMap !== currentMap) {
         perfMap = currentMap;
-        const spot = flashlight.userData.spot, size = currentMap === 'camp' ? 1024 : 512;
+        const spot = flashlight.userData.spot, size = 512;   // (camp too: the big shadow map was a frame-time hog there)
         if (spot && spot.shadow && spot.shadow.mapSize.x !== size) { spot.shadow.mapSize.set(size, size); if (spot.shadow.map) { spot.shadow.map.dispose(); spot.shadow.map = null; } }
       }
       // the live checklist and map
@@ -15546,12 +15642,26 @@
     // stalls: back off to the nearest node it can reach, then carry on
     let wpStallT = 0, wpCool = 0;
     const _wpLast = new THREE.Vector3();
+    let wpHardT = 0;
     function updateMineAI(dt) {
       wpCool = Math.max(0, wpCool - dt);
-      if (!ai.active || ai.map !== 'mine' || caught || !ai.path.length || ['look', 'stare', 'catch', 'stunned'].includes(ai.state)) { wpStallT = 0; _wpLast.copy(ai.pos); return; }
+      if (!ai.active || ai.map !== 'mine' || caught || !ai.path.length || ['look', 'stare', 'catch', 'stunned'].includes(ai.state)) { wpStallT = 0; wpHardT = 0; _wpLast.copy(ai.pos); return; }
       const moved = Math.hypot(ai.pos.x - _wpLast.x, ai.pos.z - _wpLast.z);
       _wpLast.copy(ai.pos);
       if (moved < dt * 0.25) wpStallT += dt; else wpStallT = Math.max(0, wpStallT - dt * 2);
+      if (moved < dt * 0.25) wpHardT += dt; else wpHardT = Math.max(0, wpHardT - dt);
+      if (wpHardT > 2.6) {                                   // wedged on a wall, rail, beam or stair edge: pop it free
+        wpHardT = 0;
+        const nav = NAV.mine;
+        if (nav) for (let r = 0.3; r <= 2.4; r += 0.3) {
+          let hit = null;
+          for (let k = 0; k < 12 && !hit; k++) {
+            const a = (k / 12) * Math.PI * 2, x = ai.pos.x + Math.cos(a) * r, z = ai.pos.z + Math.sin(a) * r;
+            if (circleFree(nav, x, z, AI_R_MINE + 0.04, groundY('mine', x, z), true) && segmentWalkable(nav, new THREE.Vector3(x, 0, z), ai.path[0] || ai.pos)) hit = [x, z];
+          }
+          if (hit) { ai.pos.x = hit[0]; ai.pos.z = hit[1]; ai.pos.y = groundY('mine', hit[0], hit[1]); ai.lastPos.copy(ai.pos); ai.pathT = 0; break; }
+        }
+      }
       if (wpStallT > 0.8 && wpCool <= 0) {
         wpStallT = 0; wpCool = 1.5;
         const nav = NAV.mine; if (!nav) return;
@@ -15758,7 +15868,9 @@
         gltfLoader.load(url, (gltf) => {
           try {
             survivorGlbSource = url;
+            const keeperSrc = gltf.scene.clone(true);                         // (a second copy for the shopkeeper)
             setupSurvivorGLB(gltf.scene);
+            try { buildShopkeeper(keeperSrc); } catch (e) { console.warn('[SurvivorGLB] shopkeeper could not be set up', e); }
             glbStatus('SURVIVOR MODEL: LOADED', 'ok', 5000);
           } catch (e) { fail(`${url} loaded but could not be set up; keeping the built-in survivor`, e); }
         }, (xhr) => {
@@ -15889,15 +16001,19 @@
         handMesh.userData.mat = skinMat; mine.push(handMesh);
         const fingers = [[hb.f[0][0], hb.f[0][1]], [hb.f[1][0], hb.f[1][1]]];
         const t0 = hb.t[0], t1 = hb.t[1];
-        let curl = 0, thumb = 0, wire = null;
+        let curlIn = 0, curlOut = 0, thumb = 0, wire = null;
         const basePose = h.model.pose, baseWire = h.model.setWire;
         h.model.pose = function (grip, trig, dt) {
           basePose.call(this, grip, trig, dt);
-          curl += (grip - curl) * Math.min(1, dt * 16);                      // Grip: the two fingers close
-          for (const [j0, j1] of fingers) { j0.rotation.z = -curl * 1.5; j1.rotation.z = -curl * 1.75; }   // (long and straight at rest, like the reference)
+          // each finger on its own button: Trigger curls the inner (middle) finger, Grip curls the outer (pinky) finger
+          curlIn += ((trig || 0) - curlIn) * Math.min(1, dt * 16);
+          curlOut += ((grip || 0) - curlOut) * Math.min(1, dt * 16);
+          const [outer, inner] = fingers;                                     // (fingers[0] is the one further from the thumb)
+          inner[0].rotation.z = -curlIn * 1.5; inner[1].rotation.z = -curlIn * 1.75;
+          outer[0].rotation.z = -curlOut * 1.5; outer[1].rotation.z = -curlOut * 1.75;
           // X on the left controller / A on the right (xr-standard buttons[4]): the thumb folds in over the palm
           const b = controllers[i].userData.inputSource?.gamepad?.buttons?.[4];
-          const want = b ? (b.pressed ? 1 : b.touched ? 0.25 : 0) : 0;
+          const want = b && b.pressed ? 1 : 0;                                 // (only the thumb moves)
           thumb += (want - thumb) * Math.min(1, dt * 14);
           t0.rotation.set(0, thumb * 0.8, 0);
           t1.rotation.set(0, thumb * 0.7, 0);
@@ -15908,6 +16024,7 @@
           for (const m of mine) m.material = on ? handWireMat : m.userData.mat;
         };
         S.hand = mine;
+        S.cuff = new THREE.Group(); armGroup.add(S.cuff);                 // the wrist band / chain / charm ride on the forearm
         survivorArms.sides[i] = S;
       });
     }
@@ -15950,6 +16067,7 @@
         void lf;
         placeSeg(S.upper, _arS, _arE); placeSeg(S.fore, _arE, _arW);
         S.shoulder.position.copy(_arS); S.elbow.position.copy(_arE); S.wrist.position.copy(_arW);
+        S.cuff.position.copy(_arW); S.cuff.quaternion.copy(S.fore.quaternion);   // local Y runs along the forearm, towards the hand
       }
     }
     // zero-lag arms: the arms are solved inside renderer.render, after everything else this frame has moved the rig and
@@ -15973,16 +16091,21 @@
     // down along gravity.
     // the wrist ball is 4.1 cm across in the world = 0.068 in the hand's 0.6-scaled frame; the ring hugs it
     const WRIST_RING_R = 0.041 / PLAYER_SCALE + 0.002, CHARM_SIZE = 1.6;
+    // The band / chain wraps the end of the orange forearm itself (a ring 4.3 cm in radius round the 4 cm forearm, 1.4 cm
+    // back from the wrist), parented to a cuff group that's placed with the arm segments in the same pass, so it can
+    // never lag or drift off the arm. The charm's chain hooks onto the ring's lowest point and hangs under it.
+    const CUFF_R = 0.043, CUFF_Y = -0.014, CHARM_WORLD = CHARM_SIZE * PLAYER_SCALE;
     function fitWristWear() {
-      for (const w of wear) {
+      wear.forEach((w, i) => {
+        const S = survivorArms.sides[i]; if (!S || !S.cuff) return;
         const b = w.c.band;
-        b.position.copy(SURVIVOR_WRIST); b.rotation.set(Math.PI / 2, 0, 0); b.scale.setScalar(WRIST_RING_R / 0.026);
-        for (const ch of Object.values(w.chains)) { ch.position.copy(SURVIVOR_WRIST); ch.rotation.set(Math.PI / 2, 0, 0); ch.scale.setScalar(WRIST_RING_R / 0.027); }
-        // the charm and its little chain, sized to the new wrist; the charm's bail ring now overlaps the last link
-        // (it used to hang 4 mm below it, so it looked like it was floating)
-        w.c.charmHook.scale.setScalar(CHARM_SIZE);
-        w.holder.position.y = -0.0185;
-      }
+        S.cuff.add(b); b.position.set(0, CUFF_Y, 0); b.rotation.set(Math.PI / 2, 0, 0); b.scale.setScalar(CUFF_R / 0.026);
+        for (const ch of Object.values(w.chains)) { S.cuff.add(ch); ch.position.set(0, CUFF_Y, 0); ch.rotation.set(Math.PI / 2, 0, 0); ch.scale.setScalar(CUFF_R / 0.027); }
+        S.cuff.add(w.c.charmHook);
+        w.c.charmHook.scale.setScalar(CHARM_WORLD);
+        w.holder.position.y = -0.0185;                                    // the charm's bail sits on the last link
+        w.prev.set(0, 0, 0); w.ok = false;
+      });
     }
     const _wwM = new THREE.Matrix4(), _wwG = new THREE.Vector3();
     {
@@ -15990,16 +16113,18 @@
       updateCharmSwing = function (dt) {
         if (survivorArms.built) for (const w of wear) {
           const hook = w.c.charmHook, parent = hook.parent;
+          if (!parent) continue;
           parent.updateMatrixWorld(true);
-          _wwG.set(0, -1, 0).transformDirection(_wwM.copy(parent.matrixWorld).invert());   // "down", in the hand's frame
-          _wwG.y = 0;                                                                         // the ring lies across the hand's Y axis
+          _wwG.set(0, -1, 0).transformDirection(_wwM.copy(parent.matrixWorld).invert());   // "down", in the cuff's frame
+          _wwG.y = 0;                                                                         // the ring lies across the forearm
           if (_wwG.lengthSq() < 1e-6) _wwG.set(1, 0, 0);
           _wwG.normalize();
-          hook.position.copy(SURVIVOR_WRIST).addScaledVector(_wwG, WRIST_RING_R + 0.004);     // on the ring's lowest point (inside its band)
+          hook.position.set(0, CUFF_Y, 0).addScaledVector(_wwG, CUFF_R + 0.002);            // the ring's lowest point
         }
         return baseSwing(dt);
       };
     }
+
     // ---------- doors can't be broken ----------
     // (they open only by pushing them with your hands, or E / click on the desktop; the monster shoves them open too)
     breakDoor = function () { };
@@ -16009,33 +16134,38 @@
     // click on the desktop) fills the struggle bar, which slowly drains. Fill it and you shove him off: he's knocked
     // back and dazed for a few seconds, so run. Each escape makes the next struggle harder; run out of time and you're
     // caught as before.
-    const STRUGGLE_TIME = 3.2, STRUGGLE_BASE = 12, STRUGGLE_STEP = 4, STRUGGLE_DAZE = 4;
+    // escape 1: 12 pulls in 3.2 s; escape 2: 22 pulls in 3.0 s (and the bar drains faster); a third grab is the end
+    const STRUGGLE_LEVELS = [{ need: 12, dur: 3.2, drain: 0.12 }, { need: 22, dur: 3.0, drain: 0.2 }], STRUGGLE_MAX = 2, STRUGGLE_DAZE = 4;
     let struggle = null, struggleWins = 0, struggleKey = false;
     const strCanvas = document.createElement('canvas'); strCanvas.width = 512; strCanvas.height = 160;
     const strTex = new THREE.CanvasTexture(strCanvas); strTex.colorSpace = THREE.SRGBColorSpace;
-    const strPanel = new THREE.Mesh(new THREE.PlaneGeometry(0.24, 0.075), new THREE.MeshBasicMaterial({ map: strTex, transparent: true, depthTest: false, depthWrite: false, fog: false }));
+    const strPanel = new THREE.Mesh(new THREE.PlaneGeometry(0.27, 0.084), new THREE.MeshBasicMaterial({ map: strTex, transparent: true, depthTest: false, depthWrite: false, fog: false }));
     strPanel.position.set(0, -0.06, -0.34); strPanel.renderOrder = 9010; strPanel.visible = false; camera.add(strPanel);
     function drawStruggle() {
       const g = strCanvas.getContext('2d'), S = struggle;
       g.clearRect(0, 0, 512, 160);
-      g.fillStyle = 'rgba(20,0,0,0.78)'; g.fillRect(0, 0, 512, 160);
-      g.strokeStyle = '#ff3020'; g.lineWidth = 6; g.strokeRect(3, 3, 506, 154);
+      g.fillStyle = 'rgba(16,0,0,0.85)'; g.fillRect(0, 0, 512, 160);
+      g.strokeStyle = '#ff3020'; g.lineWidth = 8; g.strokeRect(4, 4, 504, 152);
       g.textAlign = 'center'; g.textBaseline = 'middle';
-      g.fillStyle = '#ff5a40'; g.font = 'bold 44px system-ui, sans-serif';
-      g.fillText('FIGHT HIM OFF!', 256, 42);
-      g.fillStyle = '#ffd8c8'; g.font = 'bold 24px system-ui, sans-serif';
-      g.fillText(renderer.xr.isPresenting ? 'SPAM BOTH TRIGGERS' : 'SPAM SPACE / CLICK', 256, 82);
-      g.fillStyle = '#2a0806'; g.fillRect(28, 108, 456, 30);
-      g.fillStyle = S.meter > 0.75 ? '#6dff8a' : '#ff8a30'; g.fillRect(28, 108, 456 * S.meter, 30);
-      g.fillStyle = 'rgba(255,255,255,0.6)'; g.fillRect(28 + 456 * Math.max(0, 1 - S.t / S.dur), 104, 3, 38);   // time left
+      g.fillStyle = '#ff6a4a'; g.font = 'bold 34px system-ui, sans-serif';
+      g.fillText(renderer.xr.isPresenting ? 'SPAM TRIGGERS TO ESCAPE!' : 'SPAM SPACE / CLICK TO ESCAPE!', 256, 36, 484);
+      g.fillStyle = '#ffd8c8'; g.font = 'bold 20px system-ui, sans-serif';
+      g.fillText(struggleWins === 0 ? 'ESCAPE 1 OF 2' : 'LAST ESCAPE: PULL HARDER!', 256, 70);
+      // the progress bar: thick, with a bright fill and its percentage
+      g.fillStyle = '#2a0806'; g.fillRect(22, 92, 468, 50);
+      g.fillStyle = S.meter > 0.75 ? '#6dff8a' : S.meter > 0.4 ? '#ffd040' : '#ff7a30'; g.fillRect(22, 92, 468 * S.meter, 50);
+      g.strokeStyle = '#ffffff'; g.lineWidth = 3; g.strokeRect(22, 92, 468, 50);
+      g.font = 'bold 28px system-ui, sans-serif'; g.lineWidth = 6; g.strokeStyle = '#000'; g.strokeText(`${Math.round(S.meter * 100)}%`, 256, 118); g.fillStyle = '#fff'; g.fillText(`${Math.round(S.meter * 100)}%`, 256, 118);
+      g.fillStyle = 'rgba(255,255,255,0.85)'; g.fillRect(22 + 468 * Math.max(0, 1 - S.t / S.dur) - 2, 86, 4, 62);   // time left
       strTex.needsUpdate = true;
     }
     {
       const baseBeginCatch = beginCatch;
       beginCatch = function () {
         if (caught || struggle) return;
-        if (playerRole === 'monster' || ending) return baseBeginCatch();
-        struggle = { t: 0, dur: STRUGGLE_TIME, need: STRUGGLE_BASE + struggleWins * STRUGGLE_STEP, meter: 0, prev: controllers.map(() => true),
+        if (playerRole === 'monster' || ending || struggleWins >= STRUGGLE_MAX) return baseBeginCatch();   // no escapes left: caught
+        const L = STRUGGLE_LEVELS[struggleWins];
+        struggle = { t: 0, dur: L.dur, need: L.need, drain: L.drain, meter: 0, prev: controllers.map(() => true),
                      pin: playerRig.position.clone(), base: baseBeginCatch };
         ai.state = 'catch'; ai.path = []; ai.speed = 0; ai.slash = null;      // he holds you
         redFlash.visible = true; redFlash.material.opacity = 0.7;
@@ -16054,7 +16184,7 @@
       let presses = struggleKey ? 1 : 0; struggleKey = false;
       controllers.forEach((c, i) => { const t = btn(c, 0); if (t && !S.prev[i]) { presses++; pulse(c, 0.5, 30); } S.prev[i] = t; });
       if (presses) { gameAudio.thud?.(0.5); redFlash.material.opacity = Math.min(0.9, redFlash.material.opacity + 0.12); }
-      S.meter = Math.min(1, Math.max(0, S.meter + presses / S.need - dt * 0.12));
+      S.meter = Math.min(1, Math.max(0, S.meter + presses / S.need - dt * S.drain));
       redFlash.material.opacity = Math.max(0.35, redFlash.material.opacity - dt * 0.8);
       // he holds you in place
       if (renderer.xr.isPresenting) { playerRig.position.copy(S.pin); rigVelocity.set(0, 0, 0); }
@@ -16064,9 +16194,10 @@
         headWorld(_stD); _stD.sub(ai.pos).setY(0).normalize().negate();
         ai.state = 'stunned'; ai.stunT = STRUGGLE_DAZE; ai.stunAge = 0; ai.slash = null; ai.path = []; ai.goal = null; ai.lostT = 0;
         ai.knock = _stD.clone().multiplyScalar(3.5);
+        ai.stunNoFx = true;                                            // a shove, not a stun shell: no sparks or crackle
         chaseAudio.setTarget(0);
         controllers.forEach((c) => pulse(c, 1, 160));
-        showToast('YOU FOUGHT HIM OFF!', 'RUN!');
+        showToast('YOU FOUGHT HIM OFF!', struggleWins >= STRUGGLE_MAX ? 'RUN! That was your last escape' : 'RUN! 1 escape left');
       } else if (S.t >= S.dur) {                                       // too slow: caught
         struggle = null; strPanel.visible = false;
         S.base();
@@ -16086,6 +16217,52 @@
         if (survivorGLBReady) avatar.visible = false;
       };
     }
+    // ---------- THE TRADER's shopkeeper: the proboscis monkey behind the waiting-room counter ----------
+    // A full copy of survivor.glb (its own materials: none of the player's first-person cutting), 0.7 m tall, standing
+    // between the counter and the wall under the shop board and facing into the room. It breathes, sways a little and
+    // turns to keep an eye on you while you're in the room.
+    let shopkeeper = null;
+    const KEEPER_H = 0.7;
+    function buildShopkeeper(src) {
+      src.rotation.set(0, Math.PI / 2, 0);                                   // the model faces +Z: turn it to face +X, into the room
+      src.position.set(0, 0, 0); src.scale.setScalar(1);
+      src.updateMatrixWorld(true);
+      let box = new THREE.Box3().setFromObject(src);
+      const k = KEEPER_H / Math.max(1e-6, box.getSize(new THREE.Vector3()).y);
+      src.scale.setScalar(k); src.updateMatrixWorld(true);
+      box = new THREE.Box3().setFromObject(src);
+      const c = box.getCenter(new THREE.Vector3());
+      src.position.set(-c.x, -box.min.y, -c.z);
+      src.traverse((o) => {
+        if (!o.isMesh) return;
+        o.material = Array.isArray(o.material) ? o.material.map((m) => { const n = m.clone(); n.clippingPlanes = null; return n; })
+                                               : Object.assign(o.material.clone(), { clippingPlanes: null });
+        o.castShadow = false; o.receiveShadow = false; o.onBeforeRender = () => { };
+      });
+      const breathe = new THREE.Group(); breathe.add(src);
+      const root = new THREE.Group(); root.name = 'shopkeeper'; root.add(breathe);
+      // behind the counter: its back just off the west wall, its belly at the counter's back edge
+      const depth = box.getSize(new THREE.Vector3()).x;
+      root.position.set(WAIT_ROOM.x - WAIT_ROOM.w / 2 + 0.03 + depth / 2, 0, SB.z);
+      scene.add(root);
+      shopkeeper = { root, breathe, t: Math.random() * 10, yaw: 0 };
+    }
+    const _skCam = new THREE.Vector3();
+    function updateShopkeeper(dt) {
+      const K = shopkeeper; if (!K) return;
+      K.root.visible = currentMap === 'waiting' && !titleActive;
+      if (!K.root.visible) return;
+      K.t += dt;
+      // breathing: the chest rises and falls; a slow weight shift from side to side
+      K.breathe.scale.set(1 + 0.008 * Math.sin(K.t * 1.7), 1 + 0.014 * Math.sin(K.t * 1.7), 1 + 0.01 * Math.sin(K.t * 1.7));
+      K.breathe.rotation.z = Math.sin(K.t * 0.45) * 0.025;
+      // it watches you (within a comfortable turn), with an idle glance now and then
+      camera.getWorldPosition(_skCam);
+      let want = Math.atan2(-(_skCam.z - K.root.position.z), _skCam.x - K.root.position.x);   // 0 = facing +X
+      want = THREE.MathUtils.clamp(want, -0.6, 0.6) + Math.sin(K.t * 0.31) * 0.12;
+      K.yaw += (want - K.yaw) * Math.min(1, dt * 1.5);
+      K.root.rotation.y = K.yaw;
+    }
     // role switching: SURVIVOR shows the body, MONSTER hides it (the monster model takes over). Each frame the body
     // is placed under you: X/Z from your head, standing on the highest floor below you (colliders, the camp terrain),
     // lifted with you when you're in the air or swimming, and turned smoothly to your yaw.
@@ -16103,6 +16280,7 @@
     }
     function updateSurvivorGLB(dt = 0.016) {
       updateStruggle(dt);
+      updateShopkeeper(dt);
       if (struggle && (caught || ai.map !== currentMap || !ai.active)) endStruggle();
       if (!survivorGLBReady) return;
       const show = playerRole !== 'monster' && !titleActive;
@@ -16153,6 +16331,23 @@
     function keepLightsInWorld() { return keepWorldOffRig(); }
     keepWorldOffRig();
     setTimeout(keepWorldOffRig, 3000);
+
+    // ---------- camp performance ----------
+    // Trees, grass, rocks and fence posts are already merged into shared-material batches (one draw call per
+    // material, repeats instanced). On top of that, every low static prop in the camp (anything under 0.7 m tall:
+    // rocks, grass, stumps, fence rails, logs, litter) stops casting shadows, which halves the flashlight's shadow pass.
+    {
+      const _cb = new THREE.Box3(); let n = 0;
+      scene.updateMatrixWorld(true);
+      scene.traverse((o) => {
+        if (!o.isMesh || !o.castShadow || o.isSkinnedMesh || !o.geometry) return;
+        let p = o; while (p && p !== scene) { if (p === armGroup || p === survivorBodyGroup || p === titleGroup) return; p = p.parent; }
+        _cb.setFromObject(o);
+        if (_cb.isEmpty() || _cb.max.x > 34 || _cb.min.x < -34 || _cb.max.z > 34 || _cb.min.z < -34) return;   // camp only
+        if (_cb.max.y - _cb.min.y < 0.7) { o.castShadow = false; n++; }
+      });
+      console.log('[camp perf] shadow casting turned off on', n, 'small static meshes');
+    }
 
     // =====================================================================
     //  Text clipping: 3D text planes lifted off their backing surface, and 2D overlays that can't crop their text
