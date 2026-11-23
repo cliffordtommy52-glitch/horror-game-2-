@@ -15661,7 +15661,10 @@
     // ground (PLAYER_SCALE 0.6), so the group shrinks it to 0.5 world units and sets its base on the ground under you,
     // with its eyes at your eyes. Set SURVIVOR_GLB_FIT = 1 to see it at the full 1.1 (it will then stand through the floor).
     const SURVIVOR_GLB_HEIGHT = 1.1;
-    const SURVIVOR_GLB_FIT = 0.5 / SURVIVOR_GLB_HEIGHT;
+    // first person: the model's neck/collar (where its chin meets the chest, 52% of its height) sits just under the
+    // headset, so its body is sized for the neck to be at your standing eye height (0.38) minus a 3 cm gap
+    const SURVIVOR_NECK_FRAC = 0.52, SURVIVOR_NECK_GAP = 0.03;
+    const SURVIVOR_GLB_FIT = (SPAWN_HEAD_HEIGHT - SURVIVOR_NECK_GAP) / SURVIVOR_NECK_FRAC / SURVIVOR_GLB_HEIGHT;
     const SURVIVOR_GLB_EYE = { y: 0.765, z: 0.25 };   // where its eyes are: fraction of its height up, fraction of its depth forward of centre
     const survivorGlbGroup = new THREE.Group();       // dedicated group on the survivor rig (inside the body, turns with the torso)
     survivorGlbGroup.name = 'survivorGlbGroup';
@@ -15675,7 +15678,7 @@
     survivorBodyGroup.visible = false;
     scene.add(survivorBodyGroup);
     survivorBodyGroup.add(survivorGlbGroup);
-    let survivorEyeH = 0.38, survivorBodyYaw = 0, survivorBodyInit = false;
+    let survivorNeckH = 0.35, survivorEyeH = 0.38, survivorBodyYaw = 0, survivorBodyInit = false;
     let survivorGLBReady = false;
     let survivorGlbSource = SURVIVOR_GLB_URL;         // which file actually loaded
     // a small status badge on the 2D HUD (and a toast in the headset)
@@ -15722,6 +15725,7 @@
       survivorGlbGroup.scale.setScalar(SURVIVOR_GLB_FIT);
       survivorGlbGroup.position.set(0, 0, 0);
       survivorEyeH = nSize.y * SURVIVOR_GLB_EYE.y * SURVIVOR_GLB_FIT;
+      survivorNeckH = nSize.y * SURVIVOR_NECK_FRAC * SURVIVOR_GLB_FIT;
       const worldH = nSize.y * SURVIVOR_GLB_FIT, worldW = nSize.x * SURVIVOR_GLB_FIT;
       // the first-person clip planes, in the body's own space
       _sgPlanesLocal[0].constant = 0; _sgPlanesLocal[1].constant = 0.62 * worldW / 2; _sgPlanesLocal[2].constant = 0.62 * worldW / 2;
@@ -15744,7 +15748,7 @@
           const firstPerson = renderer.xr.isPresenting && _sgCamP.distanceTo(_sgHeadP) < 0.35;
           for (let i = 0; i < _sgPlanes.length; i++) {
             if (!firstPerson) _sgPlanes[i].copy(_sgOff[i]);
-            else if (i === 0) _sgPlanes[0].set(_sgPlanes[0].normal.set(0, -1, 0), _sgCamP.y - 0.12);   // nothing within 12 cm below the lens or above it
+            else if (i === 0) _sgPlanes[0].set(_sgPlanes[0].normal.set(0, -1, 0), survivorBodyGroup.position.y + survivorNeckH);   // head and nose (above the neck) cut away
             else _sgPlanes[i].copy(_sgPlanesLocal[i]).applyMatrix4(survivorBodyGroup.matrixWorld);       // the model's own arms (your tracked hands show instead)
           }
         };
@@ -15752,6 +15756,7 @@
       renderer.localClippingEnabled = true;
       survivorGlbGroup.add(root);
       survivorGLBReady = true;
+      matchHandsToSurvivor();
       // the GLB replaces the built-in survivor body and head (the necklace and hand cosmetics stay)
       for (const o of avatarHead.children) o.visible = false;
       for (const o of avatarBody.children) if (o.isMesh) o.visible = false;
@@ -15825,23 +15830,41 @@
       } else {
         _sbHead.set(0, SPAWN_HEAD_HEIGHT + 0.07, 0); yaw = 0;                 // desktop: standing at the camp spawn, as before
       }
-      const ground = survivorGroundY(_sbHead.x, _sbHead.z, _sbHead.y);
-      const hang = _sbHead.y - survivorEyeH;                                  // where the base is when your eyes are its eyes
-      const y = Math.min(_sbHead.y - 0.1, isFinite(ground) ? Math.max(ground, hang) : hang);
+      // its neck/shoulders directly under the headset (in the air, swimming or crouching it moves with you)
+      const y = renderer.xr.isPresenting ? _sbHead.y - SURVIVOR_NECK_GAP - survivorNeckH : Math.max(0, survivorGroundY(_sbHead.x, _sbHead.z, _sbHead.y));
       survivorBodyYaw = yaw; survivorBodyInit = true;
       // straight under the headset, turning on the spot about its own centre (never swung out in front of you)
       survivorAvatarRoot.position.set(_sbHead.x, y, _sbHead.z);
       survivorAvatarRoot.rotation.set(0, survivorBodyYaw, 0);
     }
-    // safety net: world lights never ride on the camera, the rig or the hands (only the flashlight does)
-    function keepLightsInWorld() {
-      const keep = new Set(); flashlight.traverse((o) => keep.add(o));
+    // the controller hands take the model's own colours (sampled from survivor.glb's texture: grey-brown forearm
+    // fur, dark brown hands and fingers) once it's your body, so they match instead of looking like spare grey hands
+    function matchHandsToSurvivor() {
+      furGrey.color.set(0x7b6653); furGrey.needsUpdate = true;              // forearm fur
+      palmMat.color.set(0x574543);                                          // hands
+      earMat.color.set(0x503f3f);                                           // fingertips (and the old survivor's ears, now hidden)
+    }
+    // scene hierarchy guard: only the hands/controllers, their rays and wrist HUD, the head lamp and the camera's
+    // screen effects (fades, flashes, toasts) may hang from the camera or the rig. Anything else found there (a light,
+    // a particle system, a glow, a prop) is moved back into the world where it is, and reported.
+    function keepWorldOffRig() {
+      const allowed = new Set();
+      const allow = (o) => { if (o) o.traverse((k) => allowed.add(k)); };
+      allow(flashlight);
+      for (const c of controllers) allow(c);
+      for (const h of hands) { allow(h.grip); allow(h.follower); }
+      for (const P of lobbyPointers) { allow(P.pointer); allow(P.reticle); }
+      for (const f of [() => toast, () => vignette, () => deathCard, () => blackout, () => titleFade, () => travelFade, () => warnToast, () => redFlash, () => underTint]) {
+        try { allow(f()); } catch (e) { }
+      }
       const strays = [];
-      for (const root of [camera, playerRig, ...hands.map((h) => h.follower)]) root.traverse((o) => { if (o.isLight && !keep.has(o)) strays.push(o); });
-      for (const o of strays) { scene.attach(o); console.warn('[Scene] moved a light off the player rig into the world:', o.name || o.type); }
+      for (const root of [camera, playerRig]) for (const o of root.children) if (!allowed.has(o) && o !== camera) strays.push(o);
+      for (const o of strays) { scene.attach(o); console.warn('[Scene] moved off the player rig into the world:', o.name || o.type); }
       return strays.length;
     }
-    keepLightsInWorld();
+    function keepLightsInWorld() { return keepWorldOffRig(); }
+    keepWorldOffRig();
+    setTimeout(keepWorldOffRig, 3000);
 
     // =====================================================================
     //  Text clipping: 3D text planes lifted off their backing surface, and 2D overlays that can't crop their text
