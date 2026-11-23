@@ -6290,6 +6290,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'FIX', date: '23/11/26', title: 'SURVIVOR.GLB ALWAYS LOADS (OR SAYS WHY)',
+        text: 'Fresh download every time; a green banner when it loads, a red box with the exact error and URL if not.' },
       { tag: 'FIX', date: '23/11/26', title: 'RIGGED SURVIVOR: NO MORE BELLY SPIKES',
         text: 'The body never stretches with the arms; the rigged arms end in your 3-fingered hands and wrist charms.' },
       { tag: 'UPDATE', date: '23/11/26', title: 'RIGGED SURVIVOR MODEL',
@@ -15954,6 +15956,7 @@
     // whatever they're called, and the head and jaw use the game's own neck / jaw weighting.
     let survivorRig = null;
     const RIG_PALM = new THREE.Vector3(0.034, 0.002, 0.003);          // where the model's hand bone sits, in your hand's grip frame
+    const attrC = (a, i, c) => (c === 0 ? a.getX(i) : c === 1 ? a.getY(i) : c === 2 ? a.getZ(i) : a.getW(i));
     function survivorRigFrom(sm) {
       if (survivorRig) return true;
       const bones = sm.skeleton?.bones || [], names = bones.map((b) => b.name || '(unnamed)');
@@ -15967,7 +15970,7 @@
       const nb = bones.length, tot = new Float32Array(nb), side = [new Float32Array(nb), new Float32Array(nb)];
       for (let i = 0; i < n; i++) {
         const x = pos.getX(i), y = pos.getY(i), k = Math.abs(x) >= Wd * 0.25 && y <= bb.min.y + H * 0.62 ? (x > 0 ? 0 : 1) : -1;
-        for (let c = 0; c < 4; c++) { const w = SW.getComponent(i, c); if (w <= 0) continue; const j = SI.getComponent(i, c); tot[j] += w; if (k >= 0) side[k][j] += w; }
+        for (let c = 0; c < 4; c++) { const w = attrC(SW, i, c); if (w <= 0) continue; const j = Math.round(attrC(SI, i, c)); tot[j] += w; if (k >= 0) side[k][j] += w; }
       }
       const kids = (b) => b.children.filter((c) => c.isBone).map((c) => bones.indexOf(c)).filter((j) => j >= 0);
       const chain = (k) => {                                 // the 3-bone parent > child > grandchild run carrying the most arm
@@ -16011,7 +16014,7 @@
       for (let i = 0; i < n; i++) {
         const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
         acc.fill(0);
-        for (let c = 0; c < 4; c++) { const w = SW.getComponent(i, c); if (w > 0) acc[armOf[SI.getComponent(i, c)]] += w; }
+        for (let c = 0; c < 4; c++) { const w = attrC(SW, i, c); if (w > 0) acc[armOf[Math.round(attrC(SI, i, c))]] += w; }
         const arm = Math.abs(x - centreX) > cutX;
         isArm[i] = arm ? 1 : 0;
         if (arm) {
@@ -16307,45 +16310,82 @@
       let tris = 0; root.traverse((o) => { if (o.isMesh && o.geometry) tris += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3; });
       console.info(`[SurvivorGLB] loaded ${survivorGlbSource}: ${Math.round(tris).toLocaleString()} triangles, ${mats.size} material(s), normalised to ${SURVIVOR_GLB_HEIGHT} units, shown at ${worldH.toFixed(2)} world units`);
     }
+    // ---------- loading survivor.glb: loud about success and failure, never a silent fallback ----------
+    // A bright red box (top centre of the page, and a toast in the headset) shows the exact error and the exact URL
+    // that was fetched; a green banner and the console confirm success with the mesh / bone count and the model's size.
+    const glbErrBox = (() => {
+      const el = document.createElement('div'); el.id = 'glb-error-box';
+      el.style.cssText = 'position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:100000;max-width:min(92vw,900px);padding:14px 44px 14px 18px;' +
+        'background:#b00000;color:#fff;border:3px solid #ff6060;border-radius:10px;font:bold 15px/1.4 ui-monospace,Consolas,monospace;' +
+        'box-shadow:0 6px 30px rgba(0,0,0,.6);white-space:pre-wrap;word-break:break-word;display:none';
+      const x = document.createElement('button'); x.textContent = '×';
+      x.style.cssText = 'position:absolute;top:6px;right:8px;background:none;border:0;color:#fff;font:bold 24px sans-serif;cursor:pointer';
+      x.addEventListener('click', () => { el.style.display = 'none'; });
+      const txt = document.createElement('div'); el.append(txt, x);
+      document.body.appendChild(el);
+      return { show(t) { txt.textContent = t; el.style.display = 'block'; } };
+    })();
+    function glbError(text, err) {
+      console.error(text, err || '');
+      glbErrBox.show(text);
+      glbStatus(text.slice(0, 160), 'err');
+      try { showToast('SURVIVOR.GLB ERROR', String(err?.message || text).slice(0, 60)); } catch (e) { }
+    }
+    // the built-in placeholder body and head: gone for good once survivor.glb is up
+    function destroyPlaceholderSurvivor() {
+      for (const parent of [avatarHead, avatarBody]) for (const o of [...parent.children]) {
+        if (!o.isMesh) continue;
+        parent.remove(o); o.geometry?.dispose?.();
+      }
+    }
+    function resetSurvivorSetup() {                          // (after a failed rigged setup: start clean for the plain one)
+      for (const S of survivorArms.sides) if (S) for (const m of S.hand || []) if (m.parent) m.parent.remove(m);
+      survivorRig = null; survivorHeadPivot = null; survivorGLBReady = false;
+      survivorArms.built = false; survivorArms.sides.length = 0; armGroup.clear();
+      survivorGlbGroup.clear();
+    }
     {
-      // the real reason goes on the badge (err.message), e.g. a 404, "Failed to fetch" (file:// / CORS) or a parse error
-      const errText = (err) => err?.message || String(err);
-      const fail = (why, err) => {
-        console.error(`[SurvivorGLB] ${why}`, err || '');
-        glbStatus(`SURVIVOR MODEL: FAILED (${errText(err)})`, 'err', 15000);
-        showToast('SURVIVOR MODEL FAILED', errText(err).slice(0, 48));
-      };
-      // try ./survivor.glb first, then fall back to ./result_Ub5XHK.glb if it isn't found
-      const urls = [SURVIVOR_GLB_URL, './result_Ub5XHK.glb'];
+      const errText = (err) => err?.message || (typeof err === 'string' ? err : (() => { try { return JSON.stringify(err); } catch (e) { return String(err); } })());
       const gltfLoader = new GLTFLoader();
-      const tryLoad = (i) => {
-        const url = urls[i];
-        console.info(`[SurvivorGLB] loading ${url} ...`);
-        glbStatus(`SURVIVOR MODEL: LOADING ${url}`, 'info');
-        let lastPct = -10;
-        gltfLoader.load(url, (gltf) => {
-          try {
-            survivorGlbSource = url;
-            const keeperSrc = staticCopyOf(gltf.scene);                       // (a second copy for the shopkeeper)
-            survivorRemoteSrc = staticCopyOf(gltf.scene);                     // (and one to copy for other players in a room)
-            setupSurvivorGLB(gltf.scene);
-            try { buildShopkeeper(keeperSrc); } catch (e) { console.warn('[SurvivorGLB] shopkeeper could not be set up', e); }
-            glbStatus('SURVIVOR MODEL: LOADED', 'ok', 5000);
-          } catch (e) { fail(`${url} loaded but could not be set up; keeping the built-in survivor`, e); }
-        }, (xhr) => {
-          if (xhr && xhr.total > 0) {
-            const pct = Math.floor(xhr.loaded / xhr.total * 100);
-            if (pct >= lastPct + 10 || pct === 100) { lastPct = pct; console.info(`[SurvivorGLB] ${url} ${pct}% (${(xhr.loaded / 1048576).toFixed(1)} / ${(xhr.total / 1048576).toFixed(1)} MB)`); }
-            glbStatus(`SURVIVOR MODEL: LOADING ${pct}%`, 'info');
-          } else if (xhr) glbStatus(`SURVIVOR MODEL: LOADING ${(xhr.loaded / 1048576).toFixed(1)} MB`, 'info');
-        }, (err) => {
-          if (i + 1 < urls.length) {
-            console.warn(`[SurvivorGLB] could not load ${url} (${errText(err)}); trying ${urls[i + 1]}`, err);
-            tryLoad(i + 1);
-          } else fail(`could not load ${urls.join(' or ')}; using the built-in survivor`, err);
-        });
-      };
-      tryLoad(0);
+      const url = `${SURVIVOR_GLB_URL}?v=${Date.now()}`;                     // cache-busting: never an old cached 404 or old .glb
+      const resolved = new URL(url, window.location.href).href;
+      console.info(`[SurvivorGLB] loading ${resolved} ...`);
+      glbStatus(`SURVIVOR MODEL: LOADING ${SURVIVOR_GLB_URL}`, 'info');
+      let lastPct = -10;
+      gltfLoader.load(url, (gltf) => {
+        survivorGlbSource = SURVIVOR_GLB_URL;
+        // what arrived: meshes, bones, size (measured on a plain copy, in the file's own units)
+        let meshes = 0, bones = 0; gltf.scene.traverse((o) => { if (o.isMesh) meshes++; if (o.isBone) bones++; });
+        const plain = staticCopyOf(gltf.scene);
+        const size = new THREE.Box3().setFromObject(plain).getSize(new THREE.Vector3());
+        const sizeTxt = `${size.x.toFixed(2)} x ${size.y.toFixed(2)} x ${size.z.toFixed(2)}`;
+        let keeperSrc = null;
+        try { keeperSrc = staticCopyOf(gltf.scene); survivorRemoteSrc = staticCopyOf(gltf.scene); }
+        catch (e) { glbError(`GLB COPY ERROR: ${errText(e)}`, e); }
+        let rigged = true;
+        try { setupSurvivorGLB(gltf.scene); }
+        catch (e) {
+          // the rigged setup failed: say exactly why, then show survivor.glb anyway (as a plain, unrigged mesh)
+          glbError(`GLB RIG ERROR: ${errText(e)}\n(survivor.glb is shown without its bones)\n${(e?.stack || '').split('\n').slice(0, 3).join('\n')}`, e);
+          rigged = false;
+          try { resetSurvivorSetup(); setupSurvivorGLB(staticCopyOf(plain)); }
+          catch (e2) { glbError(`GLB SETUP ERROR: ${errText(e2)}\nURL: ${resolved}\n${(e2?.stack || '').split('\n').slice(0, 3).join('\n')}`, e2); return; }
+        }
+        destroyPlaceholderSurvivor();
+        if (keeperSrc) { try { buildShopkeeper(keeperSrc); } catch (e) { console.warn('[SurvivorGLB] shopkeeper could not be set up', e); } }
+        const msg = `[GLB SUCCESS] survivor.glb: ${meshes} mesh${meshes === 1 ? '' : 'es'}, ${bones} bones, size ${sizeTxt}` +
+                    (rigged && survivorRig && survivorRig.local ? ' (rigged arms + head)' : bones ? ' (shown without bones)' : '');
+        console.info(msg);
+        glbStatus(msg, 'ok', 10000);
+      }, (xhr) => {
+        if (xhr && xhr.total > 0) {
+          const pct = Math.floor(xhr.loaded / xhr.total * 100);
+          if (pct >= lastPct + 10 || pct === 100) { lastPct = pct; console.info(`[SurvivorGLB] ${pct}% (${(xhr.loaded / 1048576).toFixed(1)} / ${(xhr.total / 1048576).toFixed(1)} MB)`); }
+          glbStatus(`SURVIVOR MODEL: LOADING ${pct}%`, 'info');
+        } else if (xhr) glbStatus(`SURVIVOR MODEL: LOADING ${(xhr.loaded / 1048576).toFixed(1)} MB`, 'info');
+      }, (err) => {
+        glbError(`GLB LOAD ERROR: ${errText(err)}\nURL: ${new URL('./survivor.glb', window.location.href).href}\n(fetched as ${resolved})`, err);
+      });
     }
     // ---------- tracked arms on the static model ----------
     // survivor.glb is one unrigged mesh, so its frozen arms are cut off at the shoulders and replaced by two arms that
