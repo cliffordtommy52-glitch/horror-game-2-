@@ -6290,6 +6290,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'FIX', date: '23/11/26', title: 'CLEAN ARMS ON THE RIGGED SURVIVOR',
+        text: "The model's glitchy arms are gone: smooth orange fur arms and your 3-fingered hands on its shoulders, for everyone." },
       { tag: 'FIX', date: '23/11/26', title: 'SURVIVOR.GLB ALWAYS LOADS (OR SAYS WHY)',
         text: 'Fresh download every time; a green banner when it loads, a red box with the exact error and URL if not.' },
       { tag: 'FIX', date: '23/11/26', title: 'RIGGED SURVIVOR: NO MORE BELLY SPIKES',
@@ -15945,15 +15947,13 @@
     // head, and stays inside the shoulders.)
     let survivorHeadPivot = null, survivorRemoteSrc = null;
     const SURVIVOR_NECK_PIVOT = new THREE.Vector3(0, 0.12, -0.05);
-    // ---------- the rigged survivor.glb (bones): arms and hands driven by your controllers, head by your headset ----------
-    // survivor.glb now comes with a skeleton. It's read on load (every bone name is logged), and turned into the rig the
-    // game drives: one body root, the head (with the jaw for talking) and, for each arm, three bones (upper arm,
-    // forearm, hand) solved with two-bone IK to your controllers every frame. NOTE on this particular rig (RigBake): it
-    // has no finger bones, and its bone names don't match the model: the chains named "UpLeg / Leg / Foot (/ ToeBase)"
-    // are the ones actually skinned to the monkey's arms and hands, the ones named "Arm / ForeArm / Hand" are skinned to
-    // bits of the belly and back, and "Head" only holds the top of the skull (the face and nose sit on the spine
-    // bones). So the arm chains are found by WHERE their bones are (out at the sides, running down to the hands),
-    // whatever they're called, and the head and jaw use the game's own neck / jaw weighting.
+    // ---------- the rigged survivor.glb (bones): the body and the head ----------
+    // survivor.glb comes with a skeleton (every bone name is logged on load). Its auto-rigged arms glitch and stretch
+    // when they move (the arms are sculpted fused to the sides of the body), so the model's own arms and hand nubs are
+    // removed on load: only its body and head are kept, on a rig the game drives (a body root, and the head with the jaw
+    // for talking, turned by your headset). The clean, zero-lag orange-fur arms and your 3-fingered hands are anchored
+    // to its shoulder sockets instead (buildSurvivorArms), for you and for other players alike. The orange-fur core
+    // below fills the openings in its sides where the sculpted arms were.
     let survivorRig = null;
     const RIG_PALM = new THREE.Vector3(0.034, 0.002, 0.003);          // where the model's hand bone sits, in your hand's grip frame
     const attrC = (a, i, c) => (c === 0 ? a.getX(i) : c === 1 ? a.getY(i) : c === 2 ? a.getZ(i) : a.getW(i));
@@ -16048,8 +16048,8 @@
       for (let t = 0; t < tris; t++) {
         const a = idx ? idx[t * 3] : t * 3, b = idx ? idx[t * 3 + 1] : t * 3 + 1, c = idx ? idx[t * 3 + 2] : t * 3 + 2;
         const na = isArm[a] + isArm[b] + isArm[c];
-        if (na === 0) keepAll.push(a, b, c);
-        else if (na === 3 && !past[a] && !past[b] && !past[c]) { keepAll.push(a, b, c); keepArms.push(a, b, c); }
+        if (na === 0) keepAll.push(a, b, c);                         // the body and head only: the model's own arms and hand nubs
+        else if (na === 3 && !past[a] && !past[b] && !past[c]) keepArms.push(a, b, c);   // (are removed: clean fur arms replace them)
       }
       const ix = (arr) => new THREE.BufferAttribute(n > 65535 ? new Uint32Array(arr) : new Uint16Array(arr), 1);
       const full = mk(ix(keepAll)), arms = mk(ix(keepArms));
@@ -16161,7 +16161,7 @@
       if (skinned) {
         let ok = false; try { ok = survivorRigFrom(skinned); } catch (e) { console.warn('[SurvivorGLB] could not read the skeleton', e); }
         if (ok) {
-          const inst = makeRigInstance(skinned.material, true);
+          const inst = makeRigInstance(skinned.material, false);
           inst.mesh.name = skinned.name; inst.mesh.position.copy(skinned.position); inst.mesh.quaternion.copy(skinned.quaternion); inst.mesh.scale.copy(skinned.scale);
           const parent = skinned.parent; parent.add(inst.mesh); parent.remove(skinned);
           survivorRig.local = inst;
@@ -16525,14 +16525,6 @@
         S.hand = mine;
         S.cuff = new THREE.Group(); armGroup.add(S.cuff);                 // the wrist band / chain / charm ride on the forearm
         survivorArms.sides[i] = S;
-        if (survivorRig && survivorRig.local) {
-          // rigged model: its own upper arm and forearm replace the orange tubes; round joints cover the cuts at the
-          // shoulder (orange fur) and the wrist (the forearm's grey-brown fur), where your 3-fingered hand joins it
-          S.upper.visible = S.fore.visible = S.elbow.visible = false;
-          const sc = SURVIVOR_GLB_HEIGHT / survivorRig.height * SURVIVOR_GLB_FIT;
-          S.shoulder.scale.setScalar(0.15 * sc / 0.066);
-          S.wrist.material = rigWristMat(); S.wrist.scale.setScalar(0.13 * sc / 0.041);
-        }
       });
     }
     function rigWristMat() { return rigWristMat.m || (rigWristMat.m = new THREE.MeshStandardMaterial({ map: furTex, color: 0x6d5e5a, roughness: 0.92 })); }
@@ -16548,29 +16540,6 @@
     function updateSurvivorArms() {
       armGroup.visible = survivorBodyGroup.visible && survivorArms.built;
       if (!armGroup.visible) return;
-      if (survivorRig && survivorRig.local) {
-        // the rigged arms: each controller's wrist pulls the arm on its side (by handedness); your 3-fingered hand is on
-        // the controller as before; the joints and the wrist charm follow the model's arm
-        const inst = survivorRig.local, vr = renderer.xr.isPresenting;
-        survivorBodyGroup.updateMatrixWorld(true);
-        for (let i = 0; i < 2; i++) {
-          const S = survivorArms.sides[i]; if (!S) continue;
-          const hd = controllers[i].userData.inputSource?.handedness;
-          const side = hd === 'left' ? 'L' : hd === 'right' ? 'R' : (i === 0 ? 'L' : 'R');
-          const live = vr && hands[i].tracked;
-          if (live) { hands[i].model.group.updateMatrixWorld(true); _svrW.copy(S.wristLocal).applyMatrix4(hands[i].model.group.matrixWorld); }
-          solveRigArm(inst, side, live ? _svrW : null, survivorBodyGroup.rotation.y);
-          const c = inst.cuffAt[side];
-          S.shoulder.position.copy(c.s);
-          S.wrist.visible = live; S.wrist.position.copy(c.w);
-          S.cuff.visible = live;
-          if (live) {
-            S.cuff.position.lerpVectors(c.e, c.w, 0.9);                                         // round the forearm, just above the hand
-            S.cuff.quaternion.setFromUnitVectors(_svrUp, _svrW.subVectors(c.w, c.e).normalize());
-          }
-        }
-        return;
-      }
       survivorBodyGroup.updateMatrixWorld(true);
       const vr = renderer.xr.isPresenting;
       const yaw = survivorBodyGroup.rotation.y, cy = Math.cos(yaw), sy = Math.sin(yaw);
@@ -16629,7 +16598,6 @@
     // never lag or drift off the arm. The charm's chain hooks onto the ring's lowest point and hangs under it.
     let CUFF_R = 0.043, CUFF_Y = -0.014, CHARM_WORLD = CHARM_SIZE * PLAYER_SCALE;
     function fitWristWear() {
-      if (survivorRig && survivorRig.local) { CUFF_R = (survivorRig.foreR + 0.01) * SURVIVOR_GLB_HEIGHT / survivorRig.height * SURVIVOR_GLB_FIT; CUFF_Y = 0; }   // the model's forearm
       wear.forEach((w, i) => {
         const S = survivorArms.sides[i]; if (!S || !S.cuff) return;
         const b = w.c.band;
@@ -17403,30 +17371,6 @@
     const _raS = new THREE.Vector3(), _raW = new THREE.Vector3(), _raE = new THREE.Vector3(), _raD = new THREE.Vector3(), _raP = new THREE.Vector3();
     const _rrW = new THREE.Vector3(), _rrBQ = new THREE.Quaternion(), _rrUp = new THREE.Vector3(0, 1, 0);
     function solveRemoteArms(r, s) {
-      if (r.rig) {
-        // the rigged model's own upper arms and forearms, pulled to their wrists, with their 3-fingered hands on the end
-        if (!r.joints) {
-          const sc = SURVIVOR_GLB_HEIGHT / survivorRig.height * SURVIVOR_GLB_FIT, g = new THREE.Group(); scene.add(g);
-          const ball = (rad, mat) => { const m = new THREE.Mesh(new THREE.SphereGeometry(rad, 14, 10), mat); m.castShadow = false; g.add(m); return m; };
-          r.joints = { g, sides: [0, 1].map(() => ({ shoulder: ball(0.15 * sc, remoteHandMats.arm), wrist: ball(0.13 * sc, rigWristMat()) })) };
-        }
-        r.joints.g.visible = true;
-        for (let k = 0; k < 2; k++) {
-          const paw = r.paws[k], side = k === 0 ? 'L' : 'R', J = r.joints.sides[k];
-          paw.mesh.visible = paw.root.visible;
-          paw.band.scale.setScalar(CUFF_R / (WRIST_RING_R * PLAYER_SCALE));        // the band sized to the model's forearm
-          let live = false;
-          if (paw.root.visible) {
-            paw.root.updateMatrixWorld(true);
-            _rrW.copy(SURVIVOR_WRIST).applyMatrix4(paw.root.matrixWorld);
-            live = true;
-          }
-          solveRigArm(r.rig, side, live ? _rrW : null, r.yaw);
-          const c = r.rig.cuffAt[side];
-          J.shoulder.position.copy(c.s); J.wrist.position.copy(c.w); J.wrist.visible = live;
-        }
-        return;
-      }
       const A = r.arms; if (!A) return;
       A.g.visible = !!r.glb;
       if (!r.glb) return;
@@ -17485,6 +17429,7 @@
         r.body.add(model);
         r.glb = model; r.head = inst.bones.head; r.rig = inst;
         if (r.fallback) r.fallback.visible = false;
+        if (!r.arms) r.arms = makeRemoteArms();                       // the same clean fur arms and 3-fingered hands as yours
         return;
       }
       const src = survivorRemoteSrc.clone(true);
