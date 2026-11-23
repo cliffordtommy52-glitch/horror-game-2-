@@ -6290,6 +6290,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'FIX', date: '23/11/26', title: 'NO SHOULDER GAPS, BANDS SIT ON THE FUR',
+        text: 'Bigger shoulder caps fill the gap behind each shoulder, and wrist bands and chains wrap outside the forearm.' },
       { tag: 'UPDATE', date: '23/11/26', title: 'HP BARS IN VR AND OVER PLAYERS',
         text: 'Your HP now shows at the bottom of your VR view (and on your wrist), and every player shows a live HP bar under their name.' },
       { tag: 'FIX', date: '23/11/26', title: 'SEALED SHOULDERS, THICKER ARMS',
@@ -16092,7 +16094,7 @@
         // hollow inside of the shell shows from any angle; the clean fur arms are seated inside them
         for (const sx of [1, -1]) {
           const cap = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 16), rigCoreMat());
-          cap.scale.set(0.15, 0.19, 0.17); cap.position.set(sx * 0.45, -0.06, -0.13);
+          cap.scale.set(0.2025, 0.2565, 0.2295); cap.position.set(sx * 0.42, -0.06, -0.17);   // 1.35x, back and in: fills the socket front, side and back
           cap.frustumCulled = false; cap.userData.rigCore = true; cap.userData.shoulderCap = true;
           mesh.add(cap);
         }
@@ -16611,7 +16613,8 @@
     // The band / chain wraps the end of the orange forearm itself (a ring 4.3 cm in radius round the 4 cm forearm, 1.4 cm
     // back from the wrist), parented to a cuff group that's placed with the arm segments in the same pass, so it can
     // never lag or drift off the arm. The charm's chain hooks onto the ring's lowest point and hangs under it.
-    let CUFF_R = 0.043, CUFF_Y = -0.014, CHARM_WORLD = CHARM_SIZE * PLAYER_SCALE;
+    // (the band's tube is ~0.21 of its ring radius thick: at 0.054 its inner edge sits just outside the 4.1 cm forearm fur)
+    let CUFF_R = 0.054, CUFF_Y = -0.014, CHARM_WORLD = CHARM_SIZE * PLAYER_SCALE;
     function fitWristWear() {
       wear.forEach((w, i) => {
         const S = survivorArms.sides[i]; if (!S || !S.cuff) return;
@@ -17368,7 +17371,7 @@
       root.add(mesh);
       mesh.updateMatrixWorld(true);
       mesh.bind(new THREE.Skeleton(hb.all));
-      const band = new THREE.Mesh(new THREE.TorusGeometry(WRIST_RING_R, 0.0045, 6, 20), remoteHandMats.palm); band.position.copy(SURVIVOR_WRIST); band.rotation.x = Math.PI / 2; band.visible = false; root.add(band);
+      const band = new THREE.Mesh(new THREE.TorusGeometry((0.0426 + 0.0045 * PLAYER_SCALE) / PLAYER_SCALE, 0.0045, 6, 20), remoteHandMats.palm); band.position.copy(SURVIVOR_WRIST); band.rotation.x = Math.PI / 2; band.visible = false; root.add(band);
       const charmHolder = new THREE.Group(); charmHolder.position.set(SURVIVOR_WRIST.x - WRIST_RING_R - 0.01, SURVIVOR_WRIST.y - 0.005, SURVIVOR_WRIST.z); root.add(charmHolder);
       root.traverse((o) => { if (o.isMesh) o.castShadow = false; });
       root.visible = false; scene.add(root);
