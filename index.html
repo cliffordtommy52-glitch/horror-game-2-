@@ -15664,6 +15664,7 @@
     // first person: the model's neck/collar (where its chin meets the chest, 52% of its height) sits just under the
     // headset, so its body is sized for the neck to be at your standing eye height (0.38) minus a 3 cm gap
     const SURVIVOR_NECK_FRAC = 0.52, SURVIVOR_NECK_GAP = 0.03;
+    const SURVIVOR_BODY_DROP = 0.06, SURVIVOR_BODY_BACK = 0.08;   // the torso sits 6 cm lower and 8 cm behind the headset
     const SURVIVOR_GLB_FIT = (SPAWN_HEAD_HEIGHT - SURVIVOR_NECK_GAP) / SURVIVOR_NECK_FRAC / SURVIVOR_GLB_HEIGHT;
     const SURVIVOR_GLB_EYE = { y: 0.765, z: 0.25 };   // where its eyes are: fraction of its height up, fraction of its depth forward of centre
     const survivorGlbGroup = new THREE.Group();       // dedicated group on the survivor rig (inside the body, turns with the torso)
@@ -15733,13 +15734,26 @@
       // its shoulder sockets (measured on the model: x ±0.50, y -0.02, z -0.17 of its own ±0.95 / ±0.80 / ±0.59 box),
       // carried through the same turn / scale / centring, into survivorAvatarRoot's space
       model.updateMatrix();
-      const sock = (sx) => new THREE.Vector3(sx * 0.50 * (size.x / 1.9), -0.02 * (size.y / 1.607), -0.17 * (size.z / 1.178)).add(new THREE.Vector3(0, 0, 0));
+      // (up at the collar now: x ±0.47, y +0.02 just under the neck cut, z -0.12)
+      const sock = (sx) => new THREE.Vector3(sx * 0.47 * (size.x / 1.9), 0.02 * (size.y / 1.607), -0.12 * (size.z / 1.178));
       for (const [i, sx] of [[0, 1], [1, -1]]) {                         // [0] = the left shoulder (-X once turned), [1] = the right
         // a point on the original model -> through model.matrix (half turn, k, centring) -> survivorGlbGroup's scale
         const pOrig = sock(sx), pRoot = pOrig.clone().applyMatrix4(model.matrix).multiplyScalar(SURVIVOR_GLB_FIT);
         survivorArms.sockets[i].copy(pRoot);
       }
-      survivorArms.reach = 0.83 * k * SURVIVOR_GLB_FIT;                   // shoulder to hand on the model
+      survivorArms.reach = 1.05 * k * SURVIVOR_GLB_FIT;                   // shoulder to hand: a full-length arm
+      // a solid dark fur collar cap over the neck cut, so looking down you never see into the hollow mesh. It's an
+      // ellipse a little inside the model's outline at that height (x ±0.58, z -0.35..+0.53 once turned), so from
+      // outside it stays hidden inside the head and shoulders
+      {
+        const u = k * SURVIVOR_GLB_FIT;
+        const cap = new THREE.Mesh(new THREE.CircleGeometry(1, 40), new THREE.MeshStandardMaterial({ map: furTex, color: 0x3b2a20, roughness: 0.95, side: THREE.DoubleSide }));
+        cap.rotation.x = -Math.PI / 2;
+        cap.scale.set(0.55 * u * (size.x / 1.9), 0.41 * u * (size.z / 1.178), 1);
+        cap.position.set(0, survivorNeckH - 0.004, 0.09 * u * (size.z / 1.178));
+        cap.castShadow = false; cap.name = 'survivorNeckCap';
+        survivorGlbGroup.parent.add(cap);
+      }
       const root = model;
       const mats = new Set();
       root.traverse((o) => {
@@ -15825,10 +15839,12 @@
     function buildSurvivorArms() {
       if (survivorArms.built) return;
       survivorArms.built = true;
-      const upperMat = new THREE.MeshStandardMaterial({ map: furTex, color: 0xba6d22, roughness: 0.92 });
-      const foreMat = new THREE.MeshStandardMaterial({ map: furTex, color: 0x7b6653, roughness: 0.92 });
-      const skinMat = new THREE.MeshStandardMaterial({ color: 0x574543, roughness: 0.75 });
-      const tipMat = new THREE.MeshStandardMaterial({ color: 0x3e3230, roughness: 0.7 });
+      // colours sampled from survivor.glb's texture: upper arm fur #ba6e24, forearm #655650, hand #534141
+      const upperMat = new THREE.MeshStandardMaterial({ map: furTex, color: 0xba6e24, roughness: 0.92 });
+      const foreMat = new THREE.MeshStandardMaterial({ map: furTex, color: 0x655650, roughness: 0.92 });
+      const skinMat = new THREE.MeshStandardMaterial({ color: 0x534141, roughness: 0.78 });
+      const knuckMat = new THREE.MeshStandardMaterial({ color: 0x463736, roughness: 0.8 });
+      const tipMat = new THREE.MeshStandardMaterial({ color: 0x3a2e2e, roughness: 0.65 });
       const seg = (r0, r1, mat) => { const m = new THREE.Mesh(new THREE.CylinderGeometry(r1, r0, 1, 14, 1), mat); m.castShadow = false; m.frustumCulled = false; armGroup.add(m); return m; };
       const ball = (r, mat) => { const m = new THREE.Mesh(new THREE.SphereGeometry(r, 14, 10), mat); m.castShadow = false; m.frustumCulled = false; armGroup.add(m); return m; };
       // the old controller hands (the first human hand and the earlier monkey hands) go completely
@@ -15837,8 +15853,8 @@
       hands.forEach((h, i) => {
         const S = {
           side: i === 0 ? -1 : 1,                                          // (updated every frame from the controller's handedness)
-          upper: seg(0.04, 0.033, upperMat), fore: seg(0.033, 0.025, foreMat),
-          shoulder: ball(0.044, upperMat), elbow: ball(0.034, foreMat), wrist: ball(0.026, foreMat),
+          upper: seg(0.056, 0.044, upperMat), fore: seg(0.044, 0.032, foreMat),
+          shoulder: ball(0.062, upperMat), elbow: ball(0.046, foreMat), wrist: ball(0.033, foreMat),
           wristLocal: new THREE.Vector3(0.035, 0.07, 0.002),
         };
         // the new hand, in the controller's grip frame (same frame the hand model used): palm, two fingers, thumb
@@ -15846,26 +15862,38 @@
         const add = (parent, geo, mat, x, y, z, sx = 1, sy = 1, sz = 1) => {
           const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.scale.set(sx, sy, sz); m.castShadow = false; m.userData.mat = mat; parent.add(m); mine.push(m); return m;
         };
-        add(g, new THREE.SphereGeometry(1, 16, 12), skinMat, 0.034, 0.012, 0, 0.022, 0.052, 0.044);           // palm pad
-        add(g, new THREE.SphereGeometry(1, 12, 10), foreMat, 0.042, 0.03, 0, 0.016, 0.042, 0.04);              // furry back of the hand
-        const fingers = [-0.017, 0.018].map((fz) => {
-          const j0 = new THREE.Group(); j0.position.set(0.034, -0.036, fz); g.add(j0);
-          const g0 = new THREE.CapsuleGeometry(0.013, 0.03, 4, 10); g0.translate(0, -0.026, 0); add(j0, g0, skinMat, 0, 0, 0);
+        // a dark charcoal-brown monkey hand: a thick rounded palm, a furry back, two heavy fingers with rounded
+        // knuckles and tips, and an opposable thumb. Grip closes the fingers; X (left) / A (right) closes the thumb.
+        add(g, new THREE.SphereGeometry(1, 18, 14), skinMat, 0.034, 0.01, 0, 0.024, 0.056, 0.048);             // palm
+        add(g, new THREE.SphereGeometry(1, 14, 10), foreMat, 0.044, 0.03, 0, 0.017, 0.046, 0.044);             // fur on the back of the hand
+        for (const fz of [-0.019, 0.02]) add(g, new THREE.SphereGeometry(0.016, 12, 10), knuckMat, 0.036, -0.036, fz);   // knuckles
+        const fingers = [-0.019, 0.02].map((fz) => {
+          const j0 = new THREE.Group(); j0.position.set(0.034, -0.038, fz); g.add(j0);
+          const g0 = new THREE.CapsuleGeometry(0.0145, 0.03, 5, 12); g0.translate(0, -0.026, 0); add(j0, g0, skinMat, 0, 0, 0);
           const j1 = new THREE.Group(); j1.position.set(0, -0.052, 0); j0.add(j1);
-          const g1 = new THREE.CapsuleGeometry(0.012, 0.022, 4, 10); g1.translate(0, -0.02, 0); add(j1, g1, skinMat, 0, 0, 0);
-          add(j1, new THREE.SphereGeometry(0.009, 8, 6), tipMat, -0.006, -0.036, 0);
+          add(j1, new THREE.SphereGeometry(0.0135, 10, 8), knuckMat, 0, 0, 0);                                   // middle knuckle
+          const g1 = new THREE.CapsuleGeometry(0.013, 0.022, 5, 12); g1.translate(0, -0.02, 0); add(j1, g1, skinMat, 0, 0, 0);
+          add(j1, new THREE.SphereGeometry(0.0115, 10, 8), tipMat, -0.004, -0.037, 0);                            // rounded tip
           return [j0, j1];
         });
-        const t0 = new THREE.Group(); t0.position.set(0.026, 0.02, -0.036); t0.rotation.set(-0.45, -0.3, 0); g.add(t0);
-        const tg0 = new THREE.CapsuleGeometry(0.0125, 0.024, 4, 10); tg0.rotateX(-Math.PI / 2); tg0.translate(0, 0, -0.02); add(t0, tg0, skinMat, 0, 0, 0);
+        const t0 = new THREE.Group(); t0.position.set(0.024, 0.02, -0.04); t0.rotation.set(-0.45, -0.3, 0); g.add(t0);
+        add(t0, new THREE.SphereGeometry(0.015, 10, 8), knuckMat, 0, 0, 0);                                      // thumb base
+        const tg0 = new THREE.CapsuleGeometry(0.0135, 0.024, 5, 12); tg0.rotateX(-Math.PI / 2); tg0.translate(0, 0, -0.02); add(t0, tg0, skinMat, 0, 0, 0);
         const t1 = new THREE.Group(); t1.position.set(0, 0, -0.04); t1.rotation.set(0, 0.2, 0); t0.add(t1);
-        const tg1 = new THREE.CapsuleGeometry(0.011, 0.016, 4, 10); tg1.rotateX(-Math.PI / 2); tg1.translate(0, 0, -0.016); add(t1, tg1, skinMat, 0, 0, 0);
-        let curl = 0, wire = null;
+        const tg1 = new THREE.CapsuleGeometry(0.012, 0.016, 5, 12); tg1.rotateX(-Math.PI / 2); tg1.translate(0, 0, -0.016); add(t1, tg1, skinMat, 0, 0, 0);
+        add(t1, new THREE.SphereGeometry(0.0105, 10, 8), tipMat, 0, 0, -0.032);                                   // thumb tip
+        let curl = 0, thumb = 0, wire = null;
         const basePose = h.model.pose, baseWire = h.model.setWire;
         h.model.pose = function (grip, trig, dt) {
           basePose.call(this, grip, trig, dt);
-          curl += (grip - curl) * Math.min(1, dt * 16);                      // Grip: the two fingers close, the thumb stays out
+          curl += (grip - curl) * Math.min(1, dt * 16);                      // Grip: the two fingers close
           for (const [j0, j1] of fingers) { j0.rotation.z = -(0.18 + curl * 1.5); j1.rotation.z = -(0.22 + curl * 1.75); }
+          // X on the left controller / A on the right (xr-standard buttons[4]): the thumb folds in over the palm
+          const b = controllers[i].userData.inputSource?.gamepad?.buttons?.[4];
+          const want = b ? (b.pressed ? 1 : b.touched ? 0.25 : 0) : 0;
+          thumb += (want - thumb) * Math.min(1, dt * 14);
+          t0.rotation.set(-0.45 + thumb * 0.25, -0.3 + thumb * 1.05, thumb * 0.15);
+          t1.rotation.set(0, 0.2 + thumb * 0.95, 0);
         };
         h.model.setWire = function (on) {
           baseWire.call(this, on);
@@ -15954,10 +15982,12 @@
         _sbHead.set(0, SPAWN_HEAD_HEIGHT + 0.07, 0); yaw = 0;                 // desktop: standing at the camp spawn, as before
       }
       // its neck/shoulders directly under the headset (in the air, swimming or crouching it moves with you)
-      const y = renderer.xr.isPresenting ? _sbHead.y - SURVIVOR_NECK_GAP - survivorNeckH : Math.max(0, survivorGroundY(_sbHead.x, _sbHead.z, _sbHead.y));
+      const y = renderer.xr.isPresenting ? _sbHead.y - SURVIVOR_NECK_GAP - survivorNeckH - SURVIVOR_BODY_DROP : Math.max(0, survivorGroundY(_sbHead.x, _sbHead.z, _sbHead.y));
       survivorBodyYaw = yaw; survivorBodyInit = true;
       // straight under the headset, turning on the spot about its own centre (never swung out in front of you)
-      survivorAvatarRoot.position.set(_sbHead.x, y, _sbHead.z);
+      // 8 cm behind the headset along your facing (its back is +Z), so looking down you see the front of the chest
+      const back = renderer.xr.isPresenting ? SURVIVOR_BODY_BACK : 0;
+      survivorAvatarRoot.position.set(_sbHead.x + Math.sin(survivorBodyYaw) * back, y, _sbHead.z + Math.cos(survivorBodyYaw) * back);
       survivorAvatarRoot.rotation.set(0, survivorBodyYaw, 0);
       updateSurvivorArms();
     }
