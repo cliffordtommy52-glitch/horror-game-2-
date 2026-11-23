@@ -15611,6 +15611,7 @@
     survivorGlbGroup.visible = false;
     avatarBody.add(survivorGlbGroup);
     let survivorGLBReady = false;
+    let survivorGlbSource = SURVIVOR_GLB_URL;         // which file actually loaded
     // a small status badge on the 2D HUD (and a toast in the headset)
     const glbBadge = document.createElement('div');
     glbBadge.id = 'survivor-glb-status';
@@ -15688,39 +15689,44 @@
       for (const o of avatarBody.children) if (o.isMesh) o.visible = false;
       survivorGlbGroup.visible = playerRole !== 'monster' && !titleActive;
       let tris = 0; root.traverse((o) => { if (o.isMesh && o.geometry) tris += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3; });
-      console.info(`[SurvivorGLB] loaded ${SURVIVOR_GLB_URL}: ${Math.round(tris).toLocaleString()} triangles, ${mats.size} material(s), normalised to ${SURVIVOR_GLB_HEIGHT} units, shown at ${worldH.toFixed(2)} world units`);
+      console.info(`[SurvivorGLB] loaded ${survivorGlbSource}: ${Math.round(tris).toLocaleString()} triangles, ${mats.size} material(s), normalised to ${SURVIVOR_GLB_HEIGHT} units, shown at ${worldH.toFixed(2)} world units`);
     }
     {
-      const failMsg = 'SURVIVOR MODEL: FAILED (Run local HTTP server, do not open via file://)';
-      const fail = (why, err, badge = failMsg) => {
+      // the real reason goes on the badge (err.message), e.g. a 404, "Failed to fetch" (file:// / CORS) or a parse error
+      const errText = (err) => err?.message || String(err);
+      const fail = (why, err) => {
         console.error(`[SurvivorGLB] ${why}`, err || '');
-        glbStatus(badge, 'err', 15000);
-        showToast('SURVIVOR MODEL FAILED', 'Using the built-in survivor');
+        glbStatus(`SURVIVOR MODEL: FAILED (${errText(err)})`, 'err', 15000);
+        showToast('SURVIVOR MODEL FAILED', errText(err).slice(0, 48));
       };
-      if (location.protocol === 'file:') {
-        // browsers block loading a .glb from a page opened via file:// (CORS); say so straight away
-        fail(`this page was opened via file://, so the browser blocks ${SURVIVOR_GLB_URL}. Serve the folder over http (e.g. "npx serve" or "python -m http.server") and open http://localhost:...`);
-      } else {
-        console.info(`[SurvivorGLB] loading ${SURVIVOR_GLB_URL} ...`);
-        glbStatus('SURVIVOR MODEL: LOADING...', 'info');
+      // try ./survivor.glb first, then fall back to ./result_Ub5XHK.glb if it isn't found
+      const urls = [SURVIVOR_GLB_URL, './result_Ub5XHK.glb'];
+      const gltfLoader = new GLTFLoader();
+      const tryLoad = (i) => {
+        const url = urls[i];
+        console.info(`[SurvivorGLB] loading ${url} ...`);
+        glbStatus(`SURVIVOR MODEL: LOADING ${url}`, 'info');
         let lastPct = -10;
-        const gltfLoader = new GLTFLoader();
-        gltfLoader.load(SURVIVOR_GLB_URL, (gltf) => {
+        gltfLoader.load(url, (gltf) => {
           try {
+            survivorGlbSource = url;
             setupSurvivorGLB(gltf.scene);
             glbStatus('SURVIVOR MODEL: LOADED', 'ok', 5000);
-          } catch (e) { fail('the model loaded but could not be set up; keeping the built-in survivor', e, 'SURVIVOR MODEL: FAILED (model could not be set up - see console)'); }
+          } catch (e) { fail(`${url} loaded but could not be set up; keeping the built-in survivor`, e); }
         }, (xhr) => {
           if (xhr && xhr.total > 0) {
             const pct = Math.floor(xhr.loaded / xhr.total * 100);
-            if (pct >= lastPct + 10 || pct === 100) { lastPct = pct; console.info(`[SurvivorGLB] ${pct}% (${(xhr.loaded / 1048576).toFixed(1)} / ${(xhr.total / 1048576).toFixed(1)} MB)`); }
+            if (pct >= lastPct + 10 || pct === 100) { lastPct = pct; console.info(`[SurvivorGLB] ${url} ${pct}% (${(xhr.loaded / 1048576).toFixed(1)} / ${(xhr.total / 1048576).toFixed(1)} MB)`); }
             glbStatus(`SURVIVOR MODEL: LOADING ${pct}%`, 'info');
           } else if (xhr) glbStatus(`SURVIVOR MODEL: LOADING ${(xhr.loaded / 1048576).toFixed(1)} MB`, 'info');
         }, (err) => {
-          const status = err && err.target && err.target.status;
-          fail(`could not load ${SURVIVOR_GLB_URL}${status ? ` (HTTP ${status}${status === 404 ? ': put the .glb in the same folder as this page, with exactly this name' : ''})` : ''}; using the built-in survivor`, err);
+          if (i + 1 < urls.length) {
+            console.warn(`[SurvivorGLB] could not load ${url} (${errText(err)}); trying ${urls[i + 1]}`, err);
+            tryLoad(i + 1);
+          } else fail(`could not load ${urls.join(' or ')}; using the built-in survivor`, err);
         });
-      }
+      };
+      tryLoad(0);
     }
     // role switching: SURVIVOR shows the model, MONSTER hides it (the monster model takes over)
     function updateSurvivorGLB() {
