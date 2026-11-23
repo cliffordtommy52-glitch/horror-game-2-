@@ -140,6 +140,7 @@
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
     import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    import { joinRoom as trysteroJoinRoom, selfId as trysteroSelfId } from 'https://esm.sh/trystero@0.21.6/torrent';   // serverless WebRTC multiplayer (BitTorrent trackers)
 
     // ---------- text never runs off a canvas (signs, screens, posters, menus, HUD prompts) ----------
     // Every fillText / strokeText on a 2D canvas is checked against the canvas edges with an inner margin
@@ -6289,6 +6290,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'UPDATE', date: '23/11/26', title: 'SHARED AI MONSTER, SHARED QUESTS & VOICE CHAT',
+        text: 'In a room everyone sees the same AI monster, quests and carried items are shared, and proximity voice chat (menu).' },
       { tag: 'UPDATE', date: '23/11/26', title: 'MULTIPLAYER, VOLUME SLIDERS & CAMP SPEED',
         text: 'Waiting room computer: public / private rooms and your name. Human monsters, SFX and music volume, smoother camp.' },
       { tag: 'UPDATE', date: '23/11/26', title: 'YOUR HEAD MOVES WITH YOU',
@@ -9079,12 +9082,14 @@
         const w = (LW - 36 - 16 - 10) / 2, x = 36 + k * (w + 10), y = 322, h = 84;
         drawButton(g, x, y, w, h, label, { on: playerRole === id, hover: uiButton(p, 'role:' + id, x, y, w, h), size: 26 });
       });
-      if (inMap) drawButton(g, 36, 446, LW - 52, 72, 'BACK TO WAITING ROOM', { hover: uiButton(p, 'room', 36, 446, LW - 52, 72), size: 22 });
-      const cy = inMap ? 538 : 446;
-      drawButton(g, 36, cy, LW - 52, 80, 'CLOSE', { hover: uiButton(p, 'close', 36, cy, LW - 52, 80), size: 28 });
+      // voice chat (in a multiplayer room): your microphone on or off
+      drawButton(g, 36, 430, LW - 52, 64, `VOICE CHAT: ${voiceOn() ? 'ON' : 'OFF'}`, { on: voiceOn(), hover: uiButton(p, 'voice', 36, 430, LW - 52, 64), size: 22 });
+      if (inMap) drawButton(g, 36, 508, LW - 52, 64, 'BACK TO WAITING ROOM', { hover: uiButton(p, 'room', 36, 508, LW - 52, 64), size: 22 });
+      const cy = inMap ? 586 : 508;
+      drawButton(g, 36, cy, LW - 52, 70, 'CLOSE', { hover: uiButton(p, 'close', 36, cy, LW - 52, 70), size: 28 });
       // sound: two volume sliders (also on the waiting room computer), saved on this device
-      drawVolSlider(g, p, 36, 668, LW - 52, 'NOISES / SFX VOLUME', 'sfx');
-      drawVolSlider(g, p, 36, 748, LW - 52, 'MUSIC VOLUME', 'music');
+      drawVolSlider(g, p, 36, 692, LW - 52, 'NOISES / SFX VOLUME', 'sfx');
+      drawVolSlider(g, p, 36, 764, LW - 52, 'MUSIC VOLUME', 'music');
       // the divider
       g.fillStyle = 'rgba(216,200,160,0.25)'; g.fillRect(LW, 140, 2, H - 210);
       // right column: objectives checklist + live overhead map (hidden as MONSTER, as before)
@@ -9108,6 +9113,7 @@
       else if (id.startsWith('turn:')) { turnMode = id.slice(5); snapReady = true; }
       else if (id.startsWith('role:')) setRole(id.slice(5));
       else if (id.startsWith('vol:')) { volClick(id); return; }
+      else if (id === 'voice') setVoice(!voiceOn());
       else if (id === 'room') { goTo('waiting'); setMenu(false); return; }
       else if (id === 'close') { setMenu(false); return; }
       redrawPanel(menuPanel);
@@ -12867,19 +12873,25 @@
       const nav = NAV[ai.map];
       const live = !ai.preview && ai.map === currentMap;
       const ph = live && renderer.xr.isPresenting && locomotionReady && !caught ? headWorld(_ph) : null;
+      let tgt = mpAiTarget(ph);                               // who it's after: you, or (in a room) another survivor
       // running makes noise
       if (ph && (runNoiseT -= dt) <= 0 && Math.hypot(rigVelocity.x, rigVelocity.z) > 2.0) { runNoiseT = 0.7; aiNoise(ph.clone(), 9); }
       // eyes
       if ((ai.senseT -= dt) <= 0 && ai.state !== 'catch' && ai.state !== 'stunned') {
         ai.senseT = 0.12;
         const seen = canSee(ph), lit = !seen && ph && litByFlashlight(ph);
-        if (seen || lit) {
+        // in a multiplayer room the monster's eyes check every survivor on its map, not just you
+        let seenHead = seen || lit ? ph : null;
+        if (seenHead) ai.targetPeer = null;
+        else { const rs = mpRemoteSighting(); if (rs) { seenHead = rs.head; ai.targetPeer = rs.id; } }
+        if (seenHead) {
           // first sight (or caught in your torch beam): it stops dead at the edge of the light, stares, then charges
           if (ai.state !== 'chase' && ai.state !== 'stare') { ai.state = 'stare'; ai.stareT = 1.1 + Math.random() * 0.8; ai.slash = null; ai.path = []; aiAudio.snarl(); }
-          if (ai.seenAt) { ai.seenVel = (ai.seenVel || new THREE.Vector3()).lerp(_aiTo.set((ph.x - ai.lastSeen.x) / 0.12, 0, (ph.z - ai.lastSeen.z) / 0.12), 0.5); }
+          if (ai.seenAt) { ai.seenVel = (ai.seenVel || new THREE.Vector3()).lerp(_aiTo.set((seenHead.x - ai.lastSeen.x) / 0.12, 0, (seenHead.z - ai.lastSeen.z) / 0.12), 0.5); }
           ai.seenAt = true;
-          ai.lastSeen.copy(ph); ai.lostT = 0;
+          ai.lastSeen.copy(seenHead); ai.lostT = 0;
         } else if (ai.state === 'chase') ai.lostT += 0.12;
+        tgt = mpAiTarget(ph);
       }
       let moving = false;
       if (ai.slash) {                                          // mid-swing: stand and strike
@@ -12903,7 +12915,7 @@
         }
       } else if (ai.state === 'stare') {
         ai.speed = 0;
-        if (ph) { const want = Math.atan2(ph.x - ai.pos.x, ph.z - ai.pos.z); let d = want - ai.heading; d = Math.atan2(Math.sin(d), Math.cos(d)); ai.heading += THREE.MathUtils.clamp(d, -dt * 3, dt * 3); }
+        if (tgt) { const want = Math.atan2(tgt.x - ai.pos.x, tgt.z - ai.pos.z); let d = want - ai.heading; d = Math.atan2(Math.sin(d), Math.cos(d)); ai.heading += THREE.MathUtils.clamp(d, -dt * 3, dt * 3); }
         if ((ai.stareT -= dt) <= 0) { ai.state = 'chase'; ai.chaseT = 0; ai.pathT = 0; gameAudio.growl(); }
       } else if (ai.state === 'chase') {
         ai.chaseT += dt;
@@ -12912,7 +12924,7 @@
           ai.seenAt = false;
           goToward(ai.lastSeen, 'search');
         } else {
-          const target = ph && canSeeCached() ? ph : ai.lastSeen;
+          const target = tgt && canSeeCached() ? tgt : ai.lastSeen;
           if ((ai.pathT -= dt) <= 0) {
             ai.pathT = 0.35;
             if (segmentWalkable(nav, ai.pos, target)) ai.path = [new THREE.Vector3(target.x, groundY(ai.map, target.x, target.z), target.z)];
@@ -12920,9 +12932,9 @@
           }
           moveAlongPath(dt, Math.min(AI_SPEED.chaseMax, AI_SPEED.chase + ai.chaseT * 0.03));
           moving = true;
-          if (ph) {
-            const dh = Math.hypot(ph.x - ai.pos.x, ph.z - ai.pos.z), dy = ph.y - (ai.pos.y + AI_HEAD_H);
-            if (dh < AI_CATCH && Math.abs(dy) < 0.9) beginCatch();
+          if (tgt) {
+            const dh = Math.hypot(tgt.x - ai.pos.x, tgt.z - ai.pos.z), dy = tgt.y - (ai.pos.y + AI_HEAD_H);
+            if (dh < AI_CATCH && Math.abs(dy) < 0.9) { if (ai.targetPeer) mpAiCatchRemote(ai.targetPeer); else beginCatch(); }
           }
         }
       } else {
@@ -12977,9 +12989,9 @@
       if (Math.floor(ai.stride) !== Math.floor(prevStride) && live) aiAudio.step(aiSurface(), ai.state === 'chase');   // a heavy knuckle-plant (3D)
       // looking: at you when chasing, sweeping when stopped, ahead when walking
       let wantYaw = 0, wantPitch = 0.05;
-      if ((ai.state === 'chase' || ai.state === 'stare') && ph) {
-        let d = Math.atan2(ph.x - ai.pos.x, ph.z - ai.pos.z) - ai.heading; wantYaw = Math.atan2(Math.sin(d), Math.cos(d));
-        wantPitch = -Math.atan2(ph.y - (ai.pos.y + AI_HEAD_H), Math.hypot(ph.x - ai.pos.x, ph.z - ai.pos.z));
+      if ((ai.state === 'chase' || ai.state === 'stare') && tgt) {
+        let d = Math.atan2(tgt.x - ai.pos.x, tgt.z - ai.pos.z) - ai.heading; wantYaw = Math.atan2(Math.sin(d), Math.cos(d));
+        wantPitch = -Math.atan2(tgt.y - (ai.pos.y + AI_HEAD_H), Math.hypot(tgt.x - ai.pos.x, tgt.z - ai.pos.z));
       } else if (ai.state === 'look') wantYaw = Math.sin(performance.now() * 0.0011) * 1.1;
       else if (ai.state === 'catch' && caught) { wantPitch = 0.2; }
       else if (ai.state === 'stunned') { wantPitch = 0.5; wantYaw = Math.sin(performance.now() * 0.02) * 0.25; }
@@ -15940,13 +15952,19 @@
         const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
         const cut = 0.17 - 0.22 * z;                                   // neck line: low at the face, high at the back
         const w = ss(cut - 0.07, cut + 0.07, y) * (1 - ss(0.3, 0.42, Math.abs(x)));
-        si[i * 4] = 0; si[i * 4 + 1] = 1; sw[i * 4] = 1 - w; sw[i * 4 + 1] = w;
+        // the jaw: the chin and mouth under the big nose (in front of the neck, below the nose, not the nose itself)
+        const wj = ss(0.15, 0.23, z) * (1 - ss(0.17, 0.23, y)) * ss(0.02, 0.07, y) * (1 - ss(0.12, 0.19, Math.abs(x))) * (1 - ss(0.36, 0.43, z));
+        si[i * 4] = 0; si[i * 4 + 1] = 1; si[i * 4 + 2] = 2;
+        sw[i * 4] = 1 - w; sw[i * 4 + 1] = w * (1 - wj); sw[i * 4 + 2] = w * wj;
       }
       g.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(si, 4));
       g.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
       const rootBone = new THREE.Bone(); rootBone.name = 'survivorBodyRoot';
       const head = new THREE.Bone(); head.name = 'survivorHeadPivot';
       head.position.copy(SURVIVOR_NECK_PIVOT); rootBone.add(head);
+      const jaw = new THREE.Bone(); jaw.name = 'survivorJaw';                 // hinged at the back of the jaw: rotating it drops the chin
+      jaw.position.set(0, 0.2, 0.12).sub(SURVIVOR_NECK_PIVOT); head.add(jaw);
+      head.userData.jaw = jaw;
       const sm = new THREE.SkinnedMesh(g, mesh.material);
       sm.name = mesh.name; sm.position.copy(mesh.position); sm.quaternion.copy(mesh.quaternion); sm.scale.copy(mesh.scale);
       sm.add(rootBone);
@@ -15954,7 +15972,7 @@
       parent.remove(mesh); parent.add(sm);
       parent.children.splice(parent.children.indexOf(sm), 1); parent.children.splice(idx, 0, sm);
       sm.updateMatrixWorld(true);
-      sm.bind(new THREE.Skeleton([rootBone, head]));
+      sm.bind(new THREE.Skeleton([rootBone, head, jaw]));
       return head;
     }
     // every frame: your headset's turn, nod and tilt relative to the way the body faces, within natural neck limits
@@ -15976,6 +15994,8 @@
       hp.parent.updateWorldMatrix(true, false);
       hp.parent.getWorldQuaternion(_hpPar);
       hp.quaternion.copy(_hpPar).invert().multiply(_hpW).multiply(_hpPar);
+      // your mouth opens and closes with your voice (voice chat), seen on the Monster POV monitor
+      if (hp.userData.jaw) hp.userData.jaw.rotation.x = Math.min(1, Math.max(0, localMouthOpen())) * 0.45;
       hp.updateMatrixWorld(true);
     }
     function setupSurvivorGLB(model) {
@@ -16431,7 +16451,7 @@
     // between the counter and the wall under the shop board and facing into the room. It breathes, sways a little and
     // turns to keep an eye on you while you're in the room.
     let shopkeeper = null;
-    const KEEPER_H = 0.7;
+    const KEEPER_H = 0.7, KEEPER_STOOL = 0.12;   // its height, and the stool it stands on
     function buildShopkeeper(src) {
       src.rotation.set(0, Math.PI / 2, 0);                                   // the model faces +Z: turn it to face +X, into the room
       src.position.set(0, 0, 0); src.scale.setScalar(1);
@@ -16450,10 +16470,25 @@
       });
       const breathe = new THREE.Group(); breathe.add(src);
       const root = new THREE.Group(); root.name = 'shopkeeper'; root.add(breathe);
-      // behind the counter: its back just off the west wall, its belly at the counter's back edge
+      // behind the counter: its back just off the west wall, its belly at the counter's back edge, standing on a low
+      // wooden stool on the floor so its chest and head show over the counter top
       const depth = box.getSize(new THREE.Vector3()).x;
-      root.position.set(WAIT_ROOM.x - WAIT_ROOM.w / 2 + 0.03 + depth / 2, 0, SB.z);
+      const KX = WAIT_ROOM.x - WAIT_ROOM.w / 2 + 0.03 + depth / 2;
+      const stoolMat = new THREE.MeshStandardMaterial({ map: woodTex, color: 0x8a6440, roughness: 0.75 });
+      const sb = makeBatch();
+      sb.add(new THREE.CylinderGeometry(0.14, 0.14, 0.03, 20), stoolMat, KX, KEEPER_STOOL - 0.015, SB.z);       // seat
+      for (let k = 0; k < 4; k++) {
+        const a = (k / 4) * Math.PI * 2 + Math.PI / 4;
+        sb.add(new THREE.CylinderGeometry(0.012, 0.015, KEEPER_STOOL - 0.03, 8), stoolMat, KX + Math.cos(a) * 0.1, (KEEPER_STOOL - 0.03) / 2, SB.z + Math.sin(a) * 0.1, Math.sin(a) * 0.12, 0, -Math.cos(a) * 0.12);
+      }
+      sb.add(new THREE.TorusGeometry(0.1, 0.006, 6, 20), stoolMat, KX, KEEPER_STOOL * 0.4, SB.z, Math.PI / 2, 0, 0);   // foot ring
+      sb.build(scene);
+      root.position.set(KX, KEEPER_STOOL, SB.z);
       scene.add(root);
+      // grounded exactly: its lowest point sits on the stool seat, however the model is built
+      root.updateMatrixWorld(true);
+      const fb = new THREE.Box3().setFromObject(root);
+      if (isFinite(fb.min.y)) src.position.y += KEEPER_STOOL - fb.min.y;
       shopkeeper = { root, breathe, t: Math.random() * 10, yaw: 0 };
     }
     const _skCam = new THREE.Vector3();
@@ -16661,8 +16696,9 @@
     //  MULTIPLAYER (waiting-room computer, serverless WebRTC), PvP machete hits, SFX / MUSIC VOLUME, CAMP PERF
     //  - The computer on the desk in the waiting room: PUBLIC ROOM / PRIVATE ROOM (4-letter code) / NAME / SOUND tabs,
     //    clicked with the VR pointer + Trigger or the mouse; an on-screen keyboard, and the real keyboard on the desktop.
-    //  - Networking is Trystero (WebRTC peer-to-peer, matched over public BitTorrent trackers), loaded from a CDN only
-    //    when you first join a room, so the game works on GitHub Pages with no server and runs fine offline.
+    //  - Networking is Trystero (WebRTC peer-to-peer, matched over public BitTorrent trackers), imported from the esm.sh
+    //    CDN at the top of this module, so it works on GitHub Pages with no server. Two actions: 'pose' (your body,
+    //    15 times a second) and 'event' (machete damage, quest progress, shotgun stuns).
     //  - Every player in the room on the same map is drawn with a floating nametag: survivors as the proboscis monkey
     //    (survivor.glb, its head turning with theirs) with their paws, finger curls and wrist charm; monsters as the
     //    masked monster with the machete in their hand.
@@ -16744,7 +16780,7 @@
     // is a human monster on this map right now? (then the AI monster stands down)
     function mpHumanMonsterHere(map) {
       const now = performance.now();
-      for (const r of netPeers().values()) if (r.st && r.st.r === 'm' && r.st.m === map && now - r.seen < 4000) return true;
+      for (const r of netPeers().values()) if (r.st && r.st.r === 'm' && r.st.m !== 'title' && now - r.seen < 4000) return true;   // anywhere in the room
       return false;
     }
     function playerName() {
@@ -16926,17 +16962,15 @@
     }, true);
     pcRedraw.ready = true; pcRedraw();
 
-    // ---------- Trystero (loaded on demand) ----------
-    const TRYSTERO_URLS = ['https://esm.run/trystero@0.21.6/torrent', 'https://esm.sh/trystero@0.21.6/torrent', 'https://cdn.jsdelivr.net/npm/trystero@0.21.6/+esm'];
-    const NET_APP = 'grimape-vr-horror-2026', NET_MAX = 8;
+    // ---------- Trystero (imported at the top of the module from esm.sh) ----------
+    const NET_APP = 'grimape-vr-horror-v1', NET_MAX = 8;
     async function netLib() {
       const N = netState();
-      if (N.lib) return N.lib;
-      for (const u of TRYSTERO_URLS) {
-        try { const m = await import(/* @vite-ignore */ u); if (m && typeof m.joinRoom === 'function') { N.lib = m; return m; } }
-        catch (e) { console.warn('[Net] could not load', u, e); }
+      if (!N.lib) {
+        if (typeof trysteroJoinRoom !== 'function') throw new Error('Trystero is not available');
+        N.lib = { joinRoom: trysteroJoinRoom };
       }
-      throw new Error('the network library could not be loaded');
+      return N.lib;
     }
     async function netJoin(kind, code = '') {
       const N = netState();
@@ -16945,20 +16979,32 @@
       N.joining = 1; N.status = 'CONNECTING...'; pcRedraw();
       let lib;
       try { lib = await netLib(); }
-      catch (e) { N.joining = 0; N.status = 'OFFLINE: NETWORK LIBRARY BLOCKED'; pcUI.note = 'Could not reach the CDN (check your connection).'; pcRedraw(); return; }
+      catch (e) { N.joining = 0; N.status = 'OFFLINE: NETWORK LIBRARY MISSING'; pcUI.note = 'Trystero did not load.'; pcRedraw(); return; }
       try {
         if (kind === 'public' && !N.pubKeep) N.pubN = 1;
         N.pubKeep = false;
-        const roomId = kind === 'public' ? `public-${N.pubN}` : `private-${code}`;
+        code = String(code).toUpperCase();
+        const roomId = kind === 'public' ? `public-lobby-${N.pubN}` : 'private-' + code;
         const room = lib.joinRoom({ appId: NET_APP }, roomId);
-        const [sendState, getState] = room.makeAction('state');
-        const [sendHit, getHit] = room.makeAction('hit');
-        N.room = room; N.kind = kind; N.code = code; N.roomId = roomId; N.send = sendState; N.sendHit = sendHit;
+        const [sendPose, getPose] = room.makeAction('pose');
+        const [sendEvent, getEvent] = room.makeAction('event');
+        const [sendAI, getAI] = room.makeAction('ai');
+        N.room = room; N.kind = kind; N.code = code; N.roomId = roomId; N.send = sendPose; N.sendEvent = sendEvent; N.sendAI = sendAI;
+        getAI((d, id) => netOnAI(id, d));
+        room.onPeerStream((stream, id) => voiceAttach(id, stream));
+        if (voice.stream) { try { room.addStream(voice.stream); } catch (e) { console.warn('[Voice] addStream', e); } }
         N.status = kind === 'public' ? `PUBLIC ROOM ${N.pubN}` : `PRIVATE ROOM ${code}`;
-        room.onPeerJoin((id) => { netSendState(true, id); pcRedraw(); showToast('A PLAYER JOINED', N.status); });
-        room.onPeerLeave((id) => { const r = netPeers().get(id); if (r) { if (r.st) showToast(`${r.st.n} LEFT`, N.status); removeRemote(r); netPeers().delete(id); } pcRedraw(); });
-        getState((d, id) => netOnState(id, d));
-        getHit((d, id) => netOnHit(id, d));
+        room.onPeerJoin((id) => {
+          netSendState(true, id); netSendQuest(null, id); pcRedraw(); showToast('A PLAYER JOINED', N.status);
+          if (voice.stream) { try { room.addStream(voice.stream, id); } catch (e) { } }       // they hear you too
+        });
+        room.onPeerLeave((id) => {
+          const r = netPeers().get(id); if (r) { if (r.st) showToast(`${r.st.n} LEFT`, N.status); removeRemote(r); netPeers().delete(id); }
+          voiceDetach(id); N.aiFrom && N.aiFrom.delete(id);
+          pcRedraw();
+        });
+        getPose((d, id) => netOnState(id, d));
+        getEvent((d, id) => netOnEvent(id, d));
         showToast(kind === 'public' ? 'JOINED THE PUBLIC ROOM' : `JOINED ROOM ${code}`, 'Waiting for other players...');
         // a full public room: move on to the next one
         if (kind === 'public') setTimeout(() => {
@@ -16973,7 +17019,9 @@
     function netLeave(quiet) {
       const N = netState();
       if (N.room) { try { N.room.leave(); } catch (e) { } if (!quiet) showToast('LEFT THE ROOM', ''); }
-      N.room = null; N.send = N.sendHit = null; N.kind = null; N.status = 'OFFLINE';
+      N.room = null; N.send = N.sendEvent = N.sendAI = null; N.kind = null; N.status = 'OFFLINE'; N.questSent = {};
+      for (const id of [...voice.peers.keys()]) voiceDetach(id);
+      if (N.aiFrom) N.aiFrom.clear(); N.aiHold = null; N.aiCatchFrom = null;
       for (const r of netPeers().values()) removeRemote(r);
       netPeers().clear();
       pcRedraw();
@@ -17005,6 +17053,7 @@
         y: r3(playerRole === 'monster' ? monsterYaw : survivorBodyYaw),
         L: vr ? handPacket('left') : null, R: vr ? handPacket('right') : null,
         b: save.equipped.band || 'none', c: save.equipped.charm || 'none', hp: Math.round(survival.hp),
+        mo: r3(mouthOpenness()), st: N.stunT > 0 ? 1 : 0, it: heldItemsPacket(), hid: tentHide.inside && !tentHide.spotted ? 1 : 0,
       };
       try { target ? N.send(d, target) : N.send(d); } catch (e) { }
     }
@@ -17012,23 +17061,58 @@
     // ---------- remote players ----------
     const _rbE = new THREE.Euler(0, 0, 0, 'YXZ'), _rQ = new THREE.Quaternion(), _rQ2 = new THREE.Quaternion(), _rQ3 = new THREE.Quaternion(), _rV = new THREE.Vector3();
     const remoteHandMats = { palm: new THREE.MeshStandardMaterial({ color: 0x3a302d, roughness: 0.6 }), arm: new THREE.MeshStandardMaterial({ map: furTex, color: 0xc96a2b, roughness: 0.92 }) };
+    // the same hand you have: the smooth 3-fingered dark charcoal-brown skinned paw (makeSurvivorHandMesh), in the
+    // controller's grip frame and at your hand's size, left one mirrored; with the wrist band / chain and charm
+    function remoteSkinMat() {
+      if (!remoteSkinMat.m || (!remoteSkinMat.real && survivorGlbMap)) {
+        remoteSkinMat.real = !!survivorGlbMap;
+        const m = new THREE.MeshStandardMaterial({ color: 0xc8a898, map: survivorSkinTexture(), roughness: 0.6, metalness: 0.02 });
+        if (remoteSkinMat.m) remoteSkinMat.m.copy(m); else remoteSkinMat.m = m;
+      }
+      return remoteSkinMat.m;
+    }
     function makeRemotePaw(left) {
-      // a light copy of the survivor's paw (oval palm, two fingers, a thumb, a stub of orange forearm), in the same
-      // grip frame as the real one: fingers -Y, wrist +Y, thumb -Z, back of the hand +X
       const root = new THREE.Group(); root.scale.set(left ? -PLAYER_SCALE : PLAYER_SCALE, PLAYER_SCALE, PLAYER_SCALE);
-      const paw = new THREE.Group(); paw.scale.setScalar(SURVIVOR_HAND_SCALE); paw.position.copy(SURVIVOR_WRIST).multiplyScalar(1 - SURVIVOR_HAND_SCALE); root.add(paw);
-      const palm = new THREE.Mesh(new THREE.SphereGeometry(1, 14, 10), remoteHandMats.palm); palm.scale.set(0.014, 0.034, 0.032); palm.position.set(0.034, 0.018, 0.003); paw.add(palm);
-      const fingerGeo = new THREE.CapsuleGeometry(0.0118, 0.036, 4, 10); fingerGeo.translate(0, -0.03, 0);
-      const fingers = [0.018, -0.0115].map((fz) => { const j = new THREE.Group(); j.position.set(0.034, -0.004, fz); j.add(new THREE.Mesh(fingerGeo, remoteHandMats.palm)); paw.add(j); return j; });
-      const thumb = new THREE.Group(); thumb.position.set(0.034, 0.022, -0.02); paw.add(thumb);
-      const tg = new THREE.CapsuleGeometry(0.0105, 0.026, 4, 10); tg.translate(0, -0.02, 0);
-      const tm = new THREE.Mesh(tg, remoteHandMats.palm); tm.rotation.x = -0.9; thumb.add(tm);
-      const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.032, 0.14, 12), remoteHandMats.arm); arm.position.set(SURVIVOR_WRIST.x, SURVIVOR_WRIST.y + 0.07, SURVIVOR_WRIST.z); root.add(arm);
+      const { mesh, bones: hb } = makeSurvivorHandMesh(remoteSkinMat());
+      root.add(mesh);
+      mesh.updateMatrixWorld(true);
+      mesh.bind(new THREE.Skeleton(hb.all));
       const band = new THREE.Mesh(new THREE.TorusGeometry(WRIST_RING_R, 0.0045, 6, 20), remoteHandMats.palm); band.position.copy(SURVIVOR_WRIST); band.rotation.x = Math.PI / 2; band.visible = false; root.add(band);
       const charmHolder = new THREE.Group(); charmHolder.position.set(SURVIVOR_WRIST.x - WRIST_RING_R - 0.01, SURVIVOR_WRIST.y - 0.005, SURVIVOR_WRIST.z); root.add(charmHolder);
       root.traverse((o) => { if (o.isMesh) o.castShadow = false; });
       root.visible = false; scene.add(root);
-      return { root, fingers, thumb, band, charmHolder, charmKind: 'none', bandKind: '' };
+      return { root, fingers: [[hb.f[0][0], hb.f[0][1]], [hb.f[1][0], hb.f[1][1]]], thumb: [hb.t[0], hb.t[1]], band, charmHolder, charmKind: 'none', bandKind: '' };
+    }
+    // full-size arms from their shoulders to their hands, exactly like yours: thick tapered orange-fur upper arm and
+    // forearm with round shoulder / elbow / wrist joints (built when they first appear, solved every frame below)
+    function makeRemoteArms() {
+      const g = new THREE.Group(); g.visible = false; scene.add(g);
+      const mat = remoteHandMats.arm;
+      const seg = (r0, r1) => { const m = new THREE.Mesh(new THREE.CylinderGeometry(r1, r0, 1, 14, 1), mat); m.castShadow = false; m.frustumCulled = false; g.add(m); return m; };
+      const ball = (r) => { const m = new THREE.Mesh(new THREE.SphereGeometry(r, 14, 10), mat); m.castShadow = false; m.frustumCulled = false; g.add(m); return m; };
+      return { g, sides: [-1, 1].map((side) => ({ side, upper: seg(0.062, 0.052), fore: seg(0.052, 0.04), shoulder: ball(0.066), elbow: ball(0.054), wrist: ball(0.041) })) };
+    }
+    const _raS = new THREE.Vector3(), _raW = new THREE.Vector3(), _raE = new THREE.Vector3(), _raD = new THREE.Vector3(), _raP = new THREE.Vector3();
+    function solveRemoteArms(r, s) {
+      const A = r.arms; if (!A) return;
+      A.g.visible = !!r.glb;
+      if (!r.glb) return;
+      const cy = Math.cos(r.yaw), sy = Math.sin(r.yaw), L = survivorArms.reach * 0.5;
+      for (let k = 0; k < 2; k++) {
+        const S = A.sides[k], paw = r.paws[k];
+        _raS.copy(survivorArms.sockets[k]).applyMatrix4(r.root.matrixWorld);            // [0] left shoulder, [1] right
+        if (paw.root.visible) { paw.root.updateMatrixWorld(true); _raW.copy(SURVIVOR_WRIST).applyMatrix4(paw.root.matrixWorld); }
+        else { const lx = S.side * 0.06, lz = 0.03; _raW.set(_raS.x + lx * cy + lz * sy, _raS.y - survivorArms.reach * 0.9, _raS.z - lx * sy + lz * cy); }   // hanging
+        _raD.subVectors(_raW, _raS); const d = Math.max(1e-4, _raD.length()); _raD.multiplyScalar(1 / d);
+        const lu = d > 2 * L ? d / 2 : L, a = d / 2, h = Math.sqrt(Math.max(0, lu * lu - a * a));
+        const px = S.side * 0.6, pz = 0.35;
+        _raP.set(px * cy + pz * sy, -1, -px * sy + pz * cy).addScaledVector(_raD, -_raP.dot(_raD));
+        if (_raP.lengthSq() < 1e-6) _raP.set(0, -1, 0).addScaledVector(_raD, -_raD.y);
+        _raP.normalize();
+        _raE.copy(_raS).addScaledVector(_raD, a).addScaledVector(_raP, h);
+        placeSeg(S.upper, _raS, _raE); placeSeg(S.fore, _raE, _raW);
+        S.shoulder.position.copy(_raS); S.elbow.position.copy(_raE); S.wrist.position.copy(_raW);
+      }
     }
     function remoteBandMat(kind) { return (typeof chainMats !== 'undefined' && chainMats[kind]) || bandMats[kind] || null; }
     function makeNametag() {
@@ -17045,8 +17129,8 @@
       g.lineWidth = 4; g.strokeStyle = role === 'm' ? 'rgba(255,90,70,0.9)' : 'rgba(216,200,160,0.8)'; g.stroke();
       g.textAlign = 'center'; g.textBaseline = 'middle';
       g.fillStyle = '#f4ead2'; g.font = `bold 46px ${UI_FONT}`; g.fillText(name, 256, 50, 470);
-      g.fillStyle = role === 'm' ? '#ff8070' : '#a8f0a0'; g.font = `bold 24px ${UI_FONT}`;
-      g.fillText(role === 'm' ? 'MONSTER' : `SURVIVOR  ${hp} HP`, 256, 94);
+      g.fillStyle = role === 'm' ? '#ff8070' : role === 'x' ? '#80d8ff' : '#a8f0a0'; g.font = `bold 24px ${UI_FONT}`;
+      g.fillText(role === 'm' ? 'MONSTER' : role === 'x' ? 'MONSTER · STUNNED' : `SURVIVOR  ${hp} HP`, 256, 94);
       tag.tex.needsUpdate = true;
     }
     function buildRemoteSurvivorBody(r) {
@@ -17063,10 +17147,14 @@
       src.position.set(-c.x, -box.min.y, -c.z);
       src.traverse((o) => {
         if (!o.isMesh) return;
-        o.material = Array.isArray(o.material) ? o.material.map((m) => { const n = m.clone(); n.clippingPlanes = null; return n; }) : Object.assign(o.material.clone(), { clippingPlanes: null });
+        // the model's own frozen arms are cut away at the shoulders (|x| beyond the shoulder width), exactly as on
+        // your body; the full-size tracked arms below replace them
+        o.material = Array.isArray(o.material) ? o.material.map((m) => { const n = m.clone(); n.clippingPlanes = r.planes; n.clipShadows = false; return n; })
+                                               : Object.assign(o.material.clone(), { clippingPlanes: r.planes, clipShadows: false });
         o.castShadow = false; o.receiveShadow = false; o.frustumCulled = false; o.layers.set(0);
       });
       r.body.add(src);
+      if (!r.arms) r.arms = makeRemoteArms();
       r.glb = src; r.head = head;
       if (r.fallback) r.fallback.visible = false;
     }
@@ -17087,13 +17175,14 @@
       const monHands = [mArms[1].hand.clone(true), mArms[0].hand.clone(true)];   // [left, right]
       monHands.forEach((hd, k) => { hd.scale.set(k === 0 ? -PLAYER_SCALE : PLAYER_SCALE, PLAYER_SCALE, PLAYER_SCALE); hd.visible = false; scene.add(hd); });
       const r = { id, root, body, fallback, glb: null, head: null, mon, monHead, monHands, paws: [makeRemotePaw(true), makeRemotePaw(false)], tag: makeNametag(),
+                  planes: [_sgPlanesLocal[1].clone(), _sgPlanesLocal[2].clone()], arms: null,
                   st: null, seen: 0, pos: new THREE.Vector3(), quat: new THREE.Quaternion(), yaw: 0, fresh: true,
                   hand: [{ p: new THREE.Vector3(), q: new THREE.Quaternion(), ok: false, c: [0, 0, 0] }, { p: new THREE.Vector3(), q: new THREE.Quaternion(), ok: false, c: [0, 0, 0] }] };
       buildRemoteSurvivorBody(r);
       return r;
     }
     function removeRemote(r) {
-      for (const o of [r.root, r.mon, r.tag.s, ...r.monHands, ...r.paws.map((p) => p.root)]) if (o && o.parent) o.parent.remove(o);
+      for (const o of [r.root, r.mon, r.tag.s, r.arms && r.arms.g, ...r.monHands, ...r.paws.map((p) => p.root)]) if (o && o.parent) o.parent.remove(o);
     }
     function netOnState(id, d) {
       if (!d || !Array.isArray(d.h)) return;
@@ -17101,7 +17190,8 @@
       if (!r) { r = makeRemote(id); netPeers().set(id, r); pcRedraw(); }
       const was = r.st;
       r.st = { n: String(d.n || 'PLAYER').slice(0, 12).toUpperCase(), r: d.r === 'm' ? 'm' : 's', m: String(d.m || ''), vr: !!d.vr, h: d.h, y: +d.y || 0, L: d.L, R: d.R,
-               b: String(d.b || 'none'), c: String(d.c || 'none'), hp: Math.max(0, Math.min(100, +d.hp || 0)) };
+               b: String(d.b || 'none'), c: String(d.c || 'none'), hp: Math.max(0, Math.min(100, +d.hp || 0)), mo: +d.mo || 0, stn: !!d.st,
+               it: Array.isArray(d.it) ? d.it.slice(0, 4) : [], hid: !!d.hid };
       r.seen = performance.now();
       if (!was || was.n !== r.st.n || was.r !== r.st.r) pcRedraw();
     }
@@ -17114,21 +17204,22 @@
         r.root.visible = show && s.r === 's';
         r.mon.visible = show && s.r === 'm';
         r.tag.s.visible = show;
-        if (!show) { for (const p of r.paws) p.root.visible = false; for (const hd of r.monHands) hd.visible = false; r.fresh = true; continue; }
+        if (!show) { for (const p of r.paws) p.root.visible = false; for (const hd of r.monHands) hd.visible = false; if (r.arms) r.arms.g.visible = false; r.fresh = true; continue; }
         _rV.set(s.h[0], s.h[1], s.h[2]); _rQ.set(s.h[3], s.h[4], s.h[5], s.h[6]).normalize();
         if (r.fresh) { r.pos.copy(_rV); r.quat.copy(_rQ); r.yaw = s.y; r.fresh = false; }
         else { r.pos.lerp(_rV, a); r.quat.slerp(_rQ, a); r.yaw += wrapAngle(s.y - r.yaw) * a; }
         // the tag floats over their head
-        r.tag.s.position.set(r.pos.x, r.pos.y + (s.r === 'm' ? 0.34 : 0.2), r.pos.z);
-        drawNametag(r.tag, s.n, s.r, Math.round(s.hp));
+        r.tag.s.position.set(r.pos.x, r.pos.y + (s.r === 'm' ? 0.74 : 0.6), r.pos.z);   // (0.4 higher: clear above the head)
+        drawNametag(r.tag, s.n, s.stn ? 'x' : s.r, Math.round(s.hp));
         if (s.r === 's') {
           // the proboscis monkey under their head (just like your own body), head turning with theirs
           if (!r.glb) buildRemoteSurvivorBody(r);
           const y = r.pos.y - SURVIVOR_NECK_GAP - survivorNeckH - SURVIVOR_BODY_DROP, back = SURVIVOR_BODY_BACK;
           r.root.position.set(r.pos.x + Math.sin(r.yaw) * back, Math.max(y, r.pos.y - 1.5), r.pos.z + Math.cos(r.yaw) * back);
           r.root.rotation.set(0, r.yaw, 0);
+          r.root.updateMatrixWorld(true);
+          for (let k = 0; k < 2; k++) r.planes[k].copy(_sgPlanesLocal[k + 1]).applyMatrix4(r.root.matrixWorld);   // the frozen-arm cuts follow them
           if (r.head && r.head.parent) {
-            r.root.updateMatrixWorld(true);
             _rQ2.setFromAxisAngle(_spAxisY, r.yaw);                                     // the body's turn
             _rQ3.copy(_rQ2).invert().multiply(r.quat);                                  // the head in the body's frame
             _rbE.setFromQuaternion(_rQ3, 'YXZ');
@@ -17152,9 +17243,9 @@
           if (s.r === 's') {
             mh.visible = false; paw.root.visible = true;
             paw.root.position.copy(H.p); paw.root.quaternion.copy(H.q);
-            paw.fingers[1].rotation.z = -H.c[0] * 1.5;        // Trigger: the inner finger
-            paw.fingers[0].rotation.z = -H.c[1] * 1.5;        // Grip: the outer finger
-            paw.thumb.rotation.y = H.c[2] * 0.9;              // X / A: the thumb
+            paw.fingers[1][0].rotation.z = -H.c[0] * 1.5; paw.fingers[1][1].rotation.z = -H.c[0] * 1.75;   // Trigger: the inner finger
+            paw.fingers[0][0].rotation.z = -H.c[1] * 1.5; paw.fingers[0][1].rotation.z = -H.c[1] * 1.75;   // Grip: the outer finger
+            paw.thumb[0].rotation.set(0, H.c[2] * 0.8, 0); paw.thumb[1].rotation.set(0, H.c[2] * 0.7, 0);  // X / A: the thumb
             // their wrist band / chain and charm
             if (paw.bandKind !== s.b) {
               paw.bandKind = s.b; const m = remoteBandMat(s.b);
@@ -17169,6 +17260,13 @@
             mh.position.copy(H.p); mh.quaternion.copy(H.q);
           }
         });
+        if (s.r === 's') solveRemoteArms(r, s); else if (r.arms) r.arms.g.visible = false;
+        // their mouth: their voice's level as it reaches you (or the level they report)
+        const vp = voice.peers.get(r.id);
+        const lvl = vp ? vp.level : s.mo;
+        r.mouth = (r.mouth || 0) + (lvl - (r.mouth || 0)) * Math.min(1, dt * 18);
+        if (r.head && r.head.userData.jaw) r.head.userData.jaw.rotation.x = Math.min(1, r.mouth) * 0.45;
+        remoteCarry(r, s);
       }
     }
     const _spAxisY = new THREE.Vector3(0, 1, 0), _monFlip = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
@@ -17179,7 +17277,7 @@
     function pvSegDist(p, a, b) { _pvC.subVectors(b, a); const t = Math.min(1, Math.max(0, _pvA.subVectors(p, a).dot(_pvC) / Math.max(1e-6, _pvC.lengthSq()))); return _pvB.copy(a).addScaledVector(_pvC, t).distanceTo(p); }
     function updateMacheteHits(dt) {
       const N = netState();
-      if (!N.room || playerRole !== 'monster' || !renderer.xr.isPresenting || titleActive || dt <= 0) { N.tip = null; return; }
+      if (!N.room || playerRole !== 'monster' || !renderer.xr.isPresenting || titleActive || dt <= 0 || N.stunT > 0) { N.tip = null; return; }
       mMachete.updateWorldMatrix(true, false);
       mMachete.localToWorld(_pvTip.set(0, 0, MACHETE_BLADE.z1));
       mMachete.localToWorld(_pvMid.set(0, 0, (MACHETE_BLADE.z0 + MACHETE_BLADE.z1) / 2));
@@ -17197,11 +17295,26 @@
         N.hitCool.set(r.id, now);
         const dx = r.pos.x - _pvTip.x + (_pvTip.x - _pvMid.x), dz = r.pos.z - _pvTip.z + (_pvTip.z - _pvMid.z), dl = Math.hypot(dx, dz) || 1;
         const dmg = Math.round(35 + Math.random() * 15);
-        try { N.sendHit({ d: dmg, x: r3(dx / dl), z: r3(dz / dl), n: playerName(), m: currentMap }, r.id); } catch (e) { }
+        dealDamage(r.id, dmg, dx / dl, dz / dl);
         gameAudio.smash(0.9); gameAudio.squelch?.(0, 0.7);
         controllers.forEach((c) => pulse(c, 0.9, 120));
         showToast(`HIT ${s.n}!`, `-${dmg} HP`);
       }
+    }
+    function dealDamage(peerId, dmg, dirX, dirZ) {
+      const N = netState(); if (!N.sendEvent) return;
+      try { N.sendEvent({ t: 'dmg', d: dmg, x: r3(dirX), z: r3(dirZ), n: playerName(), m: currentMap }, peerId); } catch (e) { }
+    }
+    function netOnEvent(id, d) {
+      if (!d || typeof d !== 'object') return;
+      if (d.t === 'dmg') netOnHit(id, d);
+      else if (d.t === 'aicatch') netOnAiCatch(id, d);
+      else if (d.t === 'aires') netOnAiResult(id, d);
+      else if (d.t === 'aistun') netOnAiStun(id, d);
+      else if (d.t === 'boat') { if (d.m === currentMap) showToast(`${String(d.n || 'SOMEONE').slice(0, 12).toUpperCase()} STARTED THE BOAT`, 'Get on board!'); }
+      else if (d.t === 'end') netOnEnd(id, d);
+      else if (d.t === 'quest') netApplyQuest(d.q);
+      else if (d.t === 'stun') netOnStun(id, d);
     }
     function netOnHit(id, d) {
       const N = netState();
@@ -17229,9 +17342,125 @@
       N.eliminated = true;
       netSendState(true);
     }
+    // how open your mouth is (0..1): your microphone's level while voice chat is on (it drives your jaw, and theirs)
+    function mouthOpenness() { return localMouthOpen(); }
+
+    // ---------- quest progress, shared by everyone in the room ----------
+    // A snapshot of a map's tasks (generator repairs and power, braziers, skulls, breakers, fuel, the rock fall) goes
+    // out whenever it changes. Progress only ever moves forward when it arrives, so nobody's work is undone.
+    function questSnapshot(map) {
+      const gens = map === 'camp' ? generators : mapGens(map);
+      const s = { m: map, g: gens.map((g) => [g.progress | 0, g.running ? 1 : 0]) };
+      if (map === 'camp') { s.pi = parts.map((p) => (p.installed ? 1 : 0)); s.fuel = Math.floor(boat.fuel); }
+      else s.ex = exParts.filter((p) => p.map === map).map((p) => (p.installed ? 1 : 0));
+      if (map === 'graveyard') { s.br = braziers.map((b) => (b.lit ? 1 : 0)); s.sk = altarSlots.filter((a) => a.skull).length; }
+      if (map === 'mine') { s.lv = levers.map((l) => (l.pulled ? 1 : 0)); s.fu = fuelCans.filter((f) => f.taken).length; s.ru = mineRubble && mineRubble.cleared ? 1 : 0; }
+      return s;
+    }
+    function netSendQuest(map, target) {
+      const N = netState(); if (!N.sendEvent) return;
+      N.questSent = N.questSent || {};
+      for (const m of map ? [map] : ['camp', 'graveyard', 'mine']) {
+        const q = questSnapshot(m), key = JSON.stringify(q);
+        if (!target && N.questSent[m] === key) continue;
+        if (!target) N.questSent[m] = key;
+        try { target ? N.sendEvent({ t: 'quest', q }, target) : N.sendEvent({ t: 'quest', q }); } catch (e) { }
+      }
+    }
+    function netApplyQuest(s) {
+      if (!s || !['camp', 'graveyard', 'mine'].includes(s.m)) return;
+      const role = playerRole; playerRole = 'survivor';                 // (shared progress applies whatever your role)
+      try {
+        const gens = s.m === 'camp' ? generators : mapGens(s.m);
+        (Array.isArray(s.g) ? s.g : []).forEach((v, k) => {
+          const g = gens[k]; if (!g || !Array.isArray(v)) return;
+          if (!g.running && (v[0] | 0) > g.progress) { g.progress = Math.min(GEN_CHECKS_NEEDED, v[0] | 0); try { drawGenSign(g); } catch (e) { } }
+          if (v[1] && !g.running) powerUp(g);
+        });
+        if (s.m === 'camp') {
+          (s.pi || []).forEach((v, k) => { const p = parts[k]; if (v && p && !p.installed) { if (p.held >= 0) p.held = -1; installPart(p); } });
+          if ((+s.fuel || 0) > boat.fuel) { boat.fuel = Math.min(100, +s.fuel); try { drawFuelGauge(boat.fuel); } catch (e) { } }
+        } else {
+          const ex = exParts.filter((p) => p.map === s.m);
+          (s.ex || []).forEach((v, k) => { const p = ex[k]; if (v && p && !p.installed) fitExPart(p); });
+        }
+        if (s.m === 'graveyard') {
+          (s.br || []).forEach((v, k) => { if (v && braziers[k] && !braziers[k].lit) lightBrazier(braziers[k]); });
+          for (let guard = 0; guard < 4 && (s.sk | 0) > altarSlots.filter((a) => a.skull).length; guard++) {
+            const sk = skulls.find((x) => !x.placed && x.held < 0 && !x.fly), slot = altarSlots.find((a) => !a.skull && !a.reserved);
+            if (!sk || !slot) break;
+            placeSkull(sk, slot);
+          }
+        }
+        if (s.m === 'mine') {
+          (s.lv || []).forEach((v, k) => { if (v && levers[k] && !levers[k].pulled) pullLever(levers[k]); });
+          for (let guard = 0; guard < 8 && (s.fu | 0) > fuelCans.filter((f) => f.taken).length; guard++) { const f = fuelCans.find((x) => !x.taken); if (!f) break; takeFuel(f); }
+          if (s.ru && mineRubble && !mineRubble.cleared) clearRubble();
+        }
+      } finally { playerRole = role; }
+      const N = netState(); N.questSent = N.questSent || {}; N.questSent[s.m] = JSON.stringify(questSnapshot(s.m));
+    }
+    {
+      const baseQuestChanged = questChanged;
+      questChanged = function (map) { const r = baseQuestChanged(map); netSendQuest(map); return r; };
+    }
+
+    // ---------- the shotgun stuns a human monster ----------
+    const _ssM = new THREE.Vector3(), _ssD = new THREE.Vector3(), _ssT = new THREE.Vector3();
+    {
+      const baseFire = fireStunGun;
+      fireStunGun = function (sg, i) {
+        const loaded = sg.shells > 0, wasStunned = ai.state === 'stunned';
+        const r = baseFire(sg, i);
+        const N = netState();
+        if (loaded && !wasStunned && ai.state === 'stunned' && aiRole() === 'puppet' && N.sendEvent) {
+          try { N.sendEvent({ t: 'aistun', m: currentMap, k: [r3(ai.knock ? ai.knock.x : 0), r3(ai.knock ? ai.knock.z : 0)] }, aiAuthorityId()); } catch (e) { }
+        }
+        if (loaded && N.sendEvent) {
+          sg.gun.group.updateMatrixWorld(true);
+          _ssM.set(0, 0.04, -0.58).applyMatrix4(sg.gun.group.matrixWorld);
+          _ssD.set(0, 0, -1).applyQuaternion(sg.gun.group.quaternion).normalize();
+          for (const rp of netPeers().values()) {
+            const s = rp.st;
+            if (!s || s.r !== 'm' || s.m !== currentMap || s.stn) continue;
+            let hit = false;
+            for (const h of [0, -0.2, -0.4]) {
+              _ssT.set(rp.pos.x, rp.pos.y + h, rp.pos.z).sub(_ssM);
+              const along = _ssT.dot(_ssD);
+              if (along < 0 || along > 16) continue;
+              if (_ssT.addScaledVector(_ssD, -along).length() <= 0.42 + along * 0.07) { hit = true; break; }
+            }
+            if (!hit) continue;
+            try { N.sendEvent({ t: 'stun', d: STUN_TIME, n: playerName(), m: currentMap }, rp.id); } catch (e) { }
+            showToast('DIRECT HIT!', `${s.n} is stunned for ${STUN_TIME} seconds. RUN!`);
+          }
+        }
+        return r;
+      };
+    }
+    function netOnStun(id, d) {
+      const N = netState();
+      if (playerRole !== 'monster' || titleActive || d.m !== currentMap) return;
+      N.stunT = Math.min(20, Math.max(1, +d.d || STUN_TIME));
+      N.stunPin = playerRig.position.clone();
+      gunAudio.blast?.(); controllers.forEach((c) => pulse(c, 1, 300));
+      showToast('YOU WERE SHOT!', `${String(d.n || 'A survivor').slice(0, 12).toUpperCase()} stunned you for ${Math.round(N.stunT)} seconds`);
+      netSendState(true);
+    }
     function updateNet(dt) {
       const N = netState();
       if (N.room) netSendState(false);
+      // stunned (as a human monster): held where you were hit, no swings, until it wears off
+      if (N.stunT > 0) {
+        N.stunT -= dt;
+        if (playerRole !== 'monster') N.stunT = 0;
+        else if (renderer.xr.isPresenting && N.stunPin) { playerRig.position.copy(N.stunPin); rigVelocity.set(0, 0, 0); }
+        if (N.stunT <= 0) { N.stunT = 0; showToast('THE STUN WORE OFF', 'Hunt them down'); netSendState(true); }
+      }
+      updateVoice(dt);
+      updateAiNet(dt);
+      // quest progress that moved without a questChanged (generator repairs): checked once a second
+      if (N.room && (N.questT = (N.questT || 0) + dt) > 1) { N.questT = 0; if (currentMap !== 'waiting') netSendQuest(currentMap); }
       updateRemotes(dt);
       updateMacheteHits(dt);
       // the hit flash fades (unless a takedown or a struggle owns the red flash)
@@ -17261,6 +17490,297 @@
         frozen++;
       }
       console.log('[perf] static scenery frozen:', frozen, 'meshes');
+    }
+
+    // ---------- carried items: what each player holds rides in their hand on everyone's screen ----------
+    function itemHandIndex(i) { return controllers[i]?.userData.inputSource?.handedness === 'left' ? 0 : 1; }
+    function heldItemsPacket() {
+      const out = [];
+      parts.forEach((p, k) => { if (p.held >= 0 && !p.installed) out.push(['p', k, itemHandIndex(p.held)]); });
+      exParts.forEach((p, k) => { if (p.held >= 0 && !p.installed) out.push(['x', k, itemHandIndex(p.held)]); });
+      skulls.forEach((sk, k) => { if (sk.held >= 0 && !sk.placed) out.push(['s', k, itemHandIndex(sk.held)]); });
+      return out;
+    }
+    function carryObj(kind, k) {
+      if (kind === 'p') { const p = parts[k]; return p && { o: p, mesh: p.mesh, map: 'camp', done: p.installed }; }
+      if (kind === 'x') { const p = exParts[k]; return p && { o: p, mesh: p.mesh, map: p.map, done: p.installed }; }
+      if (kind === 's') { const sk = skulls[k]; return sk && { o: sk, mesh: sk.group, map: 'graveyard', done: sk.placed }; }
+      return null;
+    }
+    const _rcO = new THREE.Vector3();
+    function remoteCarry(r, s) {
+      const now = new Set();
+      for (const it of s.it || []) {
+        if (!Array.isArray(it)) continue;
+        const c = carryObj(it[0], it[1] | 0); if (!c || c.done || c.map !== currentMap || c.o.held >= 0) continue;
+        const H = r.hand[it[2] ? 1 : 0]; if (!H || !H.ok) continue;
+        now.add(it[0] + it[1]);
+        c.mesh.visible = true;
+        c.mesh.position.copy(H.p).add(_rcO.set(0, -0.05, 0).applyQuaternion(H.q));
+        c.mesh.quaternion.copy(H.q);
+        if (c.o.vel) c.o.vel.set(0, 0, 0);
+        if ('falling' in c.o) c.o.falling = false;
+        if ('sleep' in c.o) c.o.sleep = true;
+      }
+      // anything they let go of: it drops from their hand on your screen too
+      for (const key of r.carry || []) if (!now.has(key)) {
+        const c = carryObj(key[0], +key.slice(1)); if (!c || c.done || c.o.held >= 0) continue;
+        if ('falling' in c.o) c.o.falling = true;
+        if ('sleep' in c.o) c.o.sleep = false;
+      }
+      r.carry = now;
+    }
+
+    // ---------- the escape: everyone on the boat gets the sunrise ending ----------
+    {
+      const baseStart = startEscapeBoat;
+      startEscapeBoat = function (b) {
+        const was = b.t;
+        const r = baseStart(b);
+        const N = netState();
+        if (was < 0 && b.t >= 0 && N.sendEvent) { try { N.sendEvent({ t: 'boat', m: b.map, n: playerName() }); } catch (e) { } }
+        return r;
+      };
+      const baseEnding = beginEnding;
+      beginEnding = function (map) {
+        const had = !!ending;
+        const r = baseEnding(map);
+        const N = netState();
+        if (!had && ending && N.sendEvent && !N.remoteEnd) { try { N.sendEvent({ t: 'end', m: map, n: playerName() }); } catch (e) { } }
+        N.remoteEnd = false;
+        return r;
+      };
+    }
+    const _neH = new THREE.Vector3();
+    function netOnEnd(id, d) {
+      if (d.m !== currentMap || ending || playerRole === 'monster' || titleActive || caught) return;
+      const vr = renderer.xr.isPresenting;
+      if (vr) headWorld(_neH); else camera.getWorldPosition(_neH);
+      const onBoat = d.m === 'camp' ? (boat.aboard || Math.hypot(_neH.x - boat.pos.x, _neH.z - boat.pos.z) < 3)
+                                     : (escapeBoatAboard() || (escapeBoats[d.m] && escapeBoats[d.m].group.position.distanceTo(_neH) < 3));
+      const who = String(d.n || 'SOMEONE').slice(0, 12).toUpperCase();
+      if (!onBoat) { showToast(`${who} ESCAPED ON THE BOAT`, 'It left without you...'); return; }
+      const N = netState(); N.remoteEnd = true;
+      quest[d.m].escaped = true;
+      beginEnding(d.m);
+    }
+
+    // ---------- voice chat: your microphone into the room, everyone's voice in 3D from their heads ----------
+    const voice = { stream: null, track: null, ctx: null, an: null, buf: new Float32Array(512), level: 0, peers: new Map() };
+    function voiceOn() { return !!voiceOn.v; }
+    function localMouthOpen() { return localMouthOpen.v || 0; }
+    function voiceCtx() {
+      if (!voice.ctx) { voice.ctx = new (window.AudioContext || window.webkitAudioContext)(); audioTag(voice.ctx, 'sfx'); }
+      if (voice.ctx.state === 'suspended') voice.ctx.resume().catch(() => { });
+      return voice.ctx;
+    }
+    async function setVoice(on) {
+      voiceOn.v = !!on;
+      if (on && !voice.stream) {
+        try { voice.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }); }
+        catch (e) { voiceOn.v = false; showToast('MICROPHONE BLOCKED', 'Allow microphone access to use voice chat'); try { redrawPanel(menuPanel); } catch (e2) { } return; }
+        voice.track = voice.stream.getAudioTracks()[0] || null;
+        const ctx = voiceCtx(), src = ctx.createMediaStreamSource(voice.stream);
+        voice.an = ctx.createAnalyser(); voice.an.fftSize = 512; src.connect(voice.an);       // (only measured, never played back to you)
+        const N = netState(); if (N.room) { try { N.room.addStream(voice.stream); } catch (e) { console.warn('[Voice] addStream', e); } }
+      }
+      if (voice.track) voice.track.enabled = voiceOn.v;                                      // mute / unmute, the connection stays
+      showToast(voiceOn.v ? 'VOICE CHAT ON' : 'VOICE CHAT OFF', voiceOn.v ? (netState().room ? 'Players near you can hear you' : 'Join a room on the waiting room computer to talk') : 'Your microphone is muted');
+      try { redrawPanel(menuPanel); } catch (e) { }
+    }
+    function voiceAttach(id, stream) {
+      voiceDetach(id);
+      try {
+        const ctx = voiceCtx();
+        const el = new Audio(); el.srcObject = stream; el.muted = true; el.play().catch(() => { });   // (Chrome only feeds Web Audio from a playing element)
+        const src = ctx.createMediaStreamSource(stream);
+        const pan = ctx.createPanner();
+        pan.panningModel = 'HRTF'; pan.distanceModel = 'inverse'; pan.refDistance = 0.6; pan.maxDistance = 30; pan.rolloffFactor = 1.4;
+        const gain = ctx.createGain(); gain.gain.value = 0;
+        const an = ctx.createAnalyser(); an.fftSize = 512;
+        src.connect(an); src.connect(pan); pan.connect(gain); gain.connect(ctx.destination);
+        voice.peers.set(id, { el, src, pan, gain, an, level: 0 });
+      } catch (e) { console.warn('[Voice] could not play a peer stream', e); }
+    }
+    function voiceDetach(id) {
+      const v = voice.peers.get(id); if (!v) return;
+      try { v.src.disconnect(); v.pan.disconnect(); v.gain.disconnect(); v.el.srcObject = null; } catch (e) { }
+      voice.peers.delete(id);
+    }
+    function rmsLevel(an) {
+      an.getFloatTimeDomainData(voice.buf);
+      let s2 = 0; for (let k = 0; k < voice.buf.length; k++) s2 += voice.buf[k] * voice.buf[k];
+      return Math.min(1, Math.max(0, (Math.sqrt(s2 / voice.buf.length) - 0.01) * 9));
+    }
+    const _vcP = new THREE.Vector3(), _vcF = new THREE.Vector3(), _vcU = new THREE.Vector3();
+    function updateVoice(dt) {
+      if (voice.ctx && voice.ctx.state === 'suspended' && (voice.resumeT = (voice.resumeT || 0) + dt) > 1) { voice.resumeT = 0; voice.ctx.resume().catch(() => { }); }
+      // your own mouth
+      const mine = voiceOn() && voice.an ? rmsLevel(voice.an) : 0;
+      localMouthOpen.v = (localMouthOpen.v || 0) + (mine - (localMouthOpen.v || 0)) * Math.min(1, dt * 18);
+      if (!voice.ctx || !voice.peers.size) return;
+      // the listener is your head; each voice comes from that player's head, only on your map
+      const L = voice.ctx.listener, t = voice.ctx.currentTime;
+      camera.getWorldPosition(_vcP); camera.getWorldDirection(_vcF); _vcU.set(0, 1, 0).applyQuaternion(camera.getWorldQuaternion(_nQ));
+      if (L.positionX) { L.positionX.setValueAtTime(_vcP.x, t); L.positionY.setValueAtTime(_vcP.y, t); L.positionZ.setValueAtTime(_vcP.z, t);
+        L.forwardX.setValueAtTime(_vcF.x, t); L.forwardY.setValueAtTime(_vcF.y, t); L.forwardZ.setValueAtTime(_vcF.z, t);
+        L.upX.setValueAtTime(_vcU.x, t); L.upY.setValueAtTime(_vcU.y, t); L.upZ.setValueAtTime(_vcU.z, t); }
+      else { L.setPosition(_vcP.x, _vcP.y, _vcP.z); L.setOrientation(_vcF.x, _vcF.y, _vcF.z, _vcU.x, _vcU.y, _vcU.z); }
+      for (const [id, v] of voice.peers) {
+        const r = netPeers().get(id), here = !!(r && r.st && r.st.m === currentMap && !titleActive);
+        v.gain.gain.setTargetAtTime(here ? 1 : 0, t, 0.05);
+        if (here) { if (v.pan.positionX) { v.pan.positionX.setValueAtTime(r.pos.x, t); v.pan.positionY.setValueAtTime(r.pos.y, t); v.pan.positionZ.setValueAtTime(r.pos.z, t); } else v.pan.setPosition(r.pos.x, r.pos.y, r.pos.z); }
+        v.level = rmsLevel(v.an);
+      }
+    }
+    window.addEventListener('pointerdown', () => { if (voice.ctx && voice.ctx.state === 'suspended') voice.ctx.resume().catch(() => { }); });
+
+    // ---------- the AI monster in a room: one player runs it, everyone sees the same monster ----------
+    // For each map, the player on it with the lowest peer id is the AI's host: their game runs the patrol, the eyes
+    // (on every survivor in the room on that map), the chase, the catch and the stuns, and sends its state 15 times a
+    // second; everyone else's monster is a puppet of that state. If the host leaves, the next one takes over from
+    // where the puppet was. A human MONSTER anywhere in the room stands the AI down for everyone.
+    function netSelfId() { return (typeof trysteroSelfId === 'string' && trysteroSelfId) || 'local'; }
+    function aiAuthorityId() {
+      const N = netState(); if (!N.room || currentMap === 'waiting' || titleActive) return null;
+      let best = netSelfId(); const now = performance.now();
+      for (const [id, r] of netPeers()) if (r.st && r.st.m === currentMap && now - r.seen < 4000 && id < best) best = id;
+      return best;
+    }
+    function aiRole() { const a = aiAuthorityId(); return a === null ? 'local' : a === netSelfId() ? 'host' : 'puppet'; }
+    const _mtT = new THREE.Vector3(), _msEye = new THREE.Vector3(), _msTo = new THREE.Vector3();
+    function mpAiTarget(ph) {
+      if (!ai.targetPeer) return ph;
+      const r = netPeers().get(ai.targetPeer);
+      if (!r || !r.st || r.st.m !== ai.map || r.st.r !== 's' || r.st.hp <= 0 || performance.now() - r.seen > 2500) { ai.targetPeer = null; return ph; }
+      return _mtT.copy(r.pos);
+    }
+    function mpRemoteSighting() {
+      if (aiRole() !== 'host' || !ai.active) return null;
+      const nav = NAV[ai.map]; if (!nav) return null;
+      _msEye.set(ai.pos.x, ai.pos.y + AI_HEAD_H, ai.pos.z);
+      let best = null, bd = Infinity; const now = performance.now();
+      for (const [id, r] of netPeers()) {
+        const s = r.st;
+        if (!s || s.r !== 's' || s.m !== ai.map || !s.vr || s.hp <= 0 || s.hid || now - r.seen > 2000 || (r.aiIgnoreUntil || 0) > now) continue;
+        _msTo.subVectors(r.pos, _msEye); const d = _msTo.length();
+        if (d > AI_SIGHT || d >= bd) continue;
+        if (d > AI_SENSE) {
+          const fx = Math.sin(ai.heading + ai.headYaw), fz = Math.cos(ai.heading + ai.headYaw);
+          if ((_msTo.x * fx + _msTo.z * fz) / Math.max(1e-4, Math.hypot(_msTo.x, _msTo.z)) < AI_FOV_COS) continue;
+        }
+        if (!lineOfSight(nav, _msEye, r.pos)) continue;
+        best = { id, head: r.pos }; bd = d;
+      }
+      return best;
+    }
+    // the host caught someone else: they fight it on their screen; it holds them until they tell it how it went
+    function mpAiCatchRemote(id) {
+      const N = netState();
+      ai.state = 'catch'; ai.path = []; ai.speed = 0; ai.slash = null;
+      N.aiHold = { id, t: performance.now() };
+      try { N.sendEvent && N.sendEvent({ t: 'aicatch', m: ai.map }, id); } catch (e) { }
+    }
+    function aiRelease(look = 2.5) { ai.state = 'look'; ai.lookT = look; ai.look0 = ai.heading; ai.path = []; ai.targetPeer = null; ai.lostT = 0; }
+    const _naK = new THREE.Vector3();
+    function netOnAiResult(id, d) {
+      const N = netState(); if (aiRole() !== 'host' || !N.aiHold || N.aiHold.id !== id) return;
+      N.aiHold = null;
+      const r = netPeers().get(id);
+      if (d.r === 'escaped' && r) {                         // they fought it off: shoved back and dazed
+        _naK.set(ai.pos.x - r.pos.x, 0, ai.pos.z - r.pos.z); if (_naK.lengthSq() < 1e-6) _naK.set(1, 0, 0);
+        ai.state = 'stunned'; ai.stunT = 4; ai.stunAge = 0; ai.slash = null; ai.path = []; ai.goal = null; ai.lostT = 0; ai.targetPeer = null;
+        ai.knock = _naK.normalize().multiplyScalar(3.5).clone(); ai.stunNoFx = true;
+        r.aiIgnoreUntil = performance.now() + 4000;
+      } else {
+        if (r) r.aiIgnoreUntil = performance.now() + 12000;  // it got them: it leaves them be for a while
+        aiRelease(3);
+      }
+    }
+    function netOnAiCatch(id, d) {
+      const N = netState();
+      if (playerRole !== 'survivor' || caught || struggle || titleActive || d.m !== currentMap) { try { N.sendEvent({ t: 'aires', r: 'caught' }, id); } catch (e) { } return; }
+      N.aiCatchFrom = id; N.aiCatchWins = struggleWins;
+      beginCatch();                                         // the same struggle (2 escapes, then caught)
+    }
+    function netOnAiStun(id, d) {
+      if (aiRole() !== 'host' || !ai.active || ai.map !== d.m) return;
+      const k = Array.isArray(d.k) ? d.k : [0, 0];
+      ai.state = 'stunned'; ai.stunT = STUN_TIME; ai.stunAge = 0; ai.slash = null; ai.path = []; ai.goal = null; ai.lostT = 0; ai.stunNoFx = false;
+      ai.knock = new THREE.Vector3(+k[0] || 0, 0, +k[1] || 0); ai.targetPeer = null;
+      const N = netState(); N.aiHold = null;
+      chaseAudio.setTarget(0);
+    }
+    function netOnAI(id, d) {
+      if (!d || typeof d !== 'object' || !Array.isArray(d.p)) return;
+      const N = netState(); N.aiFrom = N.aiFrom || new Map();
+      d.at = performance.now(); N.aiFrom.set(id, d);
+    }
+    function updateAiNet(dt) {
+      const N = netState(); if (!N.room) return;
+      const role = aiRole();
+      // the host tells everyone where the monster is and what it's doing
+      if (role === 'host' && N.sendAI && (N.aiSendT = (N.aiSendT || 0) + dt) > 1 / 15) {
+        N.aiSendT = 0;
+        const S = ai.state;
+        const anim = S === 'stunned' ? 'ragdoll' : ai.slash ? 'slash' : S === 'chase' || S === 'stare' ? 'chase' : 'patrol';
+        try {
+          N.sendAI({ m: currentMap, a: ai.active && !ai.preview ? 1 : 0, p: [r3(ai.pos.x), r3(ai.pos.y), r3(ai.pos.z)], h: r3(ai.heading), s: S, anim,
+                     hy: r3(ai.headYaw), hp: r3(ai.headPitch), st: r3(ai.stunT || 0), sa: r3(ai.stunAge || 0), nf: ai.stunNoFx ? 1 : 0,
+                     sl: ai.slash ? [ai.slash.kind || 'x', r3(ai.slash.t), r3(ai.slash.dur)] : 0,
+                     tg: ai.targetPeer || (S === 'chase' || S === 'stare' || S === 'catch' ? netSelfId() : '') });
+        } catch (e) { }
+        if (N.aiHold && performance.now() - N.aiHold.t > 9000) { N.aiHold = null; aiRelease(); }   // (no answer: let go)
+      }
+      // a catch from the host: tell it whether you fought it off
+      if (N.aiCatchFrom) {
+        let res = null;
+        if (struggleWins > N.aiCatchWins) res = 'escaped';
+        else if (caught && !caught.pvp) res = 'caught';
+        else if (!struggle && !caught) res = 'caught';
+        if (res) { try { N.sendEvent && N.sendEvent({ t: 'aires', r: res }, N.aiCatchFrom); } catch (e) { } N.aiCatchFrom = null; }
+      }
+    }
+    // the puppet: everyone but the host shows the host's monster
+    {
+      const baseUpdateAI = updateAI;
+      let wasPuppet = false;
+      updateAI = function (dt) {
+        const role = aiRole();
+        if (role !== 'puppet') {
+          if (wasPuppet) { wasPuppet = false; ai.path = []; ai.pathT = 0; ai.slash = null; if (ai.state === 'catch') aiRelease(); }   // taking over as host
+          return baseUpdateAI(dt);
+        }
+        wasPuppet = true;
+        const N = netState(), S = N.aiFrom && N.aiFrom.get(aiAuthorityId());
+        if (caught) updateCatch(dt);
+        const want = playerRole === 'survivor' && !ending && !mpHumanMonsterHere(currentMap) && S && S.a && S.m === currentMap && performance.now() - S.at < 3000;
+        if (!want) { if (ai.active && !caught) despawnAI(); if (!caught) chaseAudio.setTarget(0); return; }
+        if (!ai.active || ai.map !== currentMap) { spawnAI(currentMap, false); ai.pos.set(S.p[0], S.p[1], S.p[2]); ai.heading = S.h; }
+        ai.lastPos.copy(ai.pos);
+        const a = 1 - Math.exp(-dt * 12);
+        ai.pos.x += (S.p[0] - ai.pos.x) * a; ai.pos.y += (S.p[1] - ai.pos.y) * a; ai.pos.z += (S.p[2] - ai.pos.z) * a;
+        ai.heading += wrapAngle(S.h - ai.heading) * a;
+        const prevState = ai.state;
+        if (!(caught && ai.state === 'catch')) ai.state = S.s;
+        if (ai.state === 'stare' && prevState !== 'stare' && prevState !== 'chase') aiAudio.snarl();
+        if (ai.state === 'chase' && prevState === 'stare') gameAudio.growl();
+        ai.headYaw += (S.hy - ai.headYaw) * a; ai.headPitch += (S.hp - ai.headPitch) * a;
+        ai.stunT = S.st; ai.stunAge = S.sa; ai.stunNoFx = !!S.nf; ai.knock && ai.knock.set(0, 0, 0);
+        if (S.sl) { if (!ai.slash) ai.slash = { t: S.sl[1], dur: S.sl[2], kind: S.sl[0], onHit: null, hit: true }; else ai.slash.t = Math.max(ai.slash.t + dt, S.sl[1]); }
+        else ai.slash = null;
+        const moved = Math.hypot(ai.pos.x - ai.lastPos.x, ai.pos.z - ai.lastPos.z), prevStride = ai.stride;
+        ai.speed = moved / Math.max(dt, 1e-3);
+        ai.stride += moved / (ai.state === 'chase' ? 0.75 : 0.55);
+        if (Math.floor(ai.stride) !== Math.floor(prevStride)) aiAudio.step(aiSurface(), ai.state === 'chase');
+        animateAI(dt, moved > dt * 0.05);
+        // the chase beat when it's coming for you
+        if ((ai.state === 'chase' || ai.state === 'stare') && S.tg === netSelfId() && !caught) {
+          headWorld(_ph);
+          chaseAudio.setTarget(ai.state === 'stare' ? 0.6 : 1);
+          chaseAudio.setIntensity(ai.state === 'stare' ? 0.12 : THREE.MathUtils.clamp(1 - Math.hypot(_ph.x - ai.pos.x, _ph.z - ai.pos.z) / 12, 0.15, 1));
+        } else if (!caught) { chaseAudio.setTarget(0); chaseAudio.setIntensity(0); }
+      };
     }
 
     // ---------- XR session hooks ----------
