@@ -6290,6 +6290,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'FIX', date: '24/11/26', title: 'STEADIER MULTIPLAYER',
+        text: 'Several relays at once, a heartbeat with an 8 s grace period, auto-rejoin after a drop, and smoother player movement.' },
       { tag: 'FIX', date: '23/11/26', title: 'NO SHOULDER GAPS, BANDS SIT ON THE FUR',
         text: 'Bigger shoulder caps fill the gap behind each shoulder, and wrist bands and chains wrap outside the forearm.' },
       { tag: 'UPDATE', date: '23/11/26', title: 'HP BARS IN VR AND OVER PLAYERS',
@@ -17258,18 +17260,46 @@
 
     // ---------- Trystero (imported at the top of the module from esm.sh) ----------
     const NET_APP = 'grimape-vr-horror-v1', NET_MAX = 8;
+    // Signalling goes through several public relays at once, so one flaky relay dropping never drops you from the room:
+    // Nostr relays first (loaded on demand from esm.sh); if that strategy can't load, the BitTorrent trackers (imported
+    // at the top) with a redundant tracker list. Everyone in a room uses the same strategy, so all players meet.
+    const NET_NOSTR_RELAYS = ['wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.nostr.band', 'wss://relay.snort.social', 'wss://nostr.mom'];
+    const NET_TORRENT_RELAYS = ['wss://tracker.openwebtorrent.com', 'wss://tracker.webtorrent.dev', 'wss://tracker.files.fm:7073/announce', 'wss://tracker.btorrent.xyz'];
+    const NET_RTC = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }, { urls: 'stun:global.stun.twilio.com:3478' }] };
+    const NET_HEARTBEAT = 2000, NET_GRACE = 8000;        // a ping every 2 s; a peer is only despawned after 8 s of silence
     async function netLib() {
       const N = netState();
       if (!N.lib) {
-        if (typeof trysteroJoinRoom !== 'function') throw new Error('Trystero is not available');
-        N.lib = { joinRoom: trysteroJoinRoom };
+        try {
+          const m = await import('https://esm.sh/trystero@0.21.6/nostr');
+          if (typeof m.joinRoom !== 'function') throw new Error('no joinRoom');
+          N.lib = { joinRoom: m.joinRoom, selfId: m.selfId, kind: 'nostr',
+                    config: { appId: NET_APP, relayUrls: NET_NOSTR_RELAYS, relayRedundancy: NET_NOSTR_RELAYS.length, rtcConfig: NET_RTC } };
+        } catch (e) {
+          console.warn('[Net] Nostr relays unavailable, using the BitTorrent trackers', e);
+          if (typeof trysteroJoinRoom !== 'function') throw new Error('Trystero is not available');
+          N.lib = { joinRoom: trysteroJoinRoom, selfId: trysteroSelfId, kind: 'torrent',
+                    config: { appId: NET_APP, relayUrls: NET_TORRENT_RELAYS, relayRedundancy: NET_TORRENT_RELAYS.length, rtcConfig: NET_RTC } };
+        }
+        console.log('[Net] signalling:', N.lib.kind, N.lib.config.relayUrls.join(', '));
       }
       return N.lib;
+    }
+    // every send goes through this: a half-closed data channel or a bad packet never reaches the game loop
+    const netSafeSend = (fn, tag) => (data, target) => {
+      try { return target ? fn(data, target) : fn(data); } catch (e) { console.warn(`[Net] send ${tag} failed`, e); }
+    };
+    const netSafe = (fn, tag) => (...a) => { try { return fn(...a); } catch (e) { console.warn(`[Net] ${tag} handler`, e); } };
+    // anything heard from a peer keeps them alive (pose, ping, event, AI)
+    function netHeard(id) {
+      const r = netPeers().get(id); if (!r) return;
+      r.heard = performance.now();
+      if (r.leftAt) r.leftAt = 0;                       // they're back inside the grace period: same avatar, no duplicate
     }
     async function netJoin(kind, code = '') {
       const N = netState();
       if (N.joining) return;
-      netLeave(true);
+      netLeave(true, N.rejoining);                     // (a rejoin keeps the room it's rejoining)
       N.joining = 1; N.status = 'CONNECTING...'; pcRedraw();
       let lib;
       try { lib = await netLib(); }
@@ -17279,47 +17309,112 @@
         N.pubKeep = false;
         code = String(code).toUpperCase();
         const roomId = kind === 'public' ? `public-lobby-${N.pubN}` : 'private-' + code;
-        const room = lib.joinRoom({ appId: NET_APP }, roomId);
+        const room = lib.joinRoom(lib.config, roomId);
         const [sendPose, getPose] = room.makeAction('pose');
         const [sendEvent, getEvent] = room.makeAction('event');
         const [sendAI, getAI] = room.makeAction('ai');
-        N.room = room; N.kind = kind; N.code = code; N.roomId = roomId; N.send = sendPose; N.sendEvent = sendEvent; N.sendAI = sendAI;
-        getAI((d, id) => netOnAI(id, d));
-        room.onPeerStream((stream, id) => voiceAttach(id, stream));
+        const [sendPing, getPing] = room.makeAction('ping');
+        N.room = room; N.kind = kind; N.code = code; N.roomId = roomId;
+        N.send = netSafeSend(sendPose, 'pose'); N.sendEvent = netSafeSend(sendEvent, 'event'); N.sendAI = netSafeSend(sendAI, 'ai'); N.sendPing = netSafeSend(sendPing, 'ping');
+        N.want = { kind, code, pubN: N.pubN };          // the room to rejoin if the connection drops
+        getAI(netSafe((d, id) => { netHeard(id); netOnAI(id, d); }, 'ai'));
+        getPing(netSafe((d, id) => netHeard(id), 'ping'));
+        room.onPeerStream(netSafe((stream, id) => voiceAttach(id, stream), 'stream'));           // (replaces any old audio node for them)
         if (voice.stream) { try { room.addStream(voice.stream); } catch (e) { console.warn('[Voice] addStream', e); } }
         N.status = kind === 'public' ? `PUBLIC ROOM ${N.pubN}` : `PRIVATE ROOM ${code}`;
-        room.onPeerJoin((id) => {
-          netSendState(true, id); netSendQuest(null, id); pcRedraw(); showToast('A PLAYER JOINED', N.status);
+        room.onPeerJoin(netSafe((id) => {
+          const back = netPeers().get(id);
+          if (back) { back.leftAt = 0; back.heard = performance.now(); }                       // a rejoin inside the grace period
+          netSendState(true, id); netSendQuest(null, id); pcRedraw();
+          if (!back) showToast('A PLAYER JOINED', N.status);
           if (voice.stream) { try { room.addStream(voice.stream, id); } catch (e) { } }       // they hear you too
-        });
-        room.onPeerLeave((id) => {
-          const r = netPeers().get(id); if (r) { if (r.st) showToast(`${r.st.n} LEFT`, N.status); removeRemote(r); netPeers().delete(id); }
-          voiceDetach(id); N.aiFrom && N.aiFrom.delete(id);
+        }, 'join'));
+        room.onPeerLeave(netSafe((id) => {
+          // not despawned yet: a Wi-Fi hiccup or the Quest system menu often comes straight back. The heartbeat check
+          // removes them after NET_GRACE of silence (or at once if they said goodbye)
+          const r = netPeers().get(id);
+          if (r) { if (r.bye) netDropPeer(id, true); else r.leftAt = performance.now(); }
+          else voiceDetach(id);
           pcRedraw();
-        });
-        getPose((d, id) => netOnState(id, d));
-        getEvent((d, id) => netOnEvent(id, d));
-        showToast(kind === 'public' ? 'JOINED THE PUBLIC ROOM' : `JOINED ROOM ${code}`, 'Waiting for other players...');
+        }, 'leave'));
+        getPose(netSafe((d, id) => { netOnState(id, d); netHeard(id); }, 'pose'));
+        getEvent(netSafe((d, id) => {
+          netHeard(id);
+          if (d && d.t === 'bye') { const r = netPeers().get(id); if (r) r.bye = true; netDropPeer(id, true); return; }
+          netOnEvent(id, d);
+        }, 'event'));
+        if (!N.rejoining) showToast(kind === 'public' ? 'JOINED THE PUBLIC ROOM' : `JOINED ROOM ${code}`, 'Waiting for other players...');
+        else showToast('RECONNECTED', N.status);
+        N.rejoining = false;
         // a full public room: move on to the next one
         if (kind === 'public') setTimeout(() => {
           if (N.room !== room) return;
           if (netPeers().size >= NET_MAX && N.pubN < 20) { N.pubN++; N.pubKeep = true; N.joining = 0; netJoin('public'); }
         }, 5000);
       } catch (e) {
-        console.warn('[Net] join failed', e); N.status = 'OFFLINE: COULD NOT JOIN'; N.room = null;
+        console.warn('[Net] join failed', e); N.status = 'OFFLINE: COULD NOT JOIN'; N.room = null; N.rejoining = false;
       }
       N.joining = 0; pcRedraw();
     }
-    function netLeave(quiet) {
+    function netLeave(quiet, keepWant) {
       const N = netState();
-      if (N.room) { try { N.room.leave(); } catch (e) { } if (!quiet) showToast('LEFT THE ROOM', ''); }
-      N.room = null; N.send = N.sendEvent = N.sendAI = null; N.kind = null; N.status = 'OFFLINE'; N.questSent = {};
+      if (N.room) {
+        if (!keepWant && N.sendEvent) N.sendEvent({ t: 'bye' });       // the others remove you at once (no grace wait)
+        try { N.room.leave(); } catch (e) { }
+        if (!quiet) showToast('LEFT THE ROOM', '');
+      }
+      if (!keepWant) N.want = null;
+      N.room = null; N.send = N.sendEvent = N.sendAI = N.sendPing = null; N.kind = null; N.status = 'OFFLINE'; N.questSent = {};
       for (const id of [...voice.peers.keys()]) voiceDetach(id);
       if (N.aiFrom) N.aiFrom.clear(); N.aiHold = null; N.aiCatchFrom = null;
       for (const r of netPeers().values()) removeRemote(r);
       netPeers().clear();
       pcRedraw();
     }
+    // a peer that really left: avatar, nametag, hands, arms and audio node all go (a later rejoin builds a fresh one)
+    function netDropPeer(id, toast) {
+      const N = netState(), r = netPeers().get(id);
+      if (r) { if (toast && r.st) showToast(`${r.st.n} LEFT`, N.status); removeRemote(r); netPeers().delete(id); }
+      voiceDetach(id); N.aiFrom && N.aiFrom.delete(id);
+      pcRedraw();
+    }
+    // the heartbeat: a tiny ping every 2 s (on a timer, so it keeps going while the Quest system menu pauses the
+    // headset's frames); peers silent for 8 s are despawned; and a dropped connection rejoins the same room by itself
+    function netRejoin(why) {
+      const N = netState(), w = N.want;
+      if (!w || N.joining) return;
+      const now = performance.now();
+      if (now - (N.rejoinAt || 0) < 15000) return;      // at most one attempt every 15 s
+      N.rejoinAt = now;
+      console.warn('[Net] rejoining', w.kind, w.code || w.pubN, '-', why);
+      N.rejoining = true; N.status = 'RECONNECTING...'; pcRedraw();
+      netLeave(true, true);
+      N.pubN = w.pubN; N.pubKeep = true;
+      netJoin(w.kind, w.code).catch((e) => { console.warn('[Net] rejoin failed', e); N.rejoining = false; });
+    }
+    setInterval(() => {
+      try {
+        const N = netState();
+        if (!N.room) { if (N.want && !N.joining) netRejoin('retrying'); return; }    // a rejoin that failed: try again
+        if (N.sendPing) N.sendPing(1);
+        const now = performance.now();
+        let dropped = 0;
+        for (const [id, r] of [...netPeers()]) {
+          const last = Math.max(r.heard || 0, r.seen || 0);
+          if (now - last > NET_GRACE) { netDropPeer(id, true); dropped++; }
+        }
+        // everyone went silent at once while we still want this room: our own connection most likely dropped
+        if (dropped && netPeers().size === 0) netRejoin('every peer went silent');
+      } catch (e) { console.warn('[Net] heartbeat', e); }
+    }, NET_HEARTBEAT);
+    window.addEventListener('online', () => { try { netRejoin('network back online'); } catch (e) { } });
+    document.addEventListener('visibilitychange', () => {
+      try {
+        const N = netState();
+        if (document.hidden) N.hiddenAt = performance.now();
+        else if (N.hiddenAt && performance.now() - N.hiddenAt > NET_GRACE) netRejoin('back after being hidden');
+      } catch (e) { }
+    });
     // what we tell the others, 15 times a second
     const _nQ = new THREE.Quaternion(), _nP = new THREE.Vector3();
     const r3 = (v) => Math.round(v * 1000) / 1000;
@@ -17342,7 +17437,7 @@
       if (vr) headWorld(_nP); else camera.getWorldPosition(_nP);
       camera.getWorldQuaternion(_nQ);
       const d = {
-        n: playerName(), r: playerRole === 'monster' ? 'm' : 's', m: titleActive ? 'title' : currentMap, vr: vr ? 1 : 0,
+        t: Math.round(now), n: playerName(), r: playerRole === 'monster' ? 'm' : 's', m: titleActive ? 'title' : currentMap, vr: vr ? 1 : 0,
         h: [r3(_nP.x), r3(_nP.y), r3(_nP.z), r3(_nQ.x), r3(_nQ.y), r3(_nQ.z), r3(_nQ.w)],
         y: r3(playerRole === 'monster' ? monsterYaw : survivorBodyYaw),
         L: vr ? handPacket('left') : null, R: vr ? handPacket('right') : null,
@@ -17350,6 +17445,40 @@
         mo: r3(mouthOpenness()), st: N.stunT > 0 ? 1 : 0, it: heldItemsPacket(), hid: tentHide.inside && !tentHide.spotted ? 1 : 0,
       };
       try { target ? N.send(d, target) : N.send(d); } catch (e) { }
+    }
+    // ---------- smooth remote movement: a short buffer of their 15 Hz poses, played back 120 ms behind ----------
+    const NET_INTERP_DELAY = 120;
+    function netBufferPose(r, d) {
+      const recv = performance.now(), t = Number.isFinite(+d.t) ? +d.t : recv;
+      const off = recv - t;                                              // their clock -> ours (the fastest delivery wins)
+      r.off = r.off === undefined ? off : Math.min(off, r.off + 0.05);   // (creeps up slowly, so clock drift can't stall it)
+      const tl = t + r.off;
+      const buf = r.buf || (r.buf = []);
+      if (buf.length && tl <= buf[buf.length - 1].t) return;           // old or duplicate packet
+      buf.push({ t: tl, h: d.h.slice(0, 7), y: +d.y || 0, L: Array.isArray(d.L) ? d.L.slice(0, 7) : null, R: Array.isArray(d.R) ? d.R.slice(0, 7) : null });
+      if (buf.length > 6) buf.shift();
+    }
+    const _niQa = new THREE.Quaternion(), _niQb = new THREE.Quaternion();
+    // the pose at (now - delay): fills hv (Vector3), hq (Quaternion) and returns the yaw; hands interpolated into out.L / out.R
+    function netSamplePose(r, out) {
+      const buf = r.buf; if (!buf || !buf.length) return false;
+      const T = performance.now() - NET_INTERP_DELAY;
+      let a = buf[0], b = buf[0];
+      if (T >= buf[buf.length - 1].t) a = b = buf[buf.length - 1];
+      else for (let i = 1; i < buf.length; i++) { if (buf[i].t >= T) { a = buf[i - 1]; b = buf[i]; break; } }
+      const k = b.t > a.t ? THREE.MathUtils.clamp((T - a.t) / (b.t - a.t), 0, 1) : 1;
+      const lerp7 = (A, B, dst) => {
+        if (!A || !B) return B || A || null;
+        for (let j = 0; j < 3; j++) dst[j] = A[j] + (B[j] - A[j]) * k;
+        _niQa.set(A[3], A[4], A[5], A[6]).normalize(); _niQb.set(B[3], B[4], B[5], B[6]).normalize(); _niQa.slerp(_niQb, k);
+        dst[3] = _niQa.x; dst[4] = _niQa.y; dst[5] = _niQa.z; dst[6] = _niQa.w;
+        return dst;
+      };
+      out.h = lerp7(a.h, b.h, out.hb || (out.hb = []));
+      out.y = a.y + wrapAngle(b.y - a.y) * k;
+      out.L = lerp7(a.L, b.L, out.Lb || (out.Lb = []));
+      out.R = lerp7(a.R, b.R, out.Rb || (out.Rb = []));
+      return true;
     }
 
     // ---------- remote players ----------
@@ -17514,9 +17643,11 @@
     }
     function removeRemote(r) {
       for (const o of [r.root, r.mon, r.tag.s, r.arms && r.arms.g, r.joints && r.joints.g, ...r.monHands, ...r.paws.map((p) => p.root)]) if (o && o.parent) o.parent.remove(o);
+      try { r.tag.tex.dispose(); r.tag.s.material.dispose(); } catch (e) { }   // its own nametag (models share geometry: left alone)
+      r.buf = null;
     }
     function netOnState(id, d) {
-      if (!d || !Array.isArray(d.h)) return;
+      if (!d || typeof d !== 'object' || !Array.isArray(d.h) || d.h.length < 7 || !d.h.every((v) => Number.isFinite(+v))) return;
       let r = netPeers().get(id);
       if (!r) { r = makeRemote(id); netPeers().set(id, r); pcRedraw(); }
       const was = r.st;
@@ -17524,6 +17655,7 @@
                b: String(d.b || 'none'), c: String(d.c || 'none'), hp: Math.max(0, Math.min(100, +d.hp || 0)), mo: +d.mo || 0, stn: !!d.st,
                it: Array.isArray(d.it) ? d.it.slice(0, 4) : [], hid: !!d.hid };
       r.seen = performance.now();
+      netBufferPose(r, d);
       if (!was || was.n !== r.st.n || was.r !== r.st.r) pcRedraw();
     }
     function updateRemotes(dt) {
@@ -17531,14 +17663,18 @@
       const now = performance.now();
       for (const r of netPeers().values()) {
         const s = r.st;
-        const show = !!s && !titleActive && s.m === currentMap && now - r.seen < 5000;
+        const show = !!s && !titleActive && s.m === currentMap && now - r.seen < NET_GRACE;   // (shown through short hiccups)
         r.root.visible = show && s.r === 's';
         r.mon.visible = show && s.r === 'm';
         r.tag.s.visible = show;
         if (!show) { for (const p of r.paws) p.root.visible = false; for (const hd of r.monHands) hd.visible = false; if (r.arms) r.arms.g.visible = false; if (r.joints) r.joints.g.visible = false; r.fresh = true; continue; }
-        _rV.set(s.h[0], s.h[1], s.h[2]); _rQ.set(s.h[3], s.h[4], s.h[5], s.h[6]).normalize();
-        if (r.fresh) { r.pos.copy(_rV); r.quat.copy(_rQ); r.yaw = s.y; r.fresh = false; }
-        else { r.pos.lerp(_rV, a); r.quat.slerp(_rQ, a); r.yaw += wrapAngle(s.y - r.yaw) * a; }
+        // smooth playback of their 15 Hz poses (interpolated between packets, 120 ms behind), lightly eased on top
+        const ip = r.ip || (r.ip = {}), got = netSamplePose(r, ip);
+        const ph = got ? ip.h : s.h, py = got ? ip.y : s.y;
+        _rV.set(ph[0], ph[1], ph[2]); _rQ.set(ph[3], ph[4], ph[5], ph[6]).normalize();
+        const b2 = got ? 1 - Math.exp(-dt * 30) : a;
+        if (r.fresh) { r.pos.copy(_rV); r.quat.copy(_rQ); r.yaw = py; r.fresh = false; }
+        else { r.pos.lerp(_rV, b2); r.quat.slerp(_rQ, b2); r.yaw += wrapAngle(py - r.yaw) * b2; }
         // the tag floats over their head
         r.tag.s.position.set(r.pos.x, r.pos.y + (s.r === 'm' ? 0.77 : 0.63), r.pos.z);   // (0.4 higher: clear above the head; taller tag with the HP bar)
         drawNametag(r.tag, s.n, s.stn ? 'x' : s.r, Math.round(s.hp));
@@ -17568,8 +17704,9 @@
         [s.L, s.R].forEach((hp, k) => {
           const H = r.hand[k], paw = r.paws[k], mh = r.monHands[k];
           if (!Array.isArray(hp) || !s.vr) { H.ok = false; paw.root.visible = false; mh.visible = false; return; }
-          _rV.set(hp[0], hp[1], hp[2]); _rQ.set(hp[3], hp[4], hp[5], hp[6]).normalize();
-          if (!H.ok) { H.p.copy(_rV); H.q.copy(_rQ); H.ok = true; } else { H.p.lerp(_rV, a); H.q.slerp(_rQ, a); }
+          const ih = got ? (k === 0 ? ip.L : ip.R) : null, hpp = ih && ih.length >= 7 ? ih : hp;    // interpolated hand pose
+          _rV.set(hpp[0], hpp[1], hpp[2]); _rQ.set(hpp[3], hpp[4], hpp[5], hpp[6]).normalize();
+          if (!H.ok) { H.p.copy(_rV); H.q.copy(_rQ); H.ok = true; } else { H.p.lerp(_rV, ih ? b2 : a); H.q.slerp(_rQ, ih ? b2 : a); }
           for (let j = 0; j < 3; j++) H.c[j] += ((+hp[7 + j] || 0) - H.c[j]) * Math.min(1, dt * 16);
           if (s.r === 's') {
             mh.visible = false; paw.root.visible = true;
@@ -17971,11 +18108,11 @@
     // (on every survivor in the room on that map), the chase, the catch and the stuns, and sends its state 15 times a
     // second; everyone else's monster is a puppet of that state. If the host leaves, the next one takes over from
     // where the puppet was. A human MONSTER anywhere in the room stands the AI down for everyone.
-    function netSelfId() { return (typeof trysteroSelfId === 'string' && trysteroSelfId) || 'local'; }
+    function netSelfId() { const L = netState().lib; return (L && typeof L.selfId === 'string' && L.selfId) || (typeof trysteroSelfId === 'string' && trysteroSelfId) || 'local'; }
     function aiAuthorityId() {
       const N = netState(); if (!N.room || currentMap === 'waiting' || titleActive) return null;
       let best = netSelfId(); const now = performance.now();
-      for (const [id, r] of netPeers()) if (r.st && r.st.m === currentMap && now - r.seen < 4000 && id < best) best = id;
+      for (const [id, r] of netPeers()) if (r.st && r.st.m === currentMap && now - r.seen < 4000 && !r.leftAt && id < best) best = id;   // (a peer whose connection closed hands over at once)
       return best;
     }
     function aiRole() { const a = aiAuthorityId(); return a === null ? 'local' : a === netSelfId() ? 'host' : 'puppet'; }
