@@ -6292,6 +6292,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'UPDATE', date: '24/11/26', title: 'RAW',
+        text: 'Torn-off arms are really gone from your own body. Raw, spurting wounds at the shoulders and neck. The dead ragdoll to the floor, and their torn-off parts are cleared when they respawn.' },
       { tag: 'UPDATE', date: '24/11/26', title: 'FLOPPY',
         text: 'Torn-off heads drag a long floppy spine, arms trail tendons. Your ripped arms stay gone. Lose both and you live, but you cannot move. Ammo boxes are hidden away now.' },
       { tag: 'UPDATE', date: '24/11/26', title: 'BLOOD AND SHELLS',
@@ -20363,6 +20365,276 @@
       updateNet = function (dt) {
         const r = baseNet2(dt);
         for (const f of [updateOwnGore, updateMonsterBlood, updateAmmo, updateArmless]) { try { f(dt); } catch (e) { if (!f.warned) { f.warned = true; console.warn('[r68]', f.name, e); } } }
+        return r;
+      };
+    }
+
+    // =====================================================================
+    //  GORE 3: your torn-off arms really gone, raw wounds, ragdolls
+    //  - your own arms are posed inside renderer.render (zero lag), so a torn-off arm is collapsed right after that,
+    //    every frame, before it's drawn: it can't come back on your own body
+    //  - raw wounds where arms and heads were torn off: wet red meat, the bone (a ball joint at the shoulder, the
+    //    severed spine in the neck), lumps of flesh, a ragged blood-soaked fur rim, floppy tendons and arterial spurts
+    //  - a dead survivor ragdolls: the body drops and topples onto the floor (wounds and blood and all)
+    //  - everything torn off someone is cleared away once they respawn
+    // =====================================================================
+    const woundRed = new THREE.MeshStandardMaterial({ color: 0xa00b06, roughness: 0.22, metalness: 0.12, emissive: 0x2a0000 });
+    const woundDark = new THREE.MeshStandardMaterial({ color: 0x360302, roughness: 0.45, metalness: 0.05 });
+    const woundFur = new THREE.MeshStandardMaterial({ color: 0x5a0805, roughness: 0.7 });
+    const woundSphere = new THREE.SphereGeometry(1, 14, 10), woundLump = new THREE.SphereGeometry(1, 7, 5), woundCone = new THREE.ConeGeometry(1, 1, 5);
+    const woundTube = new THREE.CylinderGeometry(1, 1, 1, 10);
+    // r: the wound's radius (m). The wound faces its local +Y (out of the body)
+    function makeWound(r, neck) {
+      const g = new THREE.Group();
+      const base = new THREE.Mesh(woundSphere, woundRed); base.scale.set(r, r * 0.42, r); g.add(base);
+      const pit = new THREE.Mesh(woundSphere, woundDark); pit.scale.set(r * 0.62, r * 0.26, r * 0.62); pit.position.y = r * 0.16; g.add(pit);
+      if (neck) {
+        // the severed neck: the spine's stump in the middle (white bone, a dark marrow hole), the gullet beside it
+        const bone = new THREE.Mesh(woundTube, spinePaleMat); bone.scale.set(r * 0.24, r * 0.5, r * 0.24); bone.position.set(0, r * 0.25, -r * 0.18); g.add(bone);
+        const marrow = new THREE.Mesh(woundTube, woundDark); marrow.scale.set(r * 0.12, r * 0.04, r * 0.12); marrow.position.set(0, r * 0.5, -r * 0.18); g.add(marrow);
+        for (const sx of [-1, 1]) { const pr = new THREE.Mesh(woundCone, spinePaleMat); pr.scale.set(r * 0.06, r * 0.35, r * 0.06); pr.position.set(sx * r * 0.3, r * 0.3, -r * 0.2); pr.rotation.z = -sx * 1.2; g.add(pr); }
+        const pipe = new THREE.Mesh(woundTube, woundRed); pipe.scale.set(r * 0.16, r * 0.4, r * 0.16); pipe.position.set(0, r * 0.2, r * 0.3); g.add(pipe);
+        const hole = new THREE.Mesh(woundTube, woundDark); hole.scale.set(r * 0.09, r * 0.05, r * 0.09); hole.position.set(0, r * 0.41, r * 0.3); g.add(hole);
+      } else {
+        // the shoulder: the white ball of the arm socket in the raw meat
+        const ball = new THREE.Mesh(woundSphere, spinePaleMat); ball.scale.setScalar(r * 0.3); ball.position.set(0, r * 0.22, 0); g.add(ball);
+      }
+      for (let k = 0; k < 9; k++) {                                          // torn lumps of meat
+        const a = Math.random() * Math.PI * 2, d = r * (0.35 + Math.random() * 0.5);
+        const l = new THREE.Mesh(woundLump, Math.random() < 0.3 ? woundDark : woundRed);
+        l.position.set(Math.cos(a) * d, r * (0.12 + Math.random() * 0.2), Math.sin(a) * d);
+        l.scale.set(r * (0.12 + Math.random() * 0.16), r * (0.08 + Math.random() * 0.12), r * (0.12 + Math.random() * 0.16));
+        g.add(l);
+      }
+      for (let k = 0; k < 14; k++) {                                         // the ragged, blood-soaked fur round the edge
+        const a = (k / 14) * Math.PI * 2 + Math.random() * 0.3, c = new THREE.Mesh(woundCone, woundFur);
+        c.scale.set(r * 0.13, r * (0.3 + Math.random() * 0.35), r * 0.13);
+        c.position.set(Math.cos(a) * r * 0.92, r * 0.06, Math.sin(a) * r * 0.92);
+        c.lookAt(Math.cos(a) * r * 3, r * 1.2, Math.sin(a) * r * 3); c.rotateX(Math.PI / 2);
+        g.add(c);
+      }
+      // floppy tendons and veins hanging out of it
+      const ropes = [];
+      for (let k = 0; k < (neck ? 5 : 4); k++) {
+        const rp = makeRope('tendon', new THREE.Vector3(0, r * 0.2, 0), 6, r * (0.45 + Math.random() * 0.25), new THREE.Vector3((Math.random() - 0.5) * r, 0, (Math.random() - 0.5) * r));
+        for (const m of rp.meshes) m.userData.r = r * (0.05 + Math.random() * 0.05);
+        scene.add(rp.grp); ropes.push(rp);
+      }
+      g.userData.ropes = ropes; g.userData.r = r; g.userData.neck = neck; g.userData.spurt = 0; g.userData.age = 0;
+      g.visible = false; scene.add(g);
+      return g;
+    }
+    function disposeWound(w) {
+      if (!w) return;
+      if (w.parent) w.parent.remove(w);
+      for (const rp of w.userData.ropes || []) if (rp.grp.parent) rp.grp.parent.remove(rp.grp);
+    }
+    const _wnU = new THREE.Vector3(0, 1, 0), _wnN = new THREE.Vector3(), _wnR = new THREE.Vector3(), _wnQ = new THREE.Quaternion();
+    // put a wound on a bone (where the arm / head came off), facing out of the body; spurting blood for a while
+    function placeWound(w, B, part, on, dt, fresh) {
+      w.visible = on;
+      for (const rp of w.userData.ropes) rp.grp.visible = on;
+      if (!on) { w.userData.age = 0; for (const rp of w.userData.ropes) rp.pts = null; return; }
+      if (fresh) w.userData.age = 0;
+      const bone = part === 'H' ? B.head : B[part].u;
+      bone.getWorldPosition(w.position);
+      B.root.getWorldPosition(_wnR);
+      if (part === 'H') _wnN.set(0, 1, 0).applyQuaternion(B.root.getWorldQuaternion(_wnQ));
+      else { _wnN.subVectors(w.position, _wnR); _wnN.y = Math.max(0, _wnN.y) + _wnN.length() * 0.25; }
+      if (_wnN.lengthSq() < 1e-8) _wnN.set(0, 1, 0);
+      _wnN.normalize();
+      w.quaternion.setFromUnitVectors(_wnU, _wnN);
+      w.updateMatrixWorld(true);
+      for (const rp of w.userData.ropes) simRope(rp, w, dt, false, true);
+      // blood: arterial spurts in time with a heartbeat for the first 12 s, then a steady drip
+      const u = w.userData; u.age += dt;
+      if (u.age < 12) {
+        u.spurt -= dt;
+        if (u.spurt <= 0) {
+          u.spurt = 0.55 + Math.random() * 0.25;
+          const sp = 1.4 + 1.6 * Math.max(0, 1 - u.age / 12);
+          for (let k = 0; k < 9; k++) bloodDrop(w.position.x, w.position.y, w.position.z,
+            _wnN.x * sp + (Math.random() - 0.5) * 0.6, _wnN.y * sp + (Math.random() - 0.5) * 0.6, _wnN.z * sp + (Math.random() - 0.5) * 0.6, 0.008 + Math.random() * 0.01);
+        }
+      }
+      if (Math.random() < dt * (u.age < 12 ? 10 : 3)) bloodDrop(w.position.x + (Math.random() - 0.5) * u.r, w.position.y, w.position.z + (Math.random() - 0.5) * u.r, 0, -0.2, 0);
+    }
+    const woundSize = (s, part) => (part === 'H' ? 0.16 : 0.12) * s;          // (s: the model's world scale)
+
+    // ---------- your own torn-off arms: collapsed after the arms are posed for this frame ----------
+    const ownWounds = {};
+    let ownRpWas = 0;
+    {
+      const baseArms = updateSurvivorArms;
+      updateSurvivorArms = function () {
+        const r = baseArms.apply(this, arguments);
+        try {
+          const inst = survivorRig && survivorRig.local, B = inst && inst.bones;
+          const rp = playerRole === 'survivor' ? (goreMe.rp | 0) : 0;
+          if (B) { shrinkBone(B.L.u, rp & 1); shrinkBone(B.R.u, rp & 2); }
+        } catch (e) { }
+        return r;
+      };
+    }
+    let ownWoundT = performance.now();
+    function updateOwnWounds() {
+      const now = performance.now(), dt = Math.min(0.05, (now - ownWoundT) / 1000); ownWoundT = now;
+      for (const st of Object.values(ownStumps)) st.visible = false;           // (the simple stumps: replaced by the wounds)
+      const inst = survivorRig && survivorRig.local, B = inst && inst.bones;
+      const rp = playerRole === 'survivor' && !caught ? (goreMe.rp | 0) : 0;
+      const s = inst ? inst.mesh.getWorldScale(_wnR).y : 1;
+      for (const side of ['L', 'R']) {
+        const bit = side === 'L' ? 1 : 2, on = !!(rp & bit) && !!B;
+        if (on && !ownWounds[side]) ownWounds[side] = makeWound(woundSize(s, side), false);
+        if (ownWounds[side]) placeWound(ownWounds[side], B, side, on, dt, on && !(ownRpWas & bit));
+      }
+      ownRpWas = rp;
+    }
+
+    // ---------- other players: wounds on their bodies, ragdolls when they die ----------
+    const ragdolls = new Map();                                              // peer id -> ragdoll
+    function rigMat(src) {
+      const m = Array.isArray(src) ? src.map((x) => Object.assign(x.clone(), { clippingPlanes: null })) : Object.assign(src.clone(), { clippingPlanes: null });
+      return m;
+    }
+    function spawnRagdoll(r) {
+      if (!r.rig || !r.rig.mesh || !survivorRig || !survivorRig.full) return null;
+      const s = r.st, src = r.rig.mesh;
+      const inst = makeRigInstance(rigMat(src.material), false), B = inst.bones;
+      const rp = s.rp | 0;
+      if (rp & 1) B.L.u.scale.setScalar(0.001);
+      if (rp & 2) B.R.u.scale.setScalar(0.001);
+      if (rp & 4) B.head.scale.setScalar(0.001);
+      src.updateMatrixWorld(true);
+      const P = new THREE.Vector3(), Q = new THREE.Quaternion(), S = new THREE.Vector3();
+      src.matrixWorld.decompose(P, Q, S);
+      const yaw = new THREE.Euler().setFromQuaternion(Q, 'YXZ').y;
+      const floor = goreFloor(P.x, P.z);
+      const pivot = new THREE.Group(); pivot.position.set(P.x, floor, P.z);
+      const fallYaw = yaw + (Math.random() < 0.5 ? 0 : Math.PI) + (Math.random() - 0.5) * 0.8;   // forwards or backwards
+      pivot.rotation.y = fallYaw;
+      const tilt = new THREE.Group(); pivot.add(tilt);
+      const holder = new THREE.Group(); holder.position.y = Math.max(0.1, P.y - floor); holder.rotation.y = yaw - fallYaw; tilt.add(holder);
+      inst.mesh.scale.copy(S); holder.add(inst.mesh);
+      scene.add(pivot);
+      const smears = (() => { try { return addSmears(inst); } catch (e) { return []; } })();
+      setSmears(smears, Math.max(1, smearLevelOf(rp)));
+      const wounds = {};
+      for (const part of ['L', 'R', 'H']) if (rp & PART_BIT[part]) wounds[part] = makeWound(woundSize(S.y, part), part === 'H');
+      bloodSplat(P.x, P.z, 0.3 + Math.random() * 0.2);
+      return { pivot, tilt, holder, inst, mats: inst.mesh.material, th: 0, om: 0.6 + Math.random() * 0.8, rest: false, h: holder.position.y, s: S.y, floor, wounds, smears, rp, t: 0, side: (Math.random() - 0.5) * 0.6 };
+    }
+    function removeRagdoll(id) {
+      const rd = ragdolls.get(id); if (!rd) return;
+      ragdolls.delete(id);
+      if (rd.pivot.parent) rd.pivot.parent.remove(rd.pivot);
+      for (const w of Object.values(rd.wounds)) disposeWound(w);
+      for (const m of Array.isArray(rd.mats) ? rd.mats : [rd.mats]) { try { m.dispose(); } catch (e) { } }
+      for (const sm of rd.smears || []) { try { sm.material.dispose(); } catch (e) { } }
+    }
+    function updateRagdoll(rd, dt) {
+      rd.t += dt;
+      if (!rd.rest) {
+        // a body toppling over its feet: gravity pulls it down faster and faster, a thud and a small bounce, then still
+        rd.om += (9.8 / Math.max(0.25, rd.h)) * Math.sin(Math.max(rd.th, 0.08)) * 1.1 * dt;
+        rd.th += rd.om * dt;
+        if (rd.th >= Math.PI / 2) {
+          rd.th = Math.PI / 2;
+          if (rd.om > 1.2) { try { gameAudio.thud ? gameAudio.thud(0) : gameAudio.squelch(0, 0.8); } catch (e) { } bloodSplat(rd.pivot.position.x, rd.pivot.position.z, 0.25); }
+          rd.om = -rd.om * 0.22;
+          if (Math.abs(rd.om) < 0.35) { rd.rest = true; rd.om = 0; }
+        }
+      }
+      rd.tilt.rotation.x = rd.th;
+      rd.tilt.rotation.z = rd.side * Math.min(1, rd.th / (Math.PI / 2));
+      rd.pivot.position.y = rd.floor + Math.sin(rd.th) * 0.28 * rd.s;       // (lying on its side, not sunk into the floor)
+      // limp: the head lolls, the arms flop
+      const B = rd.inst.bones, k = Math.min(1, rd.th / (Math.PI / 2));
+      if (!(rd.rp & 4)) B.head.rotation.set(0.5 * k, 0, 0.7 * k);
+      if (!(rd.rp & 1)) B.L.u.rotation.set(-0.9 * k, 0, 0.6 * k);
+      if (!(rd.rp & 2)) B.R.u.rotation.set(-0.9 * k, 0, -0.6 * k);
+      rd.pivot.updateMatrixWorld(true);
+      for (const [part, w] of Object.entries(rd.wounds)) placeWound(w, B, part, rd.pivot.visible, dt, false);
+    }
+    {
+      const baseRG3 = updateRemoteGore;
+      updateRemoteGore = function (dt) {
+        const out = baseRG3(dt);
+        for (const [id, r] of netPeers()) {
+          const s = r.st;
+          for (const st of Object.values(r.goreStumps || {})) st.visible = false;   // (the simple stumps: replaced by the wounds)
+          const here = !!s && s.r === 's' && s.m === currentMap && !titleActive;
+          const dead = here && (+s.hp || 0) <= 0;
+          // they've respawned / left: their ragdoll and everything torn off them goes
+          if (r.goreDead && (!dead || !here)) {
+            r.goreDead = false;
+            removeRagdoll(id);
+            for (const pc of [...gorePieces]) if (pc.victim === id) dropPiece(pc, true);
+          }
+          if (dead && !r.goreDead) {
+            r.goreDead = true;
+            if (!ragdolls.has(id)) { const rd = spawnRagdoll(r); if (rd) ragdolls.set(id, rd); }
+          }
+          const rd = ragdolls.get(id);
+          if (rd) {
+            // the ragdoll stands in for them: their live body, hands and arms are hidden
+            r.root.visible = false;
+            for (const p of r.paws) p.root.visible = false;
+            if (r.cuffs) for (const c of r.cuffs) c.visible = false;
+            if (r.arms) r.arms.g.visible = false;
+            if (r.joints) r.joints.g.visible = false;
+            rd.pivot.visible = here;
+            updateRagdoll(rd, dt);
+          }
+          // the wounds on their living body
+          const B = r.rig && r.rig.bones, rp = here && !rd ? (s.rp | 0) : 0;
+          r.goreWounds = r.goreWounds || {};
+          const sc = r.rig && r.rig.mesh ? r.rig.mesh.getWorldScale(_wnR).y : 1;
+          for (const part of ['L', 'R', 'H']) {
+            const on = !!(rp & PART_BIT[part]) && !!B && r.root.visible !== false;
+            if (on && !r.goreWounds[part]) r.goreWounds[part] = makeWound(woundSize(sc, part), part === 'H');
+            const w = r.goreWounds[part];
+            if (w) placeWound(w, B, part, on, dt, on && !w.visible);
+          }
+        }
+        // ragdolls of players who've gone
+        for (const id of [...ragdolls.keys()]) if (!netPeers().has(id)) removeRagdoll(id);
+        return out;
+      };
+    }
+    {
+      const baseRR3 = removeRemote;
+      removeRemote = function (r) {
+        try {
+          removeRagdoll(r.id);
+          for (const w of Object.values(r.goreWounds || {})) disposeWound(w);
+          for (const pc of [...gorePieces]) if (pc.victim === r.id) dropPiece(pc, true);
+        } catch (e) { }
+        return baseRR3(r);
+      };
+    }
+    // every torn-off piece remembers whose it was
+    {
+      const baseFx3 = goreRipFx;
+      goreRipFx = function (r, part, at, hold) {
+        const n = gorePieces.length, out = baseFx3(r, part, at, hold);
+        const pc = gorePieces[gorePieces.length - 1];
+        if (pc && gorePieces.length > n - 1) pc.victim = r ? r.id : 'self';
+        return out;
+      };
+    }
+    // you respawn: the arms and head torn off you are cleared away
+    let ownCaughtWas = false;
+    function updateOwnRespawn() {
+      const now = !!caught;
+      if (ownCaughtWas && !now) for (const pc of [...gorePieces]) if (pc.victim === 'self') dropPiece(pc, true);
+      ownCaughtWas = now;
+    }
+    {
+      const baseNet3 = updateNet;
+      updateNet = function (dt) {
+        const r = baseNet3(dt);
+        for (const f of [updateOwnWounds, updateOwnRespawn]) { try { f(dt); } catch (e) { if (!f.warned) { f.warned = true; console.warn('[r69]', f.name, e); } } }
         return r;
       };
     }
