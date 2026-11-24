@@ -6292,6 +6292,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'FIX', date: '24/11/26', title: 'DEAD ARM',
+        text: 'A torn-off arm is useless: that hand cannot climb, push, grab or hold anything. New gore lines when limbs come off.' },
       { tag: 'UPDATE', date: '24/11/26', title: 'RAW',
         text: 'Torn-off arms are really gone from your own body. Raw, spurting wounds at the shoulders and neck. The dead ragdoll to the floor, and their torn-off parts are cleared when they respawn.' },
       { tag: 'UPDATE', date: '24/11/26', title: 'FLOPPY',
@@ -19663,7 +19665,7 @@
       } else {
         hurt(dmg, 0xaa0000);
         if ((goreMe.rp & 3) === 3) showToast('BOTH YOUR ARMS ARE GONE', 'You can\'t move...');
-        else showToast(`${by} RIPPED YOUR ${PART_NAME[d.p]} OFF`, `-${dmg} HP  ·  ${Math.round(survival.hp)} HP left`);
+        else showToast(`${by} RIPPED YOUR ${PART_NAME[d.p]} OFF`, typeof goreLine === 'function' ? goreLine('arm') + `  ·  ${Math.round(survival.hp)} HP` : `-${dmg} HP  ·  ${Math.round(survival.hp)} HP left`);
       }
       netSendState(true);
     }
@@ -20636,6 +20638,54 @@
         const r = baseNet3(dt);
         for (const f of [updateOwnWounds, updateOwnRespawn]) { try { f(dt); } catch (e) { if (!f.warned) { f.warned = true; console.warn('[r69]', f.name, e); } } }
         return r;
+      };
+    }
+
+    // ---------- a torn-off arm is useless: that hand can't climb, push, grab or hold anything ----------
+    function goreDisableHands() {
+      const rp = playerRole === 'survivor' ? (goreMe.rp | 0) : 0;
+      if (!(rp & 3)) return;
+      hands.forEach((h, i) => {
+        const bit = controllers[i].userData.inputSource?.handedness === 'left' ? 1 : 2;
+        if (!(rp & bit)) return;
+        h.tracked = false;                                                   // (every system ignores an untracked hand)
+        h.colliding = h.wasTouching = false;
+        h.follower.visible = h.sphere.visible = false;
+        // let go of anything it was holding
+        for (const w of weapons) if (w.held === i) { w.held = -1; w.falling = true; }
+        const sg = gunOf(currentMap); if (sg && sg.held === i) { sg.held = -1; }
+      });
+    }
+    {
+      const baseGU = gorillaUpdate;
+      gorillaUpdate = function (dt) { try { goreDisableHands(); } catch (e) { } return baseGU(dt); };
+    }
+
+    // ---------- what you see when it happens: lines from the gore notes ----------
+    const GORE_NOTES = {
+      arm: [
+        'The deltoid tears like wet canvas and peels back off the shoulder',
+        'A white ball of bone pops out of its glistening socket',
+        'Tendons snap and whip back into the raw meat, still twitching',
+        'The artery jets bright red in time with the heartbeat',
+        'Yellow fat and grey nerve cords dangle from the ragged hole',
+        'Fur hangs in a sodden red fringe round the gaping shoulder',
+      ],
+      head: [
+        'The neck stretches, the skin splits, and the whole spine comes with it',
+        'Ribbed windpipe and limp gullet hang out of the stump',
+        'Twin arteries spray the walls as the head comes free',
+        'Vertebrae clatter out one by one, strung on the pale spinal cord',
+        'Steam rises off the open neck in the cold night air',
+      ],
+    };
+    const goreLine = (kind) => { const L = GORE_NOTES[kind]; return L[(Math.random() * L.length) | 0]; };
+    {
+      const baseRipFx4 = goreRipFx;
+      goreRipFx = function (r, part, at, hold) {
+        const out = baseRipFx4(r, part, at, hold);
+        try { if (hold && hold.local !== undefined) showToast(part === 'H' ? 'HEAD TORN OFF' : 'ARM TORN OFF', goreLine(part === 'H' ? 'head' : 'arm')); } catch (e) { }
+        return out;
       };
     }
 
