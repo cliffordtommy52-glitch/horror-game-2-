@@ -3012,7 +3012,7 @@
           } else {
             const hitPressed = pressedNow(o, 0) || pressedNow(0, 2) || pressedNow(1, 2); // other trigger, or A / X
             if (g.active) {
-              g.angle += (Math.PI * 2 / g.needleTurnTime) * dt;
+              g.angle += (Math.PI * 2 / g.needleTurnTime) * Math.min(dt, 1 / 30);
               g.check.needle.rotation.z = -g.angle;
               if (hitPressed) hitCheck(g);
               else if (g.angle >= Math.PI * 2) missCheck(g); // the needle went all the way round
@@ -6292,6 +6292,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'FIX', date: '24/11/26', title: 'PLAYTEST FIXES',
+        text: 'Tidy cemetery paths, an iron-bound door and always-lit lamps, mouths that talk, solid players, nametags with HP, slim wrist chains, shared fuel, a monster that notices you.' },
       { tag: 'UPDATE', date: '24/11/26', title: 'ONE SHOTGUN, ONE BOAT, SHARED',
         text: 'The shotgun and the boat are shared: you see who holds or drives them and ride along in the boat. Brighter waiting room, computer in the corner, cleaner graveyard.' },
       { tag: 'UPDATE', date: '24/11/26', title: "THE SURVIVOR'S OWN ARMS AND HANDS",
@@ -7480,7 +7482,7 @@
         spawn: { x: MINE.x + 12, z: MINE.z, yaw: Math.PI / 2 }, fog: [0x0d0a07, 0.14], sky: 0x060504, hemi: [0x3a2a1a, 0x050403, 0.18],
         desk: { cam: [MINE.x + 15, 1.6, MINE.z + 3], target: [MINE.x + 6, 0.6, MINE.z] } },
     ];
-    const ROOM_ENV = { fog: [0x1a140e, 0.012], sky: 0x0c0906, hemi: [0xd8c2a0, 0x5c4a38, 1.6] };   // warm and brightly lit (benches, shop, computer corner all clear)
+    const ROOM_ENV = { fog: [0x1a140e, 0.012], sky: 0x0c0906, hemi: [0xd8c2a0, 0x5c4a38, 1.85] };   // warm and brightly lit everywhere (benches, shop, computer corner, the back corner)
     let currentMap = 'waiting';                       // 'waiting' until you launch a map
     function applyEnv(env) {
       scene.fog.color.setHex(env.fog[0]); scene.fog.density = env.fog[1];
@@ -7556,11 +7558,36 @@
         box(trimMat, x, 0, z, w, 0.12, d, false);
         box(trimMat, x, 0.85, z, w, 0.04, d, false);
       }
-      // the old front door (shut) on the south wall
-      box(doorWoodMat, 0, 0, W.d / 2 - 0.03, 0.8, 1.7, 0.06, false);
-      box(trimMat, 0, 1.7, W.d / 2 - 0.05, 0.96, 0.08, 0.08, false);
-      for (const s of [-1, 1]) box(trimMat, s * 0.44, 0, W.d / 2 - 0.05, 0.08, 1.7, 0.08, false);
-      rb.add(new THREE.SphereGeometry(0.03, 8, 6), brassMat, W.x + 0.3, 0.85, W.z + W.d / 2 - 0.08);
+      // the old front door (shut) on the south wall: heavy planks in a moulded frame, three black iron straps with
+      // rivets, long strap hinges, a ring pull on a back plate, a thumb latch and a keyhole escutcheon, a threshold
+      {
+        const DZ = W.d / 2, DW = 0.86, DH = 1.78;
+        const plankA = new THREE.MeshStandardMaterial({ map: woodTex, color: 0x6a4428, roughness: 0.78 });
+        const plankB = new THREE.MeshStandardMaterial({ map: woodTex, color: 0x5a381f, roughness: 0.8 });
+        const ironDoor = new THREE.MeshStandardMaterial({ color: 0x1c1b1a, roughness: 0.55, metalness: 0.7 });
+        box(trimMat, 0, DH, DZ - 0.05, DW + 0.24, 0.12, 0.1, false);                                    // lintel
+        for (const s of [-1, 1]) box(trimMat, s * (DW / 2 + 0.06), 0, DZ - 0.05, 0.12, DH, 0.1, false);   // jambs
+        box(trimMat, 0, 0, DZ - 0.07, DW + 0.3, 0.035, 0.14, false);                                     // threshold
+        box(plankB, 0, 0.02, DZ - 0.02, DW, DH - 0.02, 0.03, false);                                     // backing boards (the dark gaps)
+        const NPL = 6, pw = DW / NPL;
+        for (let k = 0; k < NPL; k++) box(k % 2 ? plankA : plankB, -DW / 2 + pw * (k + 0.5), 0.02, DZ - 0.045, pw - 0.012, DH - 0.03, 0.03, false);   // vertical planks
+        for (const y of [0.22, 0.9, 1.56]) {                                                                // iron straps with rivets
+          box(ironDoor, 0, y - 0.035, DZ - 0.066, DW - 0.02, 0.07, 0.012, false);
+          for (let k = 0; k < NPL; k++) rb.add(new THREE.SphereGeometry(0.011, 6, 4), ironDoor, W.x - DW / 2 + pw * (k + 0.5), y, W.z + DZ - 0.075);
+        }
+        for (const y of [0.22, 1.56]) {                                                                     // strap hinges: long tapered iron with a knuckle
+          rb.add(UNIT_BOX, ironDoor, W.x - DW / 2 + 0.2, y, W.z + DZ - 0.072, 0, 0, 0, 0.42, 0.05, 0.014);
+          rb.add(new THREE.CylinderGeometry(0.022, 0.022, 0.12, 10), ironDoor, W.x - DW / 2 - 0.01, y, W.z + DZ - 0.07);
+          rb.add(new THREE.SphereGeometry(0.026, 8, 6), ironDoor, W.x - DW / 2 + 0.42, y, W.z + DZ - 0.074);
+        }
+        const HX = W.x + DW / 2 - 0.13, HY = 0.95, HZ = W.z + DZ - 0.075;
+        rb.add(UNIT_BOX, ironDoor, HX, HY, HZ + 0.004, 0, 0, 0, 0.1, 0.16, 0.01);                           // back plate
+        rb.add(new THREE.TorusGeometry(0.045, 0.008, 8, 20), ironDoor, HX, HY - 0.03, HZ - 0.012);           // ring pull
+        rb.add(new THREE.CylinderGeometry(0.01, 0.01, 0.025, 8), ironDoor, HX, HY + 0.02, HZ - 0.01, Math.PI / 2, 0, 0);   // its pivot
+        rb.add(UNIT_BOX, ironDoor, HX - 0.07, HY + 0.12, HZ - 0.004, 0, 0, 0, 0.1, 0.018, 0.016);            // thumb latch bar
+        rb.add(UNIT_BOX, brassMat, HX, HY - 0.16, HZ + 0.002, 0, 0, 0, 0.04, 0.07, 0.006);                   // keyhole escutcheon
+        rb.add(UNIT_BOX, ironDoor, HX, HY - 0.165, HZ - 0.002, 0, 0, 0, 0.008, 0.025, 0.004);               // the keyhole
+      }
       // a boarded-up window on the east wall
       box(windowVoidMat, W.w / 2 - 0.01, 0.8, -0.6, 0.02, 0.8, 1.0, false);
       for (let k = 0; k < 4; k++) rb.add(UNIT_BOX, plankMat, W.x + W.w / 2 - 0.04, 0.95 + k * 0.17, W.z - 0.6, 0.06 * (k - 1.5), 0, 0, 0.04, 0.1, 1.2);
@@ -7622,13 +7649,21 @@
         const shadeMat = new THREE.MeshStandardMaterial({ color: 0x2a2018, roughness: 0.6, metalness: 0.3, side: THREE.DoubleSide });
         const lampBulbMat = new THREE.MeshStandardMaterial({ color: 0x333333, emissive: 0xffd8a0, emissiveIntensity: 2.4 });
         const lb = makeBatch();
-        for (const [lx, lz] of [[-2.5, 2.0], [-2.3, -1.9], [2.3, 1.5]]) {
+        // (they're always on at full brightness: their glow is their own, not a borrowed light that comes and goes as
+        // you walk about; a warm pool under each one on the floor, and the room's light is turned up to match)
+        const poolTex = (() => { const c = document.createElement('canvas'); c.width = c.height = 128; const g = c.getContext('2d');
+          const r = g.createRadialGradient(64, 64, 0, 64, 64, 64); r.addColorStop(0, 'rgba(255,214,160,1)'); r.addColorStop(0.5, 'rgba(255,200,140,0.45)'); r.addColorStop(1, 'rgba(255,190,130,0)');
+          g.fillStyle = r; g.fillRect(0, 0, 128, 128); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t; })();
+        const poolMat = new THREE.MeshBasicMaterial({ map: poolTex, transparent: true, opacity: 0.2, blending: THREE.AdditiveBlending, depthWrite: false, fog: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+        const glowShadeMat = new THREE.MeshBasicMaterial({ color: 0xffc888, side: THREE.BackSide, fog: false });   // the lit inside of each shade
+        for (const [lx, lz] of [[-2.5, 2.0], [-2.3, -1.9], [2.3, 1.5], [1.4, 2.85]]) {                // (the fourth: the back corner over the benches)
           lb.add(new THREE.CylinderGeometry(0.004, 0.004, 0.42, 4), ironMat, W.x + lx, W.h - 0.21, W.z + lz);                 // cord
           lb.add(new THREE.CylinderGeometry(0.05, 0.17, 0.12, 16, 1, true), shadeMat, W.x + lx, W.h - 0.48, W.z + lz);          // shade
+          lb.add(new THREE.CylinderGeometry(0.048, 0.166, 0.118, 16, 1, true), glowShadeMat, W.x + lx, W.h - 0.48, W.z + lz);
           lb.add(new THREE.SphereGeometry(0.035, 10, 8), lampBulbMat, W.x + lx, W.h - 0.52, W.z + lz);                         // bulb
-          lightSources.push({ x: W.x + lx, y: W.h - 0.62, z: W.z + lz, color: 0xffcf98, intensity: 12, distance: 8, weight: 4.5 });
+          lb.add(new THREE.PlaneGeometry(2.6, 2.6), poolMat, W.x + lx, 0.004, W.z + lz, -Math.PI / 2, 0, 0);                  // its light on the floor
         }
-        lb.build(scene, { castShadow: false });
+        lb.build(scene, { castShadow: false, receiveShadow: false });
       }
       // drifting dust
       const n = 160, pos = new Float32Array(n * 3);
@@ -7857,17 +7892,51 @@
       // above the grass; a slab that would overlap one already laid (a bend, or where paths meet) is left out
       {
         const laid = [], SL = 0.5, SW = 0.86, STEP = 0.62;
-        for (const c of pathLines) {
+        // (the three short spurs that ran straight into a family plot's railings where it has no gate are left out:
+        // to the west plot's north side, the east plot's north side and the north-west plot's west side)
+        const deadEnds = new Set([3, 4, 6]);
+        // a slab must keep clear of every railing: the plots' fences (except across their gates), the outer wall
+        const nearFence = (x, z) => {
+          if (Math.abs(x - G.x) > GH - 0.75 || Math.abs(z - G.z) > GH - 0.75) return true;
+          for (const P of GY.plots) {
+            const x0 = G.x + P.x - P.w / 2, x1 = G.x + P.x + P.w / 2, z0 = G.z + P.z - P.d / 2, z1 = G.z + P.z + P.d / 2, gap = 1.3, m = 0.62;
+            if (x < x0 - m || x > x1 + m || z < z0 - m || z > z1 + m) continue;
+            const sides = { N: [Math.abs(z - z0), x, (x0 + x1) / 2], S: [Math.abs(z - z1), x, (x0 + x1) / 2], W: [Math.abs(x - x0), z, (z0 + z1) / 2], E: [Math.abs(x - x1), z, (z0 + z1) / 2] };
+            for (const [k, [d, along, mid]] of Object.entries(sides)) {
+              if (d >= m) continue;
+              if (k === P.gate && Math.abs(along - mid) < gap / 2 - 0.1) continue;      // walking in through the gate
+              return true;
+            }
+          }
+          return false;
+        };
+        pathLines.forEach((c, li) => {
+          if (deadEnds.has(li)) return;
           const n = Math.max(1, Math.round(c.getLength() / STEP));
           for (let k = 0; k <= n; k++) {
             const p = c.getPointAt(k / n), tng = c.getTangentAt(k / n), ry = Math.atan2(tng.x, tng.z);
             if (laid.some((q) => Math.hypot(q.x - p.x, q.z - p.z) < 0.58)) continue;
-            laid.push(p);
+            if (nearFence(p.x, p.z)) continue;
+            p.ry = ry; laid.push(p);
             gb.add(UNIT_BOX, flagMat, p.x, 0.016, p.z, 0, ry, 0, SW, 0.03, SL);
           }
-        }
+        });
+        GY.slabs = laid;
       }
-      GY.pathPts = pathPts;                                         // (for the menu's map)
+      // anything standing on the path (the braziers, the lamp posts) moves onto the grass beside it
+      const offPath = (x, z, clear) => {
+        for (let it = 0; it < 6; it++) {
+          let best = null, bd = Infinity;
+          for (const q of GY.slabs) { const d = Math.hypot(q.x - x, q.z - z); if (d < bd) { bd = d; best = q; } }
+          if (!best || bd >= clear) break;
+          let dx = x - best.x, dz = z - best.z;
+          if (Math.hypot(dx, dz) < 1e-3) { dx = Math.cos(best.ry); dz = -Math.sin(best.ry); }
+          const l = Math.hypot(dx, dz); x = best.x + dx / l * (clear + 0.02); z = best.z + dz / l * (clear + 0.02);
+        }
+        return [x, z];
+      };
+      for (const b of GY.braziers) { const [x, z] = offPath(b.x, b.z, 1.05); b.x = x; b.z = z; }
+      GY.pathPts = pathPts.filter((p) => GY.slabs.some((q) => Math.hypot(q.x - p.x, q.z - p.z) < 0.7));   // (for the menu's map)
       const nearPath = (x, z, r) => pathPts.some((p) => Math.abs(p.x - x) < r && Math.abs(p.z - z) < r && Math.hypot(p.x - x, p.z - z) < r);
       // places kept clear of headstones and trees
       const keepClear = [];
@@ -8121,7 +8190,8 @@
       }
       // lamp posts along the paths with a cold, sickly light
       const lampMat = new THREE.MeshStandardMaterial({ color: 0x1a2a22, emissive: 0xa8f0c8, emissiveIntensity: 1.4 });
-      for (const [x, z] of [[-1.6, 24], [1.6, 20], [-4.6, 13], [4.6, 13.6], [-15, 9.5], [15, 11], [-22.4, -4], [21.4, 0.8], [-14, -17], [-0.5, -22.6], [10, -7.4], [1.8, 6]]) {
+      for (const [x0, z0] of [[-1.6, 24], [1.6, 20], [-4.6, 13], [4.6, 13.6], [-15, 9.5], [15, 11], [-22.4, -4], [21.4, 0.8], [-14, -17], [-0.5, -22.6], [10, -7.4], [1.8, 6]]) {
+        const [ax, az] = offPath(G.x + x0, G.z + z0, 0.75), x = ax - G.x, z = az - G.z;          // (beside the path, never on it)
         gb.add(LAMP_POST_G, ironMat, G.x + x, 0.8, G.z + z);
         gb.add(UNIT_BOX, lampMat, G.x + x, 1.7, G.z + z, 0, 0, 0, 0.14, 0.18, 0.14);
         gb.add(new THREE.ConeGeometry(0.13, 0.1, 4), ironMat, G.x + x, 1.84, G.z + z, 0, Math.PI / 4, 0);
@@ -11775,7 +11845,7 @@
     const AI_R_MINE = 0.22;                                 // (slimmer in the mine's tight tunnels, stairs and rails)
     const aiBodyR = () => (ai.map === 'mine' ? AI_R_MINE : AI_R);                                      // body radius for collisions and the nav grid
     const AI_SPEED = { patrol: 0.7, investigate: 1.05, search: 1.15, chase: 1.5, chaseMax: 1.75 };   // slower, so you can get away
-    const AI_SIGHT = 11, AI_SIGHT_LIT = 14, AI_FOV_COS = Math.cos(THREE.MathUtils.degToRad(45)), AI_SENSE = 1.8;   // a narrower vision cone
+    const AI_SIGHT = 11, AI_SIGHT_LIT = 14, AI_FOV_COS = Math.cos(THREE.MathUtils.degToRad(45)), AI_SENSE = 2.5;   // a narrower vision cone; anyone within 2.5 m is felt, wherever it's looking
     const AI_LOSE_T = 0.9;                                  // seconds out of sight before a chase gives up
     const AI_CATCH = 0.72;
 
@@ -12949,6 +13019,12 @@
         let seenHead = null;
         const pick = mpPickTarget(seen || lit ? ph : null);
         if (pick) { seenHead = pick.head; ai.targetPeer = pick.id; }
+        // touched, or someone right next to it while it patrols or stands about: it wheels round and goes for them now
+        if (pick && ai.state !== 'chase' && ai.state !== 'catch' && Math.hypot(pick.head.x - ai.pos.x, pick.head.z - ai.pos.z) < AI_SENSE) {
+          ai.heading = Math.atan2(pick.head.x - ai.pos.x, pick.head.z - ai.pos.z); ai.headYaw = 0;
+          ai.state = 'chase'; ai.chaseT = 0; ai.pathT = 0; ai.slash = null; ai.path = []; ai.lostT = 0; ai.seenAt = true; ai.lastSeen.copy(pick.head);
+          try { aiAudio.snarl(); } catch (e) { }
+        }
         if (seenHead) {
           // first sight (or caught in your torch beam): it stops dead at the edge of the light, stares, then charges
           if (ai.state !== 'chase' && ai.state !== 'stare') { ai.state = 'stare'; ai.stareT = 1.1 + Math.random() * 0.8; ai.slash = null; ai.path = []; aiAudio.snarl(); }
@@ -16011,6 +16087,22 @@
     // bends), the head turns with your headset and has a jaw for talking. Same for other players. In the headset your
     // own eyes see a copy without the head, so you see your arms, hands and body but never the inside of your head.
     let survivorRig = null;
+    // the mouth: a dark opening in the crease under the big nose (measured on survivor.glb: 0.37 forward, 0.10 up), that
+    // opens and closes with the voice; only it moves, never the chin or the jaw
+    const SURVIVOR_MOUTH = new THREE.Vector3(0, 0.103, 0.37);
+    function survivorMouthMat() { return survivorMouthMat.m || (survivorMouthMat.m = new THREE.MeshBasicMaterial({ color: 0x160706, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 })); }
+    function addSurvivorMouth(head) {
+      const m = new THREE.Mesh(new THREE.CircleGeometry(0.5, 24), survivorMouthMat());
+      m.name = 'survivorMouth'; m.position.copy(SURVIVOR_MOUTH).sub(SURVIVOR_NECK_PIVOT); m.rotation.x = 0.45;   // facing forward and a little down
+      m.scale.set(0.1, 0.008, 1); m.frustumCulled = false; m.castShadow = false;
+      head.add(m); head.userData.mouth = m;
+      return m;
+    }
+    function setSurvivorMouth(head, open) {                          // open: 0 (a closed line) .. 1 (wide open)
+      const m = head && head.userData.mouth; if (!m) return;
+      const k = Math.min(1, Math.max(0, open));
+      m.scale.set(0.1 + 0.015 * k, 0.008 + 0.048 * k, 1);
+    }
     const RIG_PALM = new THREE.Vector3(0.034, 0.002, 0.003);          // where the model's hand bone sits, in your hand's grip frame
     const attrC = (a, i, c) => (c === 0 ? a.getX(i) : c === 1 ? a.getY(i) : c === 2 ? a.getZ(i) : a.getW(i));
     function survivorRigFrom(sm) {
@@ -16098,8 +16190,7 @@
           const body = Math.max(0, 1 - a);
           const cut = 0.17 - 0.22 * z;
           const w = ss(cut - 0.07, cut + 0.07, y) * (1 - ss(0.3, 0.42, Math.abs(x)));
-          const wj = ss(0.15, 0.23, z) * (1 - ss(0.17, 0.23, y)) * ss(0.02, 0.07, y) * (1 - ss(0.12, 0.19, Math.abs(x))) * (1 - ss(0.36, 0.43, z));
-          acc[0] = body * (1 - w); acc[1] = body * w * (1 - wj); acc[2] = body * w * wj;
+          acc[0] = body * (1 - w); acc[1] = body * w;                     // (no jaw weights: the chin never moves; the mouth opening does)
         }
         headW[i] = acc[1] + acc[2];
         ord.sort((p, q) => acc[q] - acc[p]);
@@ -16125,8 +16216,25 @@
       const full = mk(ix(all)), arms = mk(ix(noHead));
       const P = (j) => bindPos[j].clone();
       for (const f of fingerSlots) f.pos = P(f.file);
+      // how thick the model's forearm is just above the wrist (the median distance of its forearm skin from the bone),
+      // so the wrist band / chain can be sized to sit snugly on it
+      let foreR = 0.14;
+      try {
+        const rs = [];
+        for (const [ch, slot] of [[L, 4], [Rr, 7]]) {
+          const a = bindPos[ch[1]], b = bindPos[ch[2]], d = b.clone().sub(a), dl2 = d.lengthSq(), v = new THREE.Vector3();
+          for (let i = 0; i < n; i++) {
+            if (si[i * 4] !== slot || sw[i * 4] < 0.6) continue;
+            v.set(pos.getX(i), pos.getY(i), pos.getZ(i)).sub(a);
+            const t = v.dot(d) / dl2; if (t < 0.7 || t > 1.0) continue;
+            rs.push(v.addScaledVector(d, -t).length());
+          }
+        }
+        if (rs.length > 20) { rs.sort((p, q) => p - q); foreR = THREE.MathUtils.clamp(rs[Math.floor(rs.length * 0.6)], 0.03, 0.2); }
+      } catch (e) { }
+      console.info(`[SurvivorGLB] forearm radius at the wrist: ${foreR.toFixed(3)} (model units)`);
       survivorRig = { full, arms, bind: { L: { u: P(L[0]), l: P(L[1]), h: P(L[2]) }, R: { u: P(Rr[0]), l: P(Rr[1]), h: P(Rr[2]) } }, local: null, height: H,
-                      shapeOk, fingers: fingerSlots, foreR: 0.14 };     // (the model's forearm radius near the wrist, in its own units)
+                      shapeOk, fingers: fingerSlots, foreR };            // (the model's forearm radius near the wrist, in its own units)
       return true;
     }
     // one rigged body (the local player's, or another player's): a SkinnedMesh with its own bones on the shared geometry
@@ -16136,7 +16244,7 @@
       const root = new THREE.Bone(); root.name = 'survivorBodyRoot';
       const head = new THREE.Bone(); head.name = 'survivorHeadPivot'; head.position.copy(SURVIVOR_NECK_PIVOT); root.add(head);
       const jaw = new THREE.Bone(); jaw.name = 'survivorJaw'; jaw.position.set(0, 0.2, 0.12).sub(SURVIVOR_NECK_PIVOT); head.add(jaw);
-      head.userData.jaw = jaw;
+      head.userData.jaw = jaw; if (survivorRig.shapeOk) addSurvivorMouth(head);
       const arm = (b, tag) => {
         const u = new THREE.Bone(), l = new THREE.Bone(), h = new THREE.Bone();
         u.name = tag + 'UpperArm'; l.name = tag + 'ForeArm'; h.name = tag + 'Hand';
@@ -16303,7 +16411,7 @@
         const cut = 0.17 - 0.22 * z;                                   // neck line: low at the face, high at the back
         const w = ss(cut - 0.07, cut + 0.07, y) * (1 - ss(0.3, 0.42, Math.abs(x)));
         // the jaw: the chin and mouth under the big nose (in front of the neck, below the nose, not the nose itself)
-        const wj = ss(0.15, 0.23, z) * (1 - ss(0.17, 0.23, y)) * ss(0.02, 0.07, y) * (1 - ss(0.12, 0.19, Math.abs(x))) * (1 - ss(0.36, 0.43, z));
+        const wj = 0;                                                  // (the chin stays put: the mouth opening moves instead)
         si[i * 4] = 0; si[i * 4 + 1] = 1; si[i * 4 + 2] = 2;
         sw[i * 4] = 1 - w; sw[i * 4 + 1] = w * (1 - wj); sw[i * 4 + 2] = w * wj;
       }
@@ -16314,7 +16422,7 @@
       head.position.copy(SURVIVOR_NECK_PIVOT); rootBone.add(head);
       const jaw = new THREE.Bone(); jaw.name = 'survivorJaw';                 // hinged at the back of the jaw: rotating it drops the chin
       jaw.position.set(0, 0.2, 0.12).sub(SURVIVOR_NECK_PIVOT); head.add(jaw);
-      head.userData.jaw = jaw;
+      head.userData.jaw = jaw; addSurvivorMouth(head);
       const sm = new THREE.SkinnedMesh(g, mesh.material);
       sm.name = mesh.name; sm.position.copy(mesh.position); sm.quaternion.copy(mesh.quaternion); sm.scale.copy(mesh.scale);
       sm.add(rootBone);
@@ -16345,7 +16453,7 @@
       hp.parent.getWorldQuaternion(_hpPar);
       hp.quaternion.copy(_hpPar).invert().multiply(_hpW).multiply(_hpPar);
       // your mouth opens and closes with your voice (voice chat), seen on the Monster POV monitor
-      if (hp.userData.jaw) hp.userData.jaw.rotation.x = Math.min(1, Math.max(0, localMouthOpen())) * 0.45;
+      setSurvivorMouth(hp, localMouthOpen());
       hp.updateMatrixWorld(true);
     }
     function setupSurvivorGLB(model) {
@@ -16767,12 +16875,14 @@
         // round the model's own forearm at the wrist: its inner edge just outside the fur (the band's tube is ~0.21 of
         // the ring's radius thick), sitting a little back up the forearm from the hand
         const r = survivorRig.foreR * SURVIVOR_GLB_HEIGHT / survivorRig.height * SURVIVOR_GLB_FIT;
-        CUFF_R = r * 1.04 / 0.79; CUFF_Y = -0.35 * r;
+        CUFF_R = r * 1.03 / 0.9; CUFF_Y = -0.35 * r;                    // (a thin ring: its inner edge just on the fur)
+        fitWristWear.thin = fitWristWear.thin || new THREE.TorusGeometry(0.026, 0.0026, 8, 32);
       }
       wear.forEach((w, i) => {
         const S = survivorArms.sides[i]; if (!S || !S.cuff) return;
         const b = w.c.band;
         S.cuff.add(b); b.position.set(0, CUFF_Y, 0); b.rotation.set(Math.PI / 2, 0, 0); b.scale.setScalar(CUFF_R / 0.026);
+        if (fitWristWear.thin) b.geometry = fitWristWear.thin;            // (the band itself slimmer on the model's wrist)
         for (const ch of Object.values(w.chains)) { S.cuff.add(ch); ch.position.set(0, CUFF_Y, 0); ch.rotation.set(Math.PI / 2, 0, 0); ch.scale.setScalar(CUFF_R / 0.027); }
         S.cuff.add(w.c.charmHook);
         w.c.charmHook.scale.setScalar(CHARM_WORLD);
@@ -16898,7 +17008,7 @@
     // between the counter and the wall under the shop board and facing into the room. It breathes, sways a little and
     // turns to keep an eye on you while you're in the room.
     let shopkeeper = null;
-    const KEEPER_H = 0.7, KEEPER_STOOL = 0.12;   // its height, and the stool it stands on
+    const KEEPER_H = 0.64, KEEPER_STOOL = 0.12;  // its height, and the stool it stands on (its head clears THE TRADER board by 10 cm)
     function buildShopkeeper(src) {
       src.rotation.set(0, Math.PI / 2, 0);                                   // the model faces +Z: turn it to face +X, into the room
       src.position.set(0, 0, 0); src.scale.setScalar(1);
@@ -16945,7 +17055,7 @@
       if (!K.root.visible) return;
       K.t += dt;
       // breathing: the chest rises and falls; a slow weight shift from side to side
-      K.breathe.scale.set(1 + 0.008 * Math.sin(K.t * 1.7), 1 + 0.014 * Math.sin(K.t * 1.7), 1 + 0.01 * Math.sin(K.t * 1.7));
+      K.breathe.scale.set(1 + 0.006 * Math.sin(K.t * 1.7), 1 + 0.005 * Math.sin(K.t * 1.7), 1 + 0.008 * Math.sin(K.t * 1.7));   // (a gentle chest rise, never a stretch)
       K.breathe.rotation.z = Math.sin(K.t * 0.45) * 0.025;
       // it watches you (within a comfortable turn), with an idle glance now and then
       camera.getWorldPosition(_skCam);
@@ -17727,7 +17837,8 @@
       const c = document.createElement('canvas'); c.width = 512; c.height = 208;
       const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
       const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, fog: false }));
-      s.scale.set(0.34, 0.138, 1);                       // name, role badge, and a live HP bar under it s.renderOrder = 50; s.visible = false; scene.add(s);
+      s.scale.set(0.4, 0.162, 1);                        // name, role badge, and a live HP bar under it
+      s.material.depthTest = true; s.renderOrder = 60; s.renderOrder = 50; s.visible = false; scene.add(s);
       return { s, c, tex, text: '' };
     }
     function drawNametag(tag, name, role, hp) {
@@ -17838,6 +17949,7 @@
     function removeRemote(r) {
       for (const o of [r.root, r.mon, r.tag.s, r.arms && r.arms.g, r.joints && r.joints.g, ...r.monHands, ...r.paws.map((p) => p.root), ...(r.cuffs || [])]) if (o && o.parent) o.parent.remove(o);
       try { r.tag.tex.dispose(); r.tag.s.material.dispose(); } catch (e) { }   // its own nametag (models share geometry: left alone)
+      if (r.col) { const i = colliders.indexOf(r.col); if (i >= 0) colliders.splice(i, 1); r.col = null; }
       r.buf = null;
     }
     function netOnState(id, d) {
@@ -17860,7 +17972,15 @@
         const show = !!s && !titleActive && s.m === currentMap && now - r.seen < NET_GRACE;   // (shown through short hiccups)
         r.root.visible = show && s.r === 's';
         r.mon.visible = show && s.r === 'm';
+        if (!r.tag.s.parent) scene.add(r.tag.s);                          // (never lost from the scene)
         r.tag.s.visible = show;
+        // a solid body: an upright box round them (head to feet), so you can't walk or reach into each other
+        if (!r.col) { r.col = { box: new THREE.Box3(new THREE.Vector3(0, -1000, 0), new THREE.Vector3(0, -1000, 0)), remote: true }; colliders.push(r.col); }
+        else if ((r.colCheckT = (r.colCheckT || 0) + 1) > 90) { r.colCheckT = 0; if (!colliders.includes(r.col)) colliders.push(r.col); }
+        if (show) {
+          const R0 = s.r === 'm' ? 0.3 : 0.2, top = r.pos.y + 0.1, bot = r.pos.y - (s.r === 'm' ? 1.4 : 0.55);
+          r.col.box.min.set(r.pos.x - R0, bot, r.pos.z - R0); r.col.box.max.set(r.pos.x + R0, top, r.pos.z + R0);
+        } else { r.col.box.min.set(0, -1000, 0); r.col.box.max.set(0, -1000, 0); }
         if (!show) { for (const p of r.paws) p.root.visible = false; for (const hd of r.monHands) hd.visible = false; if (r.arms) r.arms.g.visible = false; if (r.joints) r.joints.g.visible = false; if (r.cuffs) for (const c of r.cuffs) c.visible = false; r.fresh = true; continue; }
         // smooth playback of their 15 Hz poses (interpolated between packets, 120 ms behind), lightly eased on top
         const ip = r.ip || (r.ip = {}), got = netSamplePose(r, ip);
@@ -17928,7 +18048,7 @@
         const vp = voice.peers.get(r.id);
         const lvl = vp ? vp.level : s.mo;
         r.mouth = (r.mouth || 0) + (lvl - (r.mouth || 0)) * Math.min(1, dt * 18);
-        if (r.head && r.head.userData.jaw) r.head.userData.jaw.rotation.x = Math.min(1, r.mouth) * 0.45;
+        if (r.head) setSurvivorMouth(r.head, r.mouth);                    // (their mouth opening, never their chin)
         remoteCarry(r, s);
       }
     }
@@ -18044,7 +18164,11 @@
         });
         if (s.m === 'camp') {
           (s.pi || []).forEach((v, k) => { const p = parts[k]; if (v && p && !p.installed) { if (p.held >= 0) p.held = -1; installPart(p); } });
-          if ((+s.fuel || 0) > boat.fuel) { boat.fuel = Math.min(100, +s.fuel); try { drawFuelGauge(boat.fuel); } catch (e) { } }
+          if ((+s.fuel || 0) > boat.fuel) {
+            if (+s.fuel >= 100) { try { fuelFull(); } catch (e) { boat.fuel = 100; } }       // the tank's full: that's the third repair done here too
+            else { boat.fuel = Math.min(100, +s.fuel); try { drawFuelGauge(boat.fuel); } catch (e) { } }
+            try { drawStatus(); } catch (e) { }
+          }
         } else {
           const ex = exParts.filter((p) => p.map === s.m);
           (s.ex || []).forEach((v, k) => { const p = ex[k]; if (v && p && !p.installed) fitExPart(p); });
