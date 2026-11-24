@@ -6292,6 +6292,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'FIX', date: '24/11/26', title: 'QUEST TEST FIXES',
+        text: 'No more bumping into other players, a touchscreen-only computer, the bulb over the back benches, clean fists, a snug wrist chain, a clear view down, and a new old portrait.' },
       { tag: 'FIX', date: '24/11/26', title: 'PLAYTEST FIXES',
         text: 'Tidy cemetery paths, an iron-bound door and always-lit lamps, mouths that talk, solid players, nametags with HP, slim wrist chains, shared fuel, a monster that notices you.' },
       { tag: 'UPDATE', date: '24/11/26', title: 'ONE SHOTGUN, ONE BOAT, SHARED',
@@ -7615,13 +7617,128 @@
       }
       // (the corner table with the three candles is gone: the multiplayer computer stands in that corner now)
       // faded portraits
-      const portraitTex = canvasTexture(128, (g, s) => {
-        const grd = g.createLinearGradient(0, 0, 0, s); grd.addColorStop(0, '#3a3128'); grd.addColorStop(1, '#1a1510');
-        g.fillStyle = grd; g.fillRect(0, 0, s, s);
-        g.fillStyle = 'rgba(160,140,110,0.35)'; g.beginPath(); g.ellipse(s / 2, s * 0.42, s * 0.16, s * 0.2, 0, 0, Math.PI * 2); g.fill();
-        g.beginPath(); g.ellipse(s / 2, s * 0.95, s * 0.32, s * 0.28, 0, 0, Math.PI * 2); g.fill();
-        g.fillStyle = '#000'; for (const x of [s * 0.44, s * 0.56]) { g.beginPath(); g.arc(x, s * 0.4, 4, 0, Math.PI * 2); g.fill(); }   // no faces, just dark eyes
-      });
+      // a faded 1970s studio school portrait (colour print with a cream border, a mottled blue-grey backdrop, a brown
+      // suit with wide lapels, a big shirt collar and a striped tie) of a strange, unsettling child: matted dark hair
+      // over a heavy brow, wide staring eyes in bruised sockets, hollow cheeks, a thin unsmiling mouth, and a studio's
+      // gold date stamp in the corner. The child (an original face, no real person's likeness) is waxy and too pale, with
+      // a patchy shaved scalp, eyes that stare in different directions, a jagged old stitched scar and a stitched-shut mouth.
+      const portraitTex = (() => {
+        const c = document.createElement('canvas'); c.width = 400; c.height = 496;
+        const g = c.getContext('2d'), W2 = 400, H2 = 496, cx = 200, B = 14;
+        let seed = 9137; const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+        // the cream print border, yellowed at the edges
+        g.fillStyle = '#e6dcc2'; g.fillRect(0, 0, W2, H2);
+        let grd = g.createRadialGradient(cx, H2 / 2, 150, cx, H2 / 2, 330); grd.addColorStop(0, 'rgba(0,0,0,0)'); grd.addColorStop(1, 'rgba(150,110,50,0.35)');
+        g.fillStyle = grd; g.fillRect(0, 0, W2, H2);
+        g.save(); g.beginPath(); g.rect(B, B, W2 - 2 * B, H2 - 2 * B); g.clip();
+        // the studio backdrop: mottled blue-grey, lighter behind the head
+        grd = g.createRadialGradient(cx, 170, 20, cx, 230, 320); grd.addColorStop(0, '#a3aab0'); grd.addColorStop(0.6, '#7d848c'); grd.addColorStop(1, '#4e535a');
+        g.fillStyle = grd; g.fillRect(0, 0, W2, H2);
+        for (let k = 0; k < 70; k++) { const l = 90 + rnd() * 70; g.fillStyle = `rgba(${l},${l + 6},${l + 12},${0.05 + rnd() * 0.08})`; g.beginPath(); g.ellipse(rnd() * W2, rnd() * H2, 20 + rnd() * 70, 10 + rnd() * 40, rnd() * 3, 0, Math.PI * 2); g.fill(); }
+        // the suit: brown-taupe with wide lapels
+        g.fillStyle = '#7a6250'; g.beginPath(); g.moveTo(14, H2); g.bezierCurveTo(30, 380, 100, 344, cx, 338); g.bezierCurveTo(300, 344, 370, 380, 386, H2); g.closePath(); g.fill();
+        g.fillStyle = 'rgba(40,28,20,0.35)'; g.beginPath(); g.ellipse(300, 440, 90, 80, 0, 0, Math.PI * 2); g.fill();
+        g.fillStyle = '#5f4a3a';
+        for (const sd of [-1, 1]) { g.beginPath(); g.moveTo(cx + sd * 30, 350); g.lineTo(cx + sd * 92, 362); g.lineTo(cx + sd * 58, 410); g.lineTo(cx + sd * 74, 418); g.lineTo(cx + sd * 18, H2); g.lineTo(cx + sd * 6, H2); g.closePath(); g.fill(); }   // lapels
+        g.strokeStyle = 'rgba(30,20,14,0.5)'; g.lineWidth = 2; for (const sd of [-1, 1]) { g.beginPath(); g.moveTo(cx + sd * 92, 362); g.lineTo(cx + sd * 58, 410); g.lineTo(cx + sd * 74, 418); g.stroke(); }
+        // the white shirt with its big pointed collar
+        g.fillStyle = '#ece6da'; g.beginPath(); g.moveTo(cx - 34, 344); g.lineTo(cx + 34, 344); g.lineTo(cx + 24, H2); g.lineTo(cx - 24, H2); g.closePath(); g.fill();
+        g.fillStyle = '#f4efe4';
+        for (const sd of [-1, 1]) { g.beginPath(); g.moveTo(cx + sd * 4, 352); g.lineTo(cx + sd * 40, 336); g.lineTo(cx + sd * 50, 392); g.closePath(); g.fill(); }
+        g.strokeStyle = 'rgba(90,80,70,0.4)'; g.lineWidth = 1.5; for (const sd of [-1, 1]) { g.beginPath(); g.moveTo(cx + sd * 4, 352); g.lineTo(cx + sd * 50, 392); g.stroke(); }
+        // the striped tie: brown, cream and rust bands on the diagonal
+        g.save(); g.beginPath(); g.moveTo(cx - 12, 356); g.lineTo(cx + 12, 356); g.lineTo(cx + 9, 372); g.lineTo(cx + 22, H2); g.lineTo(cx - 22, H2); g.lineTo(cx - 9, 372); g.closePath(); g.clip();
+        g.fillStyle = '#8a6a4a'; g.fillRect(cx - 30, 350, 60, 150);
+        const tie = ['#d8c8a4', '#6a4a30', '#b0603a', '#d8c8a4', '#4e3a2a'];
+        for (let k = -6; k < 14; k++) { g.strokeStyle = tie[(k + 20) % tie.length]; g.lineWidth = 6; g.beginPath(); g.moveTo(cx - 40, 340 + k * 12); g.lineTo(cx + 40, 380 + k * 12); g.stroke(); }
+        g.restore();
+        // neck and a long, gaunt face: waxy, far too pale, lit hard from the left
+        grd = g.createLinearGradient(cx - 24, 0, cx + 24, 0); grd.addColorStop(0, '#d8d0c0'); grd.addColorStop(1, '#8e887a');
+        g.fillStyle = grd; g.beginPath(); g.moveTo(cx - 22, 296); g.lineTo(cx - 22, 350); g.lineTo(cx + 22, 350); g.lineTo(cx + 24, 296); g.fill();
+        const facePath = () => { g.beginPath(); g.moveTo(cx, 120); g.bezierCurveTo(cx + 94, 122, cx + 96, 240, cx + 70, 290); g.bezierCurveTo(cx + 50, 330, cx + 18, 342, cx + 2, 342);
+          g.bezierCurveTo(cx - 18, 342, cx - 54, 328, cx - 72, 288); g.bezierCurveTo(cx - 96, 236, cx - 92, 122, cx, 120); };
+        grd = g.createRadialGradient(cx - 26, 196, 15, cx, 232, 130); grd.addColorStop(0, '#f2ece0'); grd.addColorStop(0.6, '#cdc6b6'); grd.addColorStop(1, '#868070');
+        g.fillStyle = grd; facePath(); g.fill();
+        g.save(); facePath(); g.clip();
+        // a waxy sheen and faint blue veins under the skin
+        grd = g.createRadialGradient(cx - 34, 170, 2, cx - 34, 170, 46); grd.addColorStop(0, 'rgba(255,255,250,0.55)'); grd.addColorStop(1, 'rgba(255,255,250,0)');
+        g.fillStyle = grd; g.fillRect(cx - 90, 120, 120, 110);
+        g.strokeStyle = 'rgba(110,130,160,0.22)'; g.lineWidth = 1.2;
+        for (let k = 0; k < 9; k++) { let x = cx - 70 + rnd() * 140, y = 130 + rnd() * 70; g.beginPath(); g.moveTo(x, y); for (let j = 0; j < 5; j++) { x += (rnd() - 0.5) * 18; y += 6 + rnd() * 10; g.lineTo(x, y); } g.stroke(); }
+        // the patchy, roughly shaved scalp: grey stubble with bare, scabbed patches
+        for (let k = 0; k < 1400; k++) {
+          const a = Math.PI * (1.05 + rnd() * 0.9), r0 = rnd() * 92, x = cx + Math.cos(a) * r0, y = 208 + Math.sin(a) * r0 * 0.95;
+          if (y > 172 || Math.hypot(x - (cx + 30), y - 140) < 24 || Math.hypot(x - (cx - 48), y - 158) < 15) continue;   // (the bald patches)
+          g.fillStyle = `rgba(${40 + rnd() * 30},${36 + rnd() * 26},${32 + rnd() * 20},${0.35 + rnd() * 0.4})`; g.fillRect(x, y, 1.2, 1.2 + rnd() * 1.5);
+        }
+        for (const [x, y, r] of [[cx + 30, 140, 22], [cx - 48, 158, 13]]) {            // the bare patches, raw at the edges
+          grd = g.createRadialGradient(x, y, r * 0.5, x, y, r); grd.addColorStop(0, 'rgba(232,214,204,0.6)'); grd.addColorStop(1, 'rgba(170,100,96,0.35)');
+          g.fillStyle = grd; g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
+        }
+        g.fillStyle = 'rgba(120,40,32,0.7)'; for (let k = 0; k < 6; k++) { g.beginPath(); g.arc(cx + 18 + rnd() * 26, 132 + rnd() * 18, 1.5 + rnd() * 2, 0, Math.PI * 2); g.fill(); }   // scabs
+        for (let k = 0; k < 7; k++) {                                                   // a few long tufts the clippers missed
+          const x0 = cx - 60 + rnd() * 120, y0 = 135 + rnd() * 25;
+          g.strokeStyle = 'rgba(36,28,22,0.75)'; g.lineWidth = 1.2 + rnd();
+          g.beginPath(); g.moveTo(x0, y0); g.quadraticCurveTo(x0 + (rnd() - 0.5) * 24, y0 - 20, x0 + (rnd() - 0.5) * 30, y0 - 30 - rnd() * 16); g.stroke();
+        }
+        // hollow cheeks, the side turned from the light, and a heavy shadowed brow
+        for (const sd of [-1, 1]) {
+          grd = g.createRadialGradient(cx + sd * 50, 272, 4, cx + sd * 50, 272, 42); grd.addColorStop(0, 'rgba(70,64,60,0.45)'); grd.addColorStop(1, 'rgba(70,64,60,0)');
+          g.fillStyle = grd; g.fillRect(cx + sd * 50 - 45, 225, 90, 95);
+        }
+        g.fillStyle = 'rgba(60,56,50,0.3)'; g.beginPath(); g.ellipse(cx + 58, 240, 30, 90, -0.08, 0, Math.PI * 2); g.fill();
+        grd = g.createLinearGradient(0, 160, 0, 228); grd.addColorStop(0, 'rgba(40,34,30,0)'); grd.addColorStop(0.55, 'rgba(40,34,30,0.5)'); grd.addColorStop(1, 'rgba(40,34,30,0)');
+        g.fillStyle = grd; g.beginPath(); g.ellipse(cx, 200, 86, 32, 0, 0, Math.PI * 2); g.fill();
+        // eyes that don't agree: the left stares straight out of the photo, the right drifts off to the side and up
+        for (const [ex, ey, r, px, py] of [[cx - 35, 214, 21, 0, 1], [cx + 33, 216, 20, 0.42, -0.25]]) {
+          grd = g.createRadialGradient(ex, ey + 2, r * 0.6, ex, ey + 4, r * 2.1); grd.addColorStop(0, 'rgba(70,40,48,0.75)'); grd.addColorStop(1, 'rgba(70,40,48,0)');
+          g.fillStyle = grd; g.fillRect(ex - r * 2.2, ey - r * 2, r * 4.4, r * 4.4);        // sunken, purple-grey sockets
+          g.save(); g.beginPath();
+          g.moveTo(ex - r, ey); g.quadraticCurveTo(ex, ey - r * 1.1, ex + r, ey); g.quadraticCurveTo(ex, ey + r * 0.9, ex - r, ey); g.closePath(); g.clip();
+          g.fillStyle = '#f0ece2'; g.fillRect(ex - r, ey - r, r * 2, r * 2);
+          g.strokeStyle = 'rgba(190,70,70,0.35)'; g.lineWidth = 0.8;                       // bloodshot
+          for (let k = 0; k < 5; k++) { g.beginPath(); g.moveTo(ex + (k % 2 ? r : -r), ey + (rnd() - 0.5) * 6); g.lineTo(ex + (k % 2 ? r * 0.4 : -r * 0.4), ey + (rnd() - 0.5) * 8); g.stroke(); }
+          const ix = ex + px * r * 0.5, iy = ey + py * r * 0.5 + 1;
+          grd = g.createRadialGradient(ix, iy, 1, ix, iy, r * 0.42); grd.addColorStop(0, '#020202'); grd.addColorStop(0.45, '#202418'); grd.addColorStop(1, '#5a6450');
+          g.fillStyle = grd; g.beginPath(); g.arc(ix, iy, r * 0.32, 0, Math.PI * 2); g.fill();
+          g.fillStyle = 'rgba(60,50,48,0.45)'; g.fillRect(ex - r, ey - r, r * 2, r * 0.4);
+          g.restore();
+          g.fillStyle = 'rgba(255,255,250,0.9)'; g.beginPath(); g.arc(ix - r * 0.12, iy - r * 0.12, 1.7, 0, Math.PI * 2); g.fill();
+          g.strokeStyle = 'rgba(30,24,22,0.85)'; g.lineWidth = 2.5; g.beginPath(); g.moveTo(ex - r * 1.05, ey + 1); g.quadraticCurveTo(ex, ey - r * 1.15, ex + r * 1.05, ey + 1); g.stroke();
+        }
+        // a jagged old scar from the right brow, across the bridge of the nose and down the left cheek
+        const scar = [[cx + 70, 176], [cx + 50, 190], [cx + 36, 186], [cx + 14, 206], [cx + 4, 232], [cx - 14, 244], [cx - 30, 262], [cx - 52, 270], [cx - 62, 292]];
+        g.lineCap = 'round';
+        g.strokeStyle = 'rgba(150,96,96,0.75)'; g.lineWidth = 6; g.beginPath(); scar.forEach(([x, y], k) => (k ? g.lineTo(x, y) : g.moveTo(x, y))); g.stroke();
+        g.strokeStyle = 'rgba(236,214,206,0.7)'; g.lineWidth = 2; g.beginPath(); scar.forEach(([x, y], k) => (k ? g.lineTo(x, y + 1) : g.moveTo(x, y + 1))); g.stroke();
+        g.strokeStyle = 'rgba(110,66,66,0.7)'; g.lineWidth = 1.2;                        // the old stitch marks across it
+        for (let k = 1; k < scar.length; k++) { const [x, y] = scar[k], [x0, y0] = scar[k - 1], mx = (x + x0) / 2, my = (y + y0) / 2, nx = -(y - y0), ny = x - x0, l = Math.hypot(nx, ny) || 1; g.beginPath(); g.moveTo(mx - nx / l * 6, my - ny / l * 6); g.lineTo(mx + nx / l * 6, my + ny / l * 6); g.stroke(); }
+        // the nose
+        g.strokeStyle = 'rgba(100,90,84,0.4)'; g.lineWidth = 5; g.beginPath(); g.moveTo(cx + 8, 224); g.quadraticCurveTo(cx + 12, 250, cx + 14, 268); g.stroke();
+        g.fillStyle = 'rgba(50,40,38,0.65)'; for (const sd of [-1, 1]) { g.beginPath(); g.ellipse(cx + sd * 9 + 2, 272, 4.5, 2.6, sd * 0.3, 0, Math.PI * 2); g.fill(); }
+        // the mouth: pressed shut and crudely stitched with dark thread
+        g.strokeStyle = 'rgba(120,70,72,0.9)'; g.lineWidth = 4; g.beginPath(); g.moveTo(cx - 32, 300); g.quadraticCurveTo(cx, 296, cx + 30, 302); g.stroke();
+        g.strokeStyle = 'rgba(40,24,22,0.9)'; g.lineWidth = 1.6;
+        for (let k = 0; k < 9; k++) { const x = cx - 28 + k * 7, y = 299 + (k - 4) * 0.25; g.beginPath(); g.moveTo(x - 1, y - 7 - rnd() * 2); g.lineTo(x + 2, y + 7 + rnd() * 2); g.stroke(); }
+        g.restore();
+        // the studio's gold date stamp, embossed in the corner
+        g.save(); g.translate(318, 446); g.rotate(-0.28);
+        g.font = 'italic bold 24px Georgia, serif'; g.textAlign = 'center';
+        g.fillStyle = 'rgba(60,40,10,0.45)'; g.fillText('© ’79', 1.5, 1.5); g.fillStyle = 'rgba(232,196,120,0.9)'; g.fillText('© ’79', 0, 0);
+        g.restore();
+        g.restore();
+        // a 1970s print gone warm: faded, yellowed, grainy, with worn corners
+        g.globalCompositeOperation = 'multiply'; g.fillStyle = 'rgba(236,206,160,0.55)'; g.fillRect(0, 0, W2, H2); g.globalCompositeOperation = 'source-over';
+        g.globalCompositeOperation = 'screen'; g.fillStyle = 'rgba(60,40,20,0.12)'; g.fillRect(0, 0, W2, H2); g.globalCompositeOperation = 'source-over';
+        const img = g.getImageData(0, 0, W2, H2), d = img.data;
+        for (let i = 0; i < d.length; i += 4) { const n = (rnd() - 0.5) * 18; d[i] += n; d[i + 1] += n; d[i + 2] += n; }
+        g.putImageData(img, 0, 0);
+        for (let k = 0; k < 10; k++) { g.fillStyle = `rgba(150,100,40,${0.08 + rnd() * 0.14})`; g.beginPath(); g.arc(rnd() * W2, rnd() * H2, 2 + rnd() * 7, 0, Math.PI * 2); g.fill(); }
+        g.fillStyle = 'rgba(255,250,236,0.5)';                                         // worn corners
+        for (const [x, y] of [[0, 0], [W2, 0], [0, H2], [W2, H2]]) { g.beginPath(); g.arc(x, y, 9 + rnd() * 6, 0, Math.PI * 2); g.fill(); }
+        g.filter = 'blur(0.6px)'; g.drawImage(c, 0, 0); g.filter = 'none';
+        const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; return t;
+      })();
       const portraitMat = new THREE.MeshStandardMaterial({ map: portraitTex, roughness: 0.8 });
       for (const [x, z, ry] of [[-W.w / 2 + 0.02, -1.2, Math.PI / 2], [W.w / 2 - 0.02, 1.6, -Math.PI / 2]]) {
         rb.add(new THREE.PlaneGeometry(0.5, 0.62), portraitMat, W.x + x + Math.sin(ry) * 0.02, 1.45, W.z + z, 0, ry, 0.05);
@@ -7631,16 +7748,17 @@
       // lights: a bare bulb hanging from the middle (cold, it flickers and drops out) and two wall lanterns (warm)
       const bulbMat = new THREE.MeshStandardMaterial({ color: 0x222222, emissive: 0xffd8a0, emissiveIntensity: 3 });
       const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.045, 10, 8), bulbMat);
-      bulb.position.set(W.x, W.h - 0.55, W.z + 0.6);
+      const BX = W.x + 1.95, BZ = W.z + 2.45;                       // (hung in the back corner over the benches, where the room was darkest)
+      bulb.position.set(BX, W.h - 0.55, BZ);
       scene.add(bulb);
       const cord = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, 0.5, 4), ironMat);
-      cord.position.set(W.x, W.h - 0.27, W.z + 0.6);
+      cord.position.set(BX, W.h - 0.27, BZ);
       scene.add(cord);
       const bulbGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xffd8a0, transparent: true, opacity: 0.75, blending: THREE.AdditiveBlending, depthWrite: false }));
       bulbGlow.scale.set(1.2, 1.2, 1); bulbGlow.position.copy(bulb.position);
       scene.add(bulbGlow);
       roomBulb = { mat: bulbMat, glow: bulbGlow, level: 1, t: 0, drop: 0 };
-      roomBulb.src = { x: W.x, y: W.h - 0.6, z: W.z + 0.6, color: 0xffd2a0, intensity: 24, distance: 14, weight: 6 };   // warm overhead bulb, brighter still
+      roomBulb.src = { x: BX, y: W.h - 0.6, z: BZ, color: 0xffd2a0, intensity: 24, distance: 14, weight: 6 };   // warm overhead bulb, brighter still
       lightSources.push(roomBulb.src);
       // (the two flickering fill lights that sat right against the side walls are gone: up close they painted a hot
       // orange spot on the wall beside the portrait.) Instead, three warm ceiling lamps hang over the shop corner, the
@@ -16175,7 +16293,7 @@
       const ss = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
       const ns = 9 + fingerSlots.length;
       const si = new Uint16Array(n * 4), sw = new Float32Array(n * 4), acc = new Float32Array(ns), ord = Array.from({ length: ns }, (_, k) => k);
-      const headW = new Float32Array(n);
+      const headW = new Float32Array(n), armW = new Float32Array(n);
       // the neck / jaw weighting is measured on survivor.glb's own shape (1.9 x 1.61 x 1.18, facing +Z)
       const shapeOk = Math.abs(bb.max.y - 0.803) <= 0.05 && Math.abs(bb.min.y + 0.804) <= 0.05 && Math.abs(bb.max.x - 0.95) <= 0.06;
       if (!shapeOk) console.info('[SurvivorGLB] head pivot: not survivor.glb\'s shape, the head follows the model\'s own head bone');
@@ -16186,6 +16304,7 @@
         acc.fill(0);
         for (let c = 0; c < 4; c++) { const w = attrC(SW, i, c); if (w > 0) acc[slotFor(Math.round(attrC(SI, i, c)))] += w; }
         let a = 0; for (let k = 3; k < ns; k++) a += acc[k];
+        armW[i] = a;
         if (shapeOk) {
           const body = Math.max(0, 1 - a);
           const cut = 0.17 - 0.22 * z;
@@ -16210,7 +16329,9 @@
       for (let t = 0; t < tris; t++) {
         const a = idx ? idx[t * 3] : t * 3, b = idx ? idx[t * 3 + 1] : t * 3 + 1, c = idx ? idx[t * 3 + 2] : t * 3 + 2;
         all.push(a, b, c);
-        if (Math.max(headW[a], headW[b], headW[c]) < 0.35) noHead.push(a, b, c);
+        // (your own eyes: no head, and no upper chest / shoulder skin above the belly, which sat right under the headset)
+        const upperBody = Math.max(pos.getY(a), pos.getY(b), pos.getY(c)) > -0.12 && Math.min(armW[a], armW[b], armW[c]) < 0.5;
+        if (Math.max(headW[a], headW[b], headW[c]) < 0.35 && !upperBody) noHead.push(a, b, c);
       }
       const ix = (arr) => new THREE.BufferAttribute(n > 65535 ? new Uint32Array(arr) : new Uint16Array(arr), 1);
       const full = mk(ix(all)), arms = mk(ix(noHead));
@@ -16226,11 +16347,11 @@
           for (let i = 0; i < n; i++) {
             if (si[i * 4] !== slot || sw[i * 4] < 0.6) continue;
             v.set(pos.getX(i), pos.getY(i), pos.getZ(i)).sub(a);
-            const t = v.dot(d) / dl2; if (t < 0.7 || t > 1.0) continue;
+            const t = v.dot(d) / dl2; if (t < 0.85 || t > 1.0) continue;   // (right at the wrist)
             rs.push(v.addScaledVector(d, -t).length());
           }
         }
-        if (rs.length > 20) { rs.sort((p, q) => p - q); foreR = THREE.MathUtils.clamp(rs[Math.floor(rs.length * 0.6)], 0.03, 0.2); }
+        if (rs.length > 12) { rs.sort((p, q) => p - q); foreR = THREE.MathUtils.clamp(rs[Math.floor(rs.length * 0.35)], 0.03, 0.2); }   // (the skin under the fur tufts)
       } catch (e) { }
       console.info(`[SurvivorGLB] forearm radius at the wrist: ${foreR.toFixed(3)} (model units)`);
       survivorRig = { full, arms, bind: { L: { u: P(L[0]), l: P(L[1]), h: P(L[2]) }, R: { u: P(Rr[0]), l: P(Rr[1]), h: P(Rr[2]) } }, local: null, height: H,
@@ -16261,13 +16382,22 @@
         const parent = all[f.parentSlot], ppos = f.parentSlot >= 9 ? F[f.parentSlot - 9].pos : (f.side === 'L' ? B.L.h : B.R.h);
         bone.position.subVectors(f.pos, ppos); parent.add(bone); all.push(bone);
         if (f.curl) {
-          // it curls towards the palm: the palm faces in towards the body when the arm hangs as modelled
-          const kid = F.find((o) => o.parentSlot === all.length - 1);
-          const dir = (kid ? kid.pos.clone().sub(f.pos) : f.pos.clone().sub(ppos)).normalize();
+          // it curls towards the palm (the palm faces in towards the body when the arm hangs as modelled). Every finger
+          // of a hand bends about the same knuckle axis (square to the hand, across the palm), so they fold together
+          // cleanly instead of twisting; the thumb about its own, across the palm. Each joint bends a little less than
+          // the one before: about 70°, 55°, 35° (the thumb 30°, 35°, 25°), a closed fist at full press.
+          const parentF = f.parentSlot >= 9 ? F[f.parentSlot - 9] : null;
+          f.depth = parentF && parentF.curl === f.curl ? (parentF.depth || 0) + 1 : 0;
           const inward = new THREE.Vector3(f.side === 'L' ? -1 : 1, 0, 0);
-          const axis = new THREE.Vector3().crossVectors(dir, inward);
+          let axis;
+          if (f.curl === 'thumb') {
+            const kid = F.find((o) => o.parentSlot === all.length - 1);
+            const dir = (kid ? kid.pos.clone().sub(f.pos) : f.pos.clone().sub(ppos)).normalize();
+            axis = new THREE.Vector3().crossVectors(dir, inward);
+          } else axis = new THREE.Vector3().crossVectors(rigHandFrame(f.side).f, inward);
           if (axis.lengthSq() < 1e-6) axis.set(0, 0, 1);
           bone.userData.curlAxis = axis.normalize();
+          bone.userData.curlAmt = (f.curl === 'thumb' ? [0.52, 0.6, 0.42] : [1.2, 0.95, 0.62])[Math.min(2, f.depth)];
           (f.side === 'L' ? Lb : Rb).fingers[f.curl].push(bone);
         }
       });
@@ -16317,8 +16447,8 @@
       const A = inst.bones[side === 'L' ? 'L' : 'R'], b = A.bind;
       // the fingers: Trigger, Grip and X / A curl their bones towards the palm
       if (curl) {
-        const groups = [A.fingers.trig, A.fingers.grip, A.fingers.thumb], amt = [1.2, 1.2, 0.9];
-        for (let g = 0; g < 3; g++) for (const bone of groups[g]) bone.quaternion.setFromAxisAngle(bone.userData.curlAxis, (curl[g] || 0) * amt[g]);
+        const groups = [A.fingers.trig, A.fingers.grip, A.fingers.thumb];
+        for (let g = 0; g < 3; g++) for (const bone of groups[g]) bone.quaternion.setFromAxisAngle(bone.userData.curlAxis, Math.min(1, Math.max(0, curl[g] || 0)) * (bone.userData.curlAmt || 0.9));
       }
       inst.mesh.updateWorldMatrix(true, false);
       inst.mesh.matrixWorld.decompose(_svrT, _svrQ0, _svrSc);
@@ -16875,7 +17005,7 @@
         // round the model's own forearm at the wrist: its inner edge just outside the fur (the band's tube is ~0.21 of
         // the ring's radius thick), sitting a little back up the forearm from the hand
         const r = survivorRig.foreR * SURVIVOR_GLB_HEIGHT / survivorRig.height * SURVIVOR_GLB_FIT;
-        CUFF_R = r * 1.03 / 0.9; CUFF_Y = -0.35 * r;                    // (a thin ring: its inner edge just on the fur)
+        CUFF_R = r / 0.9; CUFF_Y = -0.25 * r;                            // (a thin ring hugging the wrist: its inner edge on the skin)
         fitWristWear.thin = fitWristWear.thin || new THREE.TorusGeometry(0.026, 0.0026, 8, 32);
       }
       wear.forEach((w, i) => {
@@ -17388,13 +17518,7 @@
       b.add(bevelBox(0.02, 0.38, 0.48, 0.008), blackPlastic, MX - 0.11, MY + 0.01, Z);                                // bezel
       b.add(bevelBox(0.012, 0.02, 0.02, 0.003), beigeDark, MX - 0.115, MY - 0.2, Z - 0.2);                           // power button
       for (let k = 0; k < 6; k++) b.add(UNIT_BOX, beigeDark, MX + 0.12, MY + 0.1 - k * 0.03, Z - 0.262, 0, 0, 0, 0.12, 0.008, 0.004);   // vents
-      // the keyboard: a beige deck with rows of keys, and a mouse on a pad
-      b.add(bevelBox(0.17, 0.025, 0.46, 0.006), beige, X - 0.17, T + 0.0125, Z - 0.02);
-      for (let r = 0; r < 4; r++) for (let k = 0; k < 13; k++) b.add(bevelBox(0.026, 0.012, 0.026, 0.003), keyMat, X - 0.225 + r * 0.033, T + 0.031, Z - 0.21 + k * 0.031);
-      b.add(bevelBox(0.026, 0.012, 0.16, 0.003), keyMat, X - 0.258, T + 0.031, Z - 0.02);                            // space bar
-      b.add(UNIT_BOX, blackPlastic, X - 0.17, T + 0.002, Z + 0.33, 0, 0, 0, 0.2, 0.004, 0.2);                         // mouse pad
-      b.add(new THREE.SphereGeometry(0.03, 14, 10), beige, X - 0.17, T + 0.012, Z + 0.33, 0, 0, 0, 0.75, 0.45, 1.05); // mouse
-      b.add(new THREE.CylinderGeometry(0.0025, 0.0025, 0.2, 5), blackPlastic, X - 0.07, T + 0.006, Z + 0.33, 0, 0, Math.PI / 2);   // its cable
+      // (no keyboard or mouse on the desk: the monitor is a touchscreen, used with the pointer / your finger)
       // the tower, under the desk at the other end: floppy and CD slots, a green power LED
       const TZ = Z - 0.36;
       b.add(bevelBox(0.42, 0.36, 0.18, 0.01), beige, X + 0.02, 0.18, TZ);
@@ -17949,7 +18073,6 @@
     function removeRemote(r) {
       for (const o of [r.root, r.mon, r.tag.s, r.arms && r.arms.g, r.joints && r.joints.g, ...r.monHands, ...r.paws.map((p) => p.root), ...(r.cuffs || [])]) if (o && o.parent) o.parent.remove(o);
       try { r.tag.tex.dispose(); r.tag.s.material.dispose(); } catch (e) { }   // its own nametag (models share geometry: left alone)
-      if (r.col) { const i = colliders.indexOf(r.col); if (i >= 0) colliders.splice(i, 1); r.col = null; }
       r.buf = null;
     }
     function netOnState(id, d) {
@@ -17974,13 +18097,6 @@
         r.mon.visible = show && s.r === 'm';
         if (!r.tag.s.parent) scene.add(r.tag.s);                          // (never lost from the scene)
         r.tag.s.visible = show;
-        // a solid body: an upright box round them (head to feet), so you can't walk or reach into each other
-        if (!r.col) { r.col = { box: new THREE.Box3(new THREE.Vector3(0, -1000, 0), new THREE.Vector3(0, -1000, 0)), remote: true }; colliders.push(r.col); }
-        else if ((r.colCheckT = (r.colCheckT || 0) + 1) > 90) { r.colCheckT = 0; if (!colliders.includes(r.col)) colliders.push(r.col); }
-        if (show) {
-          const R0 = s.r === 'm' ? 0.3 : 0.2, top = r.pos.y + 0.1, bot = r.pos.y - (s.r === 'm' ? 1.4 : 0.55);
-          r.col.box.min.set(r.pos.x - R0, bot, r.pos.z - R0); r.col.box.max.set(r.pos.x + R0, top, r.pos.z + R0);
-        } else { r.col.box.min.set(0, -1000, 0); r.col.box.max.set(0, -1000, 0); }
         if (!show) { for (const p of r.paws) p.root.visible = false; for (const hd of r.monHands) hd.visible = false; if (r.arms) r.arms.g.visible = false; if (r.joints) r.joints.g.visible = false; if (r.cuffs) for (const c of r.cuffs) c.visible = false; r.fresh = true; continue; }
         // smooth playback of their 15 Hz poses (interpolated between packets, 120 ms behind), lightly eased on top
         const ip = r.ip || (r.ip = {}), got = netSamplePose(r, ip);
