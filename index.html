@@ -55,8 +55,8 @@
     Generator: hold Trigger or Grip on its yellow handle, then hit each skill check with the other Trigger (or A / X). Beat 5 to power the floodlights.<br />
     Four generators are spread round the bigger campground (camp, cabin row, deep woods, lakeside ridge): power all 4 to light the whole camp.<br />
     Lake (east of camp): walk down the sandy beach into the deep water, or out along the dock. You float high with your head and chest out, and only sink very slowly if you stop swimming: pull your hands back through the water to glide the way you're looking (sweep down to rise, up to dive). Find the propeller and spark plug (the propeller glints on the workbench by the dock; the spark plug is in a far cabin) and drop them at the boat's motor; find the jerrycan in another cabin and tilt it over the fuel tank's cap to pour until the gauge reads 100%. Then grab the tiller on the outboard and swing it to steer; Trigger or the thumbstick is the throttle (desktop: arrow keys). Dropped and thrown items bounce, settle and float.<br />
-    After PLAY you wait in the waiting room: pick a map on the big screen, watch the MONSTER POV monitor, or spend coins at THE TRADER (shop corner). B / Y (Tab / Esc on desktop) opens the menu: turning and SURVIVOR / MONSTER.<br />
-    Escape a map (all its generators and objectives done, then the boat) for a sunrise and coins. As the MONSTER in VR, swing the machete hard to hack doors, crates, barricades and trees, and slice branches off.<br />
+    After PLAY you wait in the waiting room: pick a map on the big screen, watch the MONSTER POV monitor, or spend coins at THE TRADER (shop corner). Click a thumbstick (Tab / Esc on desktop) to open the menu: turning and SURVIVOR / MONSTER (only one player can be the monster).<br />
+    Escape a map (all its generators and objectives done, then the boat) for a sunrise and coins. As the MONSTER in VR, swing the machete hard to hack doors, crates, barricades and trees, and slice branches off; B / Y puts it away, then grip a survivor's arm or head and pull. Survivors: pick up the bats, pipes, hatchets and spiked planks lying around and hit back.<br />
     Ambient horror music starts when you press PLAY in the lobby (headphones recommended).
   </div>
   <!-- GRIMAPE lobby: the menu itself is 3D (a curved panel in the scene, on desktop and in VR). These are just a hint and a fade. -->
@@ -6292,6 +6292,10 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'UPDATE', date: '24/11/26', title: 'TORN APART',
+        text: 'Monster: B / Y puts the machete away, then grip and pull to rip arms and heads off. One monster per room, with its own HP bar. Weapons on every map. Menu: thumbstick click.' },
+      { tag: 'FIX', date: '24/11/26', title: 'MULTIPLAYER FIXES',
+        text: 'Open water for the sunrise run, walls round the boat deck, shared doors and mine cart, solid open doors, rays only on screens, a real talking mouth, a neat wrist chain.' },
       { tag: 'FIX', date: '24/11/26', title: 'QUEST TEST FIXES',
         text: 'No more bumping into other players, a touchscreen-only computer, the bulb over the back benches, clean fists, a snug wrist chain, a clear view down, and a new old portrait.' },
       { tag: 'FIX', date: '24/11/26', title: 'PLAYTEST FIXES',
@@ -9354,7 +9358,7 @@
           .forEach((l, k) => g.fillText(l, LW + 40, 214 + k * 30));
       }
       g.fillStyle = 'rgba(216,200,160,0.45)'; g.font = `17px ${UI_FONT}`; g.textAlign = 'center';
-      g.fillText(renderer.xr.isPresenting ? 'B / Y opens and closes this menu' : 'Tab / Esc opens and closes this menu', W / 2, H - 14);
+      g.fillText(renderer.xr.isPresenting ? 'Click a thumbstick to open / close this menu' : 'Tab / Esc opens and closes this menu', W / 2, H - 14);
       g.textAlign = 'left';
     }, (id) => {
       if (!id) return;
@@ -9403,7 +9407,7 @@
     function menuButtonDown(c) {
       const b = c.userData.inputSource?.gamepad?.buttons;
       if (!b) return false;
-      if (b[5]?.pressed) return true;                                     // B / Y
+      if (b[3]?.pressed) return true;                                     // a thumbstick click (B / Y: the monster's machete)
       for (let k = 6; k < b.length; k++) if (b[k]?.pressed) return true;   // a Menu button, where the browser exposes one
       return false;
     }
@@ -10837,7 +10841,7 @@
     }, 'graveyard'));
     levers.forEach((l) => addDeskClick([l.pivot], () => pullLever(l), 'mine'));
     fuelCans.forEach((f) => addDeskClick([f.group], () => takeFuel(f), 'mine'));
-    addDeskClick([mineCart.group], () => { if (!mineCart.done && !monsterBlocked()) { mineCart.vx = -3.2; gameAudio.roll(2); } }, 'mine');
+    addDeskClick([mineCart.group], () => { if (!mineCart.done && !monsterBlocked()) { mineCart.vx = -3.2; mineCart.pushT = performance.now(); gameAudio.roll(2); } }, 'mine');
     addDeskClick([escapeBoats.graveyard.group], () => startEscapeBoat(escapeBoats.graveyard), 'graveyard');
     addDeskClick([escapeBoats.mine.group], () => startEscapeBoat(escapeBoats.mine), 'mine');
     {
@@ -10975,7 +10979,7 @@
           if (!mineCart.done && qOk[i]) {
             const p = qRaw[i], cx = mineCart.x;
             if (p.x > cx - 0.52 && p.x < cx + 0.52 && Math.abs(p.z - MINE.z) < 0.42 && p.y < 0.8 && Math.abs(qVel[i].x) > 0.4 && !monsterBlocked(c)) {
-              mineCart.vx += (THREE.MathUtils.clamp(qVel[i].x * 1.3, -4, 4) - mineCart.vx) * 0.35;
+              mineCart.vx += (THREE.MathUtils.clamp(qVel[i].x * 1.3, -4, 4) - mineCart.vx) * 0.35; mineCart.pushT = performance.now();
               pulse(c, 0.3, 30);
             }
           }
@@ -11013,7 +11017,7 @@
         g.fillStyle = '#ff5a46'; g.font = 'bold 28px "Courier New", monospace'; g.fillText('SIGNAL OFFLINE', W / 2, 130);
         g.fillStyle = 'rgba(255,200,190,0.9)'; g.font = 'bold 18px "Courier New", monospace'; g.fillText('— NO ACTIVE MONSTER —', W / 2, 162);
         g.fillStyle = 'rgba(255,230,220,0.85)'; g.font = 'bold 20px "Courier New", monospace'; g.textAlign = 'left'; g.fillText('MONSTER POV', 28, 34);
-        g.font = '14px "Courier New", monospace'; g.fillStyle = 'rgba(255,200,190,0.6)'; g.fillText('Play MONSTER (menu: B / Y), or let the AI hunt', 28, H - 28);
+        g.font = '14px "Courier New", monospace'; g.fillStyle = 'rgba(255,200,190,0.6)'; g.fillText('Play MONSTER (menu: thumbstick click), or let the AI hunt', 28, H - 28);
         povHudTex.needsUpdate = true;
         return;
       }
@@ -15620,7 +15624,7 @@
       objectiveText = function () {
         const o = baseObjText();
         if (playerRole !== 'monster' && currentMap !== 'waiting' && !ending && o.cls === '')
-          return { text: renderer.xr.isPresenting ? 'OBJECTIVES & MAP: B / Y' : 'OBJECTIVES & MAP: TAB', cls: '' };
+          return { text: renderer.xr.isPresenting ? 'OBJECTIVES & MAP: STICK CLICK' : 'OBJECTIVES & MAP: TAB', cls: '' };
         return o;
       };
     }
@@ -16205,21 +16209,18 @@
     // bends), the head turns with your headset and has a jaw for talking. Same for other players. In the headset your
     // own eyes see a copy without the head, so you see your arms, hands and body but never the inside of your head.
     let survivorRig = null;
-    // the mouth: a dark opening in the crease under the big nose (measured on survivor.glb: 0.37 forward, 0.10 up), that
-    // opens and closes with the voice; only it moves, never the chin or the jaw
-    const SURVIVOR_MOUTH = new THREE.Vector3(0, 0.103, 0.37);
-    function survivorMouthMat() { return survivorMouthMat.m || (survivorMouthMat.m = new THREE.MeshBasicMaterial({ color: 0x160706, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 })); }
-    function addSurvivorMouth(head) {
-      const m = new THREE.Mesh(new THREE.CircleGeometry(0.5, 24), survivorMouthMat());
-      m.name = 'survivorMouth'; m.position.copy(SURVIVOR_MOUTH).sub(SURVIVOR_NECK_PIVOT); m.rotation.x = 0.45;   // facing forward and a little down
-      m.scale.set(0.1, 0.008, 1); m.frustumCulled = false; m.castShadow = false;
-      head.add(m); head.userData.mouth = m;
-      return m;
-    }
-    function setSurvivorMouth(head, open) {                          // open: 0 (a closed line) .. 1 (wide open)
-      const m = head && head.userData.mouth; if (!m) return;
-      const k = Math.min(1, Math.max(0, open));
-      m.scale.set(0.1 + 0.015 * k, 0.008 + 0.048 * k, 1);
+    // the mouth: survivor.glb's own lower lip and the front of its lower muzzle (just under the crease beneath the big
+    // nose, measured on the model) ride a small jaw hinge just behind the mouth; your voice opens it a little. The chin
+    // and the rest of the face never move. (No extra shapes are added to the face.)
+    const SURVIVOR_JAW_PIVOT = new THREE.Vector3(0, 0.1, 0.14);
+    const survivorLipWeight = (x, y, z) => {
+      const ss = (a, b, v) => { const t = Math.min(1, Math.max(0, (v - a) / (b - a))); return t * t * (3 - 2 * t); };
+      return ss(0.17, 0.22, z) * ss(0.04, 0.06, y) * (1 - ss(0.092, 0.106, y)) * (1 - ss(0.08, 0.13, Math.abs(x)));   // the lower half of the muzzle
+    };
+    function addSurvivorMouth(head) { return null; }                 // (kept for the callers: nothing is added any more)
+    function setSurvivorMouth(head, open) {                          // open: 0 (closed) .. 1 (talking loudly)
+      const j = head && head.userData.jaw; if (!j) return;
+      j.rotation.x = Math.min(1, Math.max(0, open)) * 0.18;
     }
     const RIG_PALM = new THREE.Vector3(0.034, 0.002, 0.003);          // where the model's hand bone sits, in your hand's grip frame
     const attrC = (a, i, c) => (c === 0 ? a.getX(i) : c === 1 ? a.getY(i) : c === 2 ? a.getZ(i) : a.getW(i));
@@ -16309,7 +16310,8 @@
           const body = Math.max(0, 1 - a);
           const cut = 0.17 - 0.22 * z;
           const w = ss(cut - 0.07, cut + 0.07, y) * (1 - ss(0.3, 0.42, Math.abs(x)));
-          acc[0] = body * (1 - w); acc[1] = body * w;                     // (no jaw weights: the chin never moves; the mouth opening does)
+          const wj = survivorLipWeight(x, y, z);                        // (only the lower lip; the chin never moves)
+          acc[0] = body * (1 - w) * (1 - wj); acc[1] = body * w * (1 - wj); acc[2] = body * wj;
         }
         headW[i] = acc[1] + acc[2];
         ord.sort((p, q) => acc[q] - acc[p]);
@@ -16351,7 +16353,7 @@
             rs.push(v.addScaledVector(d, -t).length());
           }
         }
-        if (rs.length > 12) { rs.sort((p, q) => p - q); foreR = THREE.MathUtils.clamp(rs[Math.floor(rs.length * 0.35)], 0.03, 0.2); }   // (the skin under the fur tufts)
+        if (rs.length > 12) { rs.sort((p, q) => p - q); foreR = THREE.MathUtils.clamp(rs[Math.floor(rs.length * 0.5)], 0.03, 0.2); }   // (the wrist's surface)
       } catch (e) { }
       console.info(`[SurvivorGLB] forearm radius at the wrist: ${foreR.toFixed(3)} (model units)`);
       survivorRig = { full, arms, bind: { L: { u: P(L[0]), l: P(L[1]), h: P(L[2]) }, R: { u: P(Rr[0]), l: P(Rr[1]), h: P(Rr[2]) } }, local: null, height: H,
@@ -16364,7 +16366,7 @@
       const B = survivorRig.bind;
       const root = new THREE.Bone(); root.name = 'survivorBodyRoot';
       const head = new THREE.Bone(); head.name = 'survivorHeadPivot'; head.position.copy(SURVIVOR_NECK_PIVOT); root.add(head);
-      const jaw = new THREE.Bone(); jaw.name = 'survivorJaw'; jaw.position.set(0, 0.2, 0.12).sub(SURVIVOR_NECK_PIVOT); head.add(jaw);
+      const jaw = new THREE.Bone(); jaw.name = 'survivorJaw'; jaw.position.copy(SURVIVOR_JAW_PIVOT).sub(SURVIVOR_NECK_PIVOT); head.add(jaw);
       head.userData.jaw = jaw; if (survivorRig.shapeOk) addSurvivorMouth(head);
       const arm = (b, tag) => {
         const u = new THREE.Bone(), l = new THREE.Bone(), h = new THREE.Bone();
@@ -16493,7 +16495,7 @@
       inst.bones.root.updateWorldMatrix(true, false);
       set(A.u, _svrMu, inst.bones.root.matrixWorld); set(A.l, _svrMl, _svrMu); set(A.h, _svrMh, _svrMl);
       for (const c of A.h.children) c.updateMatrixWorld(true);                           // (the finger bones ride the hand)
-      inst.cuffAt[side] = { s: _svrSh.clone(), e: _svrEl.clone(), w: W.clone(), rest: false };
+      inst.cuffAt[side] = { s: _svrSh.clone(), e: _svrEl.clone(), w: W.clone(), rest: false, hd: _svrFw.clone() };   // (hd: where the hand points)
     }
     // a clone of the loaded scene with any skinned mesh swapped for a plain mesh in its modelled pose (the shopkeeper,
     // and the source for other players' bodies when the model isn't rigged)
@@ -16541,9 +16543,9 @@
         const cut = 0.17 - 0.22 * z;                                   // neck line: low at the face, high at the back
         const w = ss(cut - 0.07, cut + 0.07, y) * (1 - ss(0.3, 0.42, Math.abs(x)));
         // the jaw: the chin and mouth under the big nose (in front of the neck, below the nose, not the nose itself)
-        const wj = 0;                                                  // (the chin stays put: the mouth opening moves instead)
+        const wj = survivorLipWeight(x, y, z);                         // (only the lower lip moves when you talk)
         si[i * 4] = 0; si[i * 4 + 1] = 1; si[i * 4 + 2] = 2;
-        sw[i * 4] = 1 - w; sw[i * 4 + 1] = w * (1 - wj); sw[i * 4 + 2] = w * wj;
+        sw[i * 4] = (1 - w) * (1 - wj); sw[i * 4 + 1] = w * (1 - wj); sw[i * 4 + 2] = wj;
       }
       g.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(si, 4));
       g.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
@@ -16551,7 +16553,7 @@
       const head = new THREE.Bone(); head.name = 'survivorHeadPivot';
       head.position.copy(SURVIVOR_NECK_PIVOT); rootBone.add(head);
       const jaw = new THREE.Bone(); jaw.name = 'survivorJaw';                 // hinged at the back of the jaw: rotating it drops the chin
-      jaw.position.set(0, 0.2, 0.12).sub(SURVIVOR_NECK_PIVOT); head.add(jaw);
+      jaw.position.copy(SURVIVOR_JAW_PIVOT).sub(SURVIVOR_NECK_PIVOT); head.add(jaw);
       head.userData.jaw = jaw; addSurvivorMouth(head);
       const sm = new THREE.SkinnedMesh(g, mesh.material);
       sm.name = mesh.name; sm.position.copy(mesh.position); sm.quaternion.copy(mesh.quaternion); sm.scale.copy(mesh.scale);
@@ -16907,6 +16909,14 @@
       m.scale.set(1, len, 1);
     }
     const _svrW = new THREE.Vector3(), _svrHQ = new THREE.Quaternion(), _svrBQ = new THREE.Quaternion(), _svrUp = new THREE.Vector3(0, 1, 0);
+    // the wrist's own axis: halfway between the forearm (elbow -> wrist) and the hand, which is how the skin at the
+    // wrist turns, so a ring round it sits square to the arm instead of tilting across it
+    const _waF = new THREE.Vector3();
+    function trWristAxis(C, out) {
+      out.subVectors(C.w, C.e).normalize();
+      if (C.hd) { _waF.copy(C.hd).normalize(); if (_waF.dot(out) > -0.2) out.add(_waF).normalize(); }
+      return out;
+    }
     let _svrLastT = 0;
     function updateSurvivorArms() {
       armGroup.visible = survivorBodyGroup.visible && survivorArms.built;
@@ -16939,7 +16949,7 @@
             } else solveRigArm(inst, key, null, yaw, null, S.curl);
           } catch (e) { if (!updateSurvivorArms.warned) { updateSurvivorArms.warned = true; console.error('[SurvivorGLB] arm IK failed', e); } }
           const C = inst.cuffAt && inst.cuffAt[key];
-          if (C) { S.cuff.position.copy(C.w); _arD.subVectors(C.w, C.e).normalize(); S.cuff.quaternion.setFromUnitVectors(_arUp, _arD); }   // Y along the forearm
+          if (C) { S.cuff.position.copy(C.w); trWristAxis(C, _arD); S.cuff.quaternion.setFromUnitVectors(_arUp, _arD); }   // Y square to the wrist's cross-section
         }
         for (const key of ['L', 'R']) if (!done[key]) solveRigArm(inst, key, null, yaw, null, null);
         return;
@@ -17005,7 +17015,7 @@
         // round the model's own forearm at the wrist: its inner edge just outside the fur (the band's tube is ~0.21 of
         // the ring's radius thick), sitting a little back up the forearm from the hand
         const r = survivorRig.foreR * SURVIVOR_GLB_HEIGHT / survivorRig.height * SURVIVOR_GLB_FIT;
-        CUFF_R = r / 0.9; CUFF_Y = -0.25 * r;                            // (a thin ring hugging the wrist: its inner edge on the skin)
+        CUFF_R = r * 1.08 / 0.9; CUFF_Y = -0.2 * r;                      // (a thin ring just outside the wrist: its inner edge at 1.08x the wrist)
         fitWristWear.thin = fitWristWear.thin || new THREE.TorusGeometry(0.026, 0.0026, 8, 32);
       }
       wear.forEach((w, i) => {
@@ -17013,7 +17023,7 @@
         const b = w.c.band;
         S.cuff.add(b); b.position.set(0, CUFF_Y, 0); b.rotation.set(Math.PI / 2, 0, 0); b.scale.setScalar(CUFF_R / 0.026);
         if (fitWristWear.thin) b.geometry = fitWristWear.thin;            // (the band itself slimmer on the model's wrist)
-        for (const ch of Object.values(w.chains)) { S.cuff.add(ch); ch.position.set(0, CUFF_Y, 0); ch.rotation.set(Math.PI / 2, 0, 0); ch.scale.setScalar(CUFF_R / 0.027); }
+        for (const ch of Object.values(w.chains)) { S.cuff.add(ch); ch.position.set(0, CUFF_Y, 0); ch.rotation.set(Math.PI / 2, 0, 0); ch.scale.set(CUFF_R / 0.027 / 0.82, CUFF_R / 0.027, CUFF_R / 0.027); }   // (round on the model's wrist)
         S.cuff.add(w.c.charmHook);
         w.c.charmHook.scale.setScalar(CHARM_WORLD);
         w.holder.position.y = -0.0185;                                    // the charm's bail sits on the last link
@@ -17591,7 +17601,7 @@
       };
       if (pcUI.tab === 'public') {
         text('Join the open public room: anyone else in it plays with you.', 40, 172);
-        text('Survivors or monster: pick your ROLE in the menu (B / Y).', 40, 204, 22, dim);
+        text('Survivors or monster: pick your ROLE in the menu (thumbstick click).', 40, 204, 22, dim);
         if (net.room && net.kind === 'public') btn('leave', 40, 250, W - 80, 96, 'LEAVE ROOM', { red: true, size: 32 });
         else btn('pub', 40, 250, W - 80, 96, net.joining ? 'CONNECTING...' : 'JOIN PUBLIC ROOM', { size: 34 });
         roster(400);
@@ -17611,7 +17621,7 @@
       } else {
         drawVolSlider(g, p, 60, 230, W - 120, 'NOISES / SFX VOLUME', 'sfx', 'pcvol');
         drawVolSlider(g, p, 60, 360, W - 120, 'MUSIC VOLUME', 'music', 'pcvol');
-        text('The same sliders are in the menu (B / Y). Saved on this device.', 60, 460, 21, dim);
+        text('The same sliders are in the menu (thumbstick click). Saved on this device.', 60, 460, 21, dim);
       }
       g.fillStyle = dim; g.font = `17px ${UI_FONT}`; g.textAlign = 'center';
       g.fillText(renderer.xr.isPresenting ? 'Point and pull the Trigger' : 'Click, or type on your keyboard', W / 2, H - 22); g.textAlign = 'left';
@@ -17843,6 +17853,7 @@
         b: save.equipped.band || 'none', c: save.equipped.charm || 'none', hp: Math.round(survival.hp),
         mo: r3(mouthOpenness()), st: N.stunT > 0 ? 1 : 0, it: heldItemsPacket(), hid: tentHide.inside && !tentHide.spotted ? 1 : 0, wk: localWorking() ? 1 : 0,
       };
+      try { r67StateExtra(d); } catch (e) { }                                // (arm / head torn off, the monster's HP and machete)
       try { target ? N.send(d, target) : N.send(d); } catch (e) { }
     }
     // ---------- smooth remote movement: a short buffer of their 15 Hz poses, played back 120 ms behind ----------
@@ -17931,7 +17942,7 @@
           } else solveRigArm(r.rig, key, null, r.yaw, null, H.c);
         } catch (e) { if (!solveRemoteRig.warned) { solveRemoteRig.warned = true; console.error('[Net] remote arm IK failed', e); } }
         const C = r.rig.cuffAt && r.rig.cuffAt[key];
-        if (cuff && C) { cuff.visible = true; cuff.position.copy(C.w); _rrgD.subVectors(C.w, C.e).normalize(); cuff.quaternion.setFromUnitVectors(_rrgUp, _rrgD); }
+        if (cuff && C) { cuff.visible = true; cuff.position.copy(C.w); trWristAxis(C, _rrgD); cuff.quaternion.setFromUnitVectors(_rrgUp, _rrgD); }
       }
     }
     function solveRemoteArms(r, s) {
@@ -18956,6 +18967,1021 @@
         vrHpHud.material.color.setScalar(k);
         for (const w of wristSprites) w.material.color.setRGB(1, low ? k : 1, low ? k : 1);
         if (on) drawVrHp();
+        return r;
+      };
+    }
+
+    // =====================================================================
+    //  PLAYTEST FIXES 2 + MONSTER GORE
+    //  - VR pointer rays only show while they're on a UI panel (map screen, waiting-room computer, menu, shop...)
+    //  - cabin doors: hinge angles shared over Trystero; an open door keeps a solid slab you can push from both sides
+    //  - the mine cart: its position / speed shared (host authority for anyone arriving)
+    //  - SUNRISE RUN: everyone on the boat is moved to an open water lane, facing straight down it, and held there
+    //  - boats: invisible walls round the deck while you ride (you can't slip out)
+    //  - the human MONSTER: B / Y puts the machete away (the menu moved to a thumbstick click); with free hands it
+    //    grabs a survivor's arm or head and rips it off (blood spray, splatter, the limb in its fist, a stump on the
+    //    survivor, a blood-spattered grey death screen); only one player can be the monster; the monster has an HP bar
+    //  - melee weapons lie around every map for the survivors (bat, pipe, hatchet, spiked plank): they hurt the
+    //    human monster (and knock the AI monster down for a moment)
+    // =====================================================================
+    const _r67V = new THREE.Vector3(), _r67W = new THREE.Vector3(), _r67D = new THREE.Vector3(), _r67Q = new THREE.Quaternion(), _r67P = new THREE.Vector3();
+    const r67Now = () => performance.now();
+    const r67Send = (d, to) => { const N = netState(); if (!N.sendEvent) return; try { to ? N.sendEvent(d, to) : N.sendEvent(d); } catch (e) { } };
+
+    // ---------- 1. pointer rays: only on a panel ----------
+    {
+      const baseUI = updateUI;
+      updateUI = function () {
+        const r = baseUI.apply(this, arguments);
+        if (renderer.xr.isPresenting && !titleActive) {
+          controllers.forEach((c, i) => { const ud = c.userData; if (ud.ray) ud.ray.material.visible = !!(uiReticles[i] && uiReticles[i].visible); });
+        }
+        return r;
+      };
+    }
+
+    // ---------- 2. doors: shared hinge angles, and a solid slab when open ----------
+    const DOOR_SEGS = 5;
+    const doorNet = doors.map(() => ({ sent: 0, sendT: 0, recvT: -1e9, tgt: 0 }));
+    for (const d of doors) {
+      d.segs = [];
+      for (let k = 0; k < DOOR_SEGS; k++) {
+        const c = { box: new THREE.Box3(new THREE.Vector3(0, -1000, 0), new THREE.Vector3(0, -1000, 0)) };
+        colliders.push(c); d.segs.push(c); doorCols.add(c); passThrough.add(c);
+      }
+    }
+    {
+      const baseRPT = refreshPassThrough;
+      refreshPassThrough = function () { const r = baseRPT.apply(this, arguments); for (const d of doors) for (const c of d.segs) passThrough.add(c); return r; };
+    }
+    function fitDoorSegs(d) {
+      const open = !d.broken && d.pivot.visible && Math.abs(d.angle) > DOOR_PASS_ANGLE;
+      if (!open) { for (const c of d.segs) { c.box.min.set(0, -1000, 0); c.box.max.set(0, -1000, 0); } return; }
+      // the open door as a row of small boxes along its slab, at its real hinge angle
+      const r = d.yaw + d.angle, c = Math.cos(r), s = Math.sin(r), seg = d.w / DOOR_SEGS, hx = seg / 2, hz = 0.035;
+      const ex = Math.abs(c) * hx + Math.abs(s) * hz, ez = Math.abs(s) * hx + Math.abs(c) * hz;
+      d.segs.forEach((col, k) => {
+        const lx = seg * (k + 0.5), cx = d.hinge.x + lx * c, cz = d.hinge.z - lx * s;
+        col.box.min.set(cx - ex, d.hinge.y, cz - ez); col.box.max.set(cx + ex, d.hinge.y + d.h, cz + ez);
+      });
+    }
+    const _dcC = new THREE.Vector3(), _dcC0 = new THREE.Vector3(), _dcL = new THREE.Vector3(), _dcL0 = new THREE.Vector3();
+    let dcOk = false;
+    {
+      const baseDW = updateDoorsAndWindows;
+      updateDoorsAndWindows = function (dt) {
+        const r = baseDW(dt);
+        const now = r67Now(), N = netState(), vr = renderer.xr.isPresenting;
+        camera.getWorldPosition(_dcC); _dcC.y -= 0.12;                      // your chest
+        doors.forEach((d, k) => {
+          const S = doorNet[k];
+          if (d.broken) { fitDoorSegs(d); return; }
+          // another player is swinging it: follow their angle
+          if (now - S.recvT < 400 && d.grabbed < 0) {
+            d.angle += (S.tgt - d.angle) * Math.min(1, dt * 14);
+            d.av = 0; d.target = null;
+            if (Math.abs(d.angle) > 0.15) d.wasOpen = true;
+            d.pivot.rotation.y = d.yaw + d.angle;
+            if (Math.abs(d.angle) > DOOR_PASS_ANGLE) { d.col.box.min.set(0, -1000, 0); d.col.box.max.set(0, -1000, 0); }
+            else d.col.box.copy(d.closedBox);
+          } else if (vr && dcOk && dt > 0 && Math.abs(d.angle) > DOOR_PASS_ANGLE) {
+            // an open door: walking into its slab (from either side) swings it away from you
+            toDoorLocal(d, _dcC, _dcL); toDoorLocal(d, _dcC0, _dcL0);
+            if (_dcL.x > 0.05 && _dcL.x < d.w && _dcL.y > -0.2 && _dcL.y < d.h + 0.2) {
+              const side = _dcL0.z >= 0 ? 1 : -1, gap = side * _dcL.z - d.t / 2;
+              const vin = -side * (_dcL.z - _dcL0.z) / dt;
+              if (gap < 0.32 && gap > -0.25 && vin > 0.05) {
+                const want = Math.min(5, (vin * 1.2) / Math.max(0.2, _dcL.x));
+                if (Math.sign(d.av || 0) !== side || Math.abs(d.av || 0) < want) d.av = side * want;
+              }
+            }
+          }
+          fitDoorSegs(d);
+          // you moved it: tell everyone (about 12 times a second while it swings, and once more where it settles)
+          if (N.sendEvent && now - S.recvT > 400) {
+            const diff = Math.abs(d.angle - S.sent);
+            if ((diff > 0.02 && now - S.sendT > 80) || (diff > 0.004 && now - S.sendT > 300)) {
+              S.sent = d.angle; S.sendT = now;
+              r67Send({ t: 'door', k, a: r3(d.angle) });
+            }
+          }
+        });
+        _dcC0.copy(_dcC); dcOk = true;
+        return r;
+      };
+    }
+    function netOnDoor(d) {
+      const k = d.k | 0, door = doors[k], S = doorNet[k], a = +d.a;
+      if (!door || !S || !Number.isFinite(a) || door.broken) return;
+      S.tgt = THREE.MathUtils.clamp(a, -DOOR_OPEN_MAX, DOOR_OPEN_MAX); S.recvT = r67Now(); S.sent = S.tgt;
+    }
+
+    // ---------- 3. the mine cart: shared ----------
+    let cartSendT = 0, cartHostT = 0;
+    const cartState = (snap) => ({ t: 'cart', m: 'mine', x: r3(mineCart.x), vx: r3(mineCart.vx), r: r3(mineCart.group.rotation.y), dn: mineCart.done ? 1 : 0, snap: snap ? 1 : 0 });
+    function netOnCart(d) {
+      if (d.m !== 'mine' || !Number.isFinite(+d.x)) return;
+      const c = mineCart, now = r67Now();
+      if (now - (c.pushT || -1e9) < 300) return;                   // you're pushing it yourself right now
+      c.x = +d.x; c.vx = Number.isFinite(+d.vx) ? +d.vx : 0;
+      if (d.dn && !c.done) { c.done = true; c.vx = 0; }
+      if (Number.isFinite(+d.r)) c.group.rotation.y = +d.r;
+      c.group.position.x = c.x; c.col.box.min.x = c.x - 0.45; c.col.box.max.x = c.x + 0.45;
+      c.netT = now;
+    }
+    function updateCartNet(dt) {
+      const N = netState(); if (!N.sendEvent || currentMap !== 'mine') return;
+      const now = r67Now(), pushing = now - (mineCart.pushT || -1e9) < 2000;
+      if (pushing) { if ((cartSendT -= dt) <= 0) { cartSendT = 0.1; r67Send(cartState(false)); } }
+      else if ((cartHostT += dt) > 3) {
+        cartHostT = 0;
+        if (aiRole() === 'host' && now - (mineCart.netT || -1e9) > 2500) r67Send(cartState(true));   // the host keeps everyone in step
+      }
+    }
+
+    // ---------- 4. the SUNRISE RUN lane, and the boats held there while it runs ----------
+    const RUNWAY = {
+      camp: { x: LAKE.x0 + 2.5, z: CH.z, yaw: 0 },                                     // straight down the lake into the channel
+      graveyard: { x: GY.lake.x0 + 5.5, z: (GY.lake.z0 + GY.lake.z1) / 2, yaw: 0 },        // past the pier, east down the lake
+      mine: { x: MN.lake.x1 - 4, z: MINE.z, yaw: Math.PI },                              // west, out of the cavern lake
+    };
+    let runLock = null;
+    function r67Obstacles(origin) {
+      const out = [], skip = new Set([playerRig, boatGroup, monsterModel, skyDome, sunDisc, sunHalo]);
+      for (const b of Object.values(escapeBoats)) skip.add(b.group);
+      for (const it of boatRun.items) skip.add(it.g);
+      const walk = (o) => {
+        if (!o.visible || skip.has(o)) return;
+        if (o.isMesh && !o.isSkinnedMesh && o.geometry) {
+          const m = Array.isArray(o.material) ? o.material[0] : o.material;
+          if (m && !m.transparent) {
+            if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere();
+            const bs = o.geometry.boundingSphere;
+            if (bs) {
+              _r67W.copy(bs.center).applyMatrix4(o.matrixWorld);
+              const sc = o.matrixWorld.getMaxScaleOnAxis();
+              if (_r67W.distanceTo(origin) - bs.radius * sc < 18) out.push(o);
+            }
+          }
+        }
+        for (const ch of o.children) walk(ch);
+      };
+      walk(scene);
+      return out;
+    }
+    const _r67Ray = new THREE.Raycaster();
+    function r67Clear(origin, dir, meshes) {                       // how far you can see down a 0.8 m wide lane
+      _r67Ray.camera = camera; _r67Ray.far = 16;
+      let best = 16;
+      for (const off of [-0.4, 0, 0.4]) {
+        _r67P.set(-dir.z, 0, dir.x).multiplyScalar(off).add(origin).addScaledVector(dir, 0.6);
+        _r67Ray.set(_r67P, dir);
+        try { const h = _r67Ray.intersectObjects(meshes, false)[0]; if (h && h.distance < best) best = h.distance; } catch (e) { }
+      }
+      return best;
+    }
+    function r67MoveBoat(kind, b, x, z, yaw, carry) {
+      if (kind === 'camp') {
+        const dx = x - boat.pos.x, dz = z - boat.pos.z, dy = yaw - boat.yaw;
+        boat.pos.x = x; boat.pos.z = z; boat.yaw = yaw; boat.speed = 0;
+        boatGroup.position.x = x; boatGroup.position.z = z; boatGroup.rotation.y = yaw; boatGroup.updateMatrixWorld(true);
+        updateBoatColliders();
+        if (carry) carryRig(_r67V.set(x, 0, z), dx, dz, dy);
+      } else {
+        const p = b.group.position, dx = x - p.x, dz = z - p.z, dy = yaw - b.yaw;
+        p.x = x; p.z = z; b.yaw = yaw; b.speed = 0; b.group.rotation.y = yaw; b.group.updateMatrixWorld(true);
+        updateBoatCol(b);
+        if (carry) carryRig(_r67V.set(x, 0, z), dx, dz, dy);
+      }
+    }
+    function r67Runway() {
+      if (!ending) return;
+      const vr = renderer.xr.isPresenting, map = currentMap;
+      let kind = null, b = null;
+      if (map === 'camp' && ((vr && boat.aboard) || (!vr && deskBoat.engaged))) kind = 'camp';
+      else if (escapeBoats[map] && ((vr && escapeBoatAboard()) || (!vr && escapeBoats[map].deskOff))) { kind = 'esc'; b = escapeBoats[map]; }
+      const lane = RUNWAY[map];
+      const dir = new THREE.Vector3();
+      if (kind && lane) {
+        // the boat (and you in it) to the open lane, bow pointing straight down it
+        r67MoveBoat(kind, b, lane.x, lane.z, lane.yaw, vr);
+        dir.set(Math.cos(lane.yaw), 0, -Math.sin(lane.yaw));
+        runLock = { kind, b, x: lane.x, z: lane.z, yaw: lane.yaw };
+        if (!vr) {
+          const bp = kind === 'camp' ? boat.pos : b.group.position;
+          if (b && b.deskOff) b.deskOff.set(-dir.x * 3.2, 1.6, -dir.z * 3.2);
+          camera.position.set(bp.x - dir.x * 3.2, (kind === 'camp' ? WATER_LEVEL : b.level) + 1.6, bp.z - dir.z * 3.2);
+          orbit.target.set(bp.x + dir.x * 2, (kind === 'camp' ? WATER_LEVEL : b.level) + 0.6, bp.z + dir.z * 2); orbit.update();
+        }
+        const N = netState();
+        if (N.sendEvent) { try { N.sendEvent(kind === 'camp' ? campBoatState(true) : escBoatState(b, true)); } catch (e) { } }
+      } else {
+        // not on a boat: stay put, but face the clearest open direction (no walls, rocks or props in the way)
+        runLock = null;
+        const o = vr ? headWorld(new THREE.Vector3()) : camera.getWorldPosition(new THREE.Vector3());
+        o.y -= 0.2;
+        const meshes = r67Obstacles(o);
+        const cands = [ending.dir.clone().setY(0).normalize()];
+        for (let k = 0; k < 16; k++) { const a = (k / 16) * Math.PI * 2; cands.push(new THREE.Vector3(Math.sin(a), 0, Math.cos(a))); }
+        let bestLen = -1;
+        for (const c of cands) { const L = r67Clear(o, c, meshes); if (L > bestLen + 0.5) { bestLen = L; dir.copy(c); } if (L >= 15.5) break; }
+        if (!vr) { orbit.target.copy(camera.position).addScaledVector(dir, 2); orbit.target.y = camera.position.y - 0.4; orbit.update(); }
+      }
+      if (vr) {
+        // turn you (round your head) so you look straight down the lane
+        camera.getWorldDirection(_r67D);
+        if (Math.hypot(_r67D.x, _r67D.z) > 0.1) {
+          const turn = Math.atan2(dir.x, dir.z) - Math.atan2(_r67D.x, _r67D.z);
+          carryRig(headWorld(new THREE.Vector3()), 0, 0, turn);
+        }
+      }
+      ending.dir.copy(dir);
+    }
+    {
+      const baseRun = startBoatRun;
+      startBoatRun = function () {
+        try { r67Runway(); } catch (e) { console.warn('[SunriseRun] lane', e); }
+        return baseRun.apply(this, arguments);
+      };
+    }
+    // ---------- 5. boats: walls round the deck while you ride, and held on the lane during the run ----------
+    const BOAT_POSTS = [];
+    for (let k = 0; k < 8; k++) for (const sz of [-1, 1]) BOAT_POSTS.push([-1.05 + k * 0.3, sz * (BOAT_W / 2 - 0.03)]);
+    for (const sx of [-1, 1]) for (const lz of [-0.36, -0.12, 0.12, 0.36]) BOAT_POSTS.push([sx * (BOAT_L / 2 - 0.03), lz]);
+    const makePosts = () => BOAT_POSTS.map(() => { const c = { box: new THREE.Box3(new THREE.Vector3(0, -1000, 0), new THREE.Vector3(0, -1000, 0)) }; colliders.push(c); return c; });
+    const campPosts = makePosts(), escPosts = makePosts();
+    function fitPosts(cols, on, cx, cz, yaw, top) {
+      const c = Math.cos(yaw), s = Math.sin(yaw);
+      cols.forEach((col, k) => {
+        if (!on) { col.box.min.set(0, -1000, 0); col.box.max.set(0, -1000, 0); return; }
+        const [lx, lz] = BOAT_POSTS[k], x = cx + lx * c + lz * s, z = cz - lx * s + lz * c;
+        col.box.min.set(x - 0.075, top - 0.05, z - 0.075); col.box.max.set(x + 0.075, top + 0.7, z + 0.075);
+      });
+    }
+    {
+      const baseUB = updateBoat;
+      updateBoat = function (dt) {
+        const L = runLock && boatRun.active && runLock.kind === 'camp' ? runLock : null;
+        const r = baseUB(dt);
+        if (L) {
+          const dx = boat.pos.x - L.x, dz = boat.pos.z - L.z, dy = boat.yaw - L.yaw;
+          if (dx || dz || dy) {
+            boat.pos.x = L.x; boat.pos.z = L.z; boat.yaw = L.yaw; boat.speed = 0;
+            boatGroup.position.x = L.x; boatGroup.position.z = L.z; boatGroup.rotation.y = L.yaw;
+            updateBoatColliders();
+            if (boat.aboard) carryRig(_r67V.set(L.x, 0, L.z), -dx, -dz, -dy);
+          }
+        }
+        const remote = typeof boatRemoteHeld === 'function' && boatRemoteHeld();
+        const on = renderer.xr.isPresenting && currentMap === 'camp' && boat.aboard && (Math.abs(boat.speed) > 0.12 || boat.holding >= 0 || remote || !!L || !!ending);
+        fitPosts(campPosts, on, boat.pos.x, boat.pos.z, boat.yaw, WATER_LEVEL + BOAT_FLOOR);
+        return r;
+      };
+    }
+    {
+      const baseEB = updateEscapeBoats;
+      updateEscapeBoats = function (dt) {
+        const r = baseEB(dt);
+        const vr = renderer.xr.isPresenting;
+        if (!boatRun.active && runLock) runLock = null;
+        const L = runLock && boatRun.active && runLock.kind === 'esc' ? runLock : null;
+        if (L) {
+          const b = L.b, p = b.group.position, dx = p.x - L.x, dz = p.z - L.z, dy = b.yaw - L.yaw;
+          if (dx || dz || dy) {
+            p.x = L.x; p.z = L.z; b.yaw = L.yaw; b.speed = 0; b.group.rotation.y = L.yaw; b.group.updateMatrixWorld(true);
+            updateBoatCol(b);
+            if (vr && b.map === currentMap) carryRig(_r67V.set(L.x, 0, L.z), -dx, -dz, -dy);
+          }
+        }
+        const b = escapeBoats[currentMap];
+        const on = !!b && vr && b.t >= 0 && escapeBoatAboard();
+        if (b) fitPosts(escPosts, on, b.group.position.x, b.group.position.z, b.yaw, b.level + 0.08);
+        else fitPosts(escPosts, false);
+        return r;
+      };
+    }
+
+    // ---------- 6. the monster: B / Y puts the machete away ----------
+    let monUnarmed = false;
+    const monBY = [false, false];
+    function updateMonsterHands() {
+      const vr = renderer.xr.isPresenting;
+      if (playerRole === 'monster' && vr && !titleActive) {
+        controllers.forEach((c, i) => {
+          const b = c.userData.inputSource?.gamepad?.buttons, now = !!(b && b[5]?.pressed);
+          if (now && !monBY[i]) {
+            monUnarmed = !monUnarmed; pulse(c, 0.5, 50);
+            showToast(monUnarmed ? 'MACHETE PUT AWAY' : 'MACHETE OUT', monUnarmed ? 'Grip a survivor\'s arm or head and PULL to rip it off' : 'Swing hard to hit (B / Y puts it away)');
+            try { monUnarmed ? gameAudio.clink(0.6) : gameAudio.scrape(1); } catch (e) { }
+            netSendState(true);
+          }
+          monBY[i] = now;
+        });
+      } else { monBY[0] = monBY[1] = false; if (playerRole !== 'monster') monUnarmed = false; }
+      mMachete.visible = !(playerRole === 'monster' && monUnarmed);
+    }
+    const monArmedOff = () => playerRole === 'monster' && monUnarmed;
+    {
+      const bM = updateMachete; updateMachete = function (dt) { if (monArmedOff()) { bladeOk = false; return; } return bM(dt); };
+      const bC = clampMachete; clampMachete = function (dt) { if (monArmedOff()) { bladeContact = false; tipPrevOk = false; return; } return bC(dt); };
+      const bH = updateMacheteHits; updateMacheteHits = function (dt) { if (monArmedOff()) { netState().tip = null; return; } return bH(dt); };
+    }
+    // only one player can be the monster
+    let r67SetRoleBase = null;
+    {
+      const baseSetRole = setRole;
+      setRole = function (r) {
+        if (r === 'monster' && playerRole !== 'monster') {
+          const now = r67Now();
+          const other = [...netPeers().values()].find((p) => p.st && p.st.r === 'm' && !p.leftAt && now - p.seen < 5000);
+          if (other) { showToast('THERE IS ALREADY A MONSTER', `${String(other.st.n || 'Someone').slice(0, 12).toUpperCase()} is the monster: only one player can be`); return; }
+          monHP = MON_HP;
+        }
+        return baseSetRole(r);
+      };
+      r67SetRoleBase = baseSetRole;
+    }
+    function checkOneMonster() {
+      if (playerRole !== 'monster') return;
+      const me = netSelfId(), now = r67Now();
+      for (const [id, p] of netPeers()) {
+        if (p.st && p.st.r === 'm' && !p.leftAt && now - p.seen < 3000 && id < me) {   // both picked it at once: the lower id keeps it
+          r67SetRoleBase('survivor');
+          showToast('YOU ARE A SURVIVOR', `${String(p.st.n || 'Someone').slice(0, 12).toUpperCase()} is already the monster`);
+          try { redrawPanel(menuPanel); } catch (e) { }
+          netSendState(true);
+          return;
+        }
+      }
+    }
+
+    // ---------- 7. the monster's health bar ----------
+    const MON_HP = 100;
+    let monHP = MON_HP, monHurtT = 0;
+    {
+      const baseWrist = drawWrist;
+      drawWrist = function (...a) {
+        if (playerRole !== 'monster') return baseWrist.apply(this, a);
+        const keep = survival.hp; survival.hp = monHP;
+        try { return baseWrist.apply(this, a); } finally { survival.hp = keep; }
+      };
+    }
+    function r67StateExtra(d) {                                          // (called from netSendState)
+      if (playerRole === 'monster') { d.hp = Math.max(0, Math.round(monHP)); d.mu = monUnarmed ? 1 : 0; }
+      else d.rp = goreMe.rp | 0;
+    }
+    function netOnMonsterHit(id, d) {
+      const N = netState();
+      if (playerRole !== 'monster' || titleActive || d.m !== currentMap || N.stunT > 0) return;
+      const dmg = Math.min(30, Math.max(0, +d.d || 0)); if (!dmg) return;
+      monHP = Math.max(0, monHP - dmg); monHurtT = 0;
+      const by = String(d.n || 'A survivor').slice(0, 12).toUpperCase();
+      redFlash.visible = true; redFlash.material.opacity = 0.6; N.flashT = 0.5;
+      controllers.forEach((c) => pulse(c, 0.8, 120));
+      try { gameAudio.smash(0.9); } catch (e) { }
+      if (monHP <= 0) {
+        N.stunT = 12; N.stunPin = playerRig.position.clone();
+        showToast('YOU WERE BEATEN DOWN', `${by} knocked you out for 12 seconds`);
+      } else showToast(`${by} HIT YOU`, `-${dmg} HP  ·  ${Math.round(monHP)} HP left`);
+      survival.shownKey = '';
+      netSendState(true);
+    }
+    function updateMonsterHP(dt) {
+      const N = netState();
+      if (playerRole !== 'monster') { monHP = MON_HP; return; }
+      if (monHP <= 0 && !(N.stunT > 0)) { monHP = MON_HP; survival.shownKey = ''; showToast('BACK ON YOUR FEET', 'Full health: hunt them down'); }
+      monHurtT += dt;
+      if (monHurtT > 8 && monHP < MON_HP && monHP > 0) { const was = Math.ceil(monHP); monHP = Math.min(MON_HP, monHP + 2 * dt); if (Math.ceil(monHP) !== was) survival.shownKey = ''; }
+    }
+
+    // ---------- 8. gore: blood drops, splatter, severed limbs, stumps ----------
+    const BLOOD_N = 420, SPLAT_N = 260;
+    const bloodMat = new THREE.MeshBasicMaterial({ color: 0x8e0b06 });
+    const bloodDrops = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 6, 4), bloodMat, BLOOD_N);
+    bloodDrops.frustumCulled = false; bloodDrops.instanceMatrix.setUsage(THREE.DynamicDrawUsage); scene.add(bloodDrops);
+    const splatMat = new THREE.MeshBasicMaterial({ color: 0x5e0603, transparent: true, opacity: 0.92, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+    const bloodSplats = new THREE.InstancedMesh(new THREE.CircleGeometry(1, 12).rotateX(-Math.PI / 2), splatMat, SPLAT_N);
+    bloodSplats.frustumCulled = false; scene.add(bloodSplats);
+    const _bgM = new THREE.Matrix4(), _bgS = new THREE.Vector3(), _bgQ = new THREE.Quaternion(), _bgZero = new THREE.Matrix4().makeScale(0, 0, 0);
+    const bloodDropsArr = Array.from({ length: BLOOD_N }, () => ({ on: false, p: new THREE.Vector3(), v: new THREE.Vector3(), s: 0.01 }));
+    for (let k = 0; k < BLOOD_N; k++) bloodDrops.setMatrixAt(k, _bgZero);
+    for (let k = 0; k < SPLAT_N; k++) bloodSplats.setMatrixAt(k, _bgZero);
+    let bloodNext = 0, splatNext = 0, splatMap = new Array(SPLAT_N).fill(null);
+    const goreFloor = (x, z) => { try { return groundY(currentMap === 'waiting' ? 'camp' : currentMap, x, z); } catch (e) { return 0; } };
+    function bloodDrop(x, y, z, vx, vy, vz, s) {
+      const d = bloodDropsArr[bloodNext]; bloodNext = (bloodNext + 1) % BLOOD_N;
+      d.on = true; d.p.set(x, y, z); d.v.set(vx, vy, vz); d.s = s || 0.006 + Math.random() * 0.01;
+    }
+    function bloodBurst(p, n, power) {
+      for (let k = 0; k < n; k++) {
+        const a = Math.random() * Math.PI * 2, sp = (0.6 + Math.random() * 2.2) * (power || 1);
+        bloodDrop(p.x, p.y, p.z, Math.cos(a) * sp, 0.6 + Math.random() * 2.4 * (power || 1), Math.sin(a) * sp, 0.007 + Math.random() * 0.014);
+      }
+      for (let k = 0; k < 4; k++) bloodSplat(p.x + (Math.random() - 0.5) * 0.7, p.z + (Math.random() - 0.5) * 0.7, 0.08 + Math.random() * 0.14);
+    }
+    function bloodSplat(x, z, r) {
+      const k = splatNext; splatNext = (splatNext + 1) % SPLAT_N;
+      _bgQ.setFromAxisAngle(_r67W.set(0, 1, 0), Math.random() * Math.PI * 2);
+      _bgS.set(r * (0.7 + Math.random() * 0.6), 1, r * (0.7 + Math.random() * 0.6));
+      _bgM.compose(_r67P.set(x, goreFloor(x, z) + 0.006, z), _bgQ, _bgS);
+      bloodSplats.setMatrixAt(k, _bgM); bloodSplats.instanceMatrix.needsUpdate = true;
+      splatMap[k] = currentMap;
+    }
+    let goreShownMap = null;
+    function updateBlood(dt) {
+      if (goreShownMap !== currentMap) {                                  // a new map: the old map's blood is cleared
+        goreShownMap = currentMap;
+        for (let k = 0; k < SPLAT_N; k++) bloodSplats.setMatrixAt(k, _bgZero);
+        bloodSplats.instanceMatrix.needsUpdate = true;
+        for (const d of bloodDropsArr) d.on = false;
+      }
+      let any = false;
+      for (let k = 0; k < BLOOD_N; k++) {
+        const d = bloodDropsArr[k];
+        if (!d.on) continue;
+        any = true;
+        d.v.y -= 9.8 * dt; d.v.multiplyScalar(Math.exp(-0.4 * dt));
+        d.p.addScaledVector(d.v, dt);
+        const fl = goreFloor(d.p.x, d.p.z);
+        if (d.p.y <= fl) { d.on = false; bloodDrops.setMatrixAt(k, _bgZero); if (Math.random() < 0.45) bloodSplat(d.p.x, d.p.z, d.s * 3 + Math.random() * 0.03); continue; }
+        _bgS.set(d.s, d.s * (1 + Math.min(2.5, d.v.length() * 0.35)), d.s);
+        _bgQ.setFromUnitVectors(_r67W.set(0, 1, 0), _r67D.copy(d.v).normalize());
+        _bgM.compose(d.p, _bgQ, _bgS); bloodDrops.setMatrixAt(k, _bgM);
+      }
+      if (any || goreAnyWas) bloodDrops.instanceMatrix.needsUpdate = true;
+      goreAnyWas = any;
+    }
+    let goreAnyWas = false;
+    // ---------- a severed piece: the real survivor.glb arm or head (the rest of the body collapsed away) ----------
+    const stumpMat = new THREE.MeshStandardMaterial({ color: 0x6a0805, roughness: 0.35, metalness: 0.1, emissive: 0x200000 });
+    const boneMat = new THREE.MeshStandardMaterial({ color: 0xe8e0cc, roughness: 0.5 });
+    function makeSevered(part, worldScale) {
+      const g = new THREE.Group(); g.userData.dispose = [];
+      let made = false;
+      try {
+        if (survivorRig && survivorRig.local && survivorRig.full) {
+          const srcMat = survivorRig.local.mesh.material;
+          const mat = Array.isArray(srcMat) ? srcMat.map((m) => Object.assign(m.clone(), { clippingPlanes: null })) : Object.assign(srcMat.clone(), { clippingPlanes: null });
+          g.userData.dispose.push(...(Array.isArray(mat) ? mat : [mat]));
+          const inst = makeRigInstance(mat, false), B = inst.bones;
+          B.root.scale.setScalar(0.001);                                  // the body shrinks to nothing at the cut...
+          const keep = part === 'H' ? B.head : B[part].u;
+          keep.scale.setScalar(1000);                                     // ...the ripped-off part stays full size
+          inst.mesh.scale.copy(worldScale);
+          g.add(inst.mesh); g.updateMatrixWorld(true);
+          // held by its hand (an arm) or the top of its head
+          const grab = part === 'H' ? B.head.getWorldPosition(new THREE.Vector3()).addScaledVector(_r67W.set(0, 1, 0), 0.16 * worldScale.y) : B[part].h.getWorldPosition(new THREE.Vector3());
+          const cut = (part === 'H' ? B.head : B[part].u).getWorldPosition(new THREE.Vector3());
+          g.worldToLocal(grab); g.worldToLocal(cut);
+          inst.mesh.position.sub(grab); cut.sub(grab);
+          const r = 0.055 * Math.max(0.6, worldScale.y);
+          const st = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 8), stumpMat); st.position.copy(cut); st.scale.set(1, 0.55, 1); g.add(st);
+          const bn = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.22, r * 0.26, r * 1.4, 8), boneMat); bn.position.copy(cut); g.add(bn);
+          g.userData.cut = cut.clone();
+          made = true;
+        }
+      } catch (e) { console.warn('[Gore] severed piece', e); }
+      if (!made) {                                                         // no survivor.glb: a simple furry piece
+        const fur = new THREE.MeshStandardMaterial({ color: 0x5a4a3c, roughness: 0.95 }); g.userData.dispose.push(fur);
+        if (part === 'H') { const h = new THREE.Mesh(new THREE.SphereGeometry(0.12, 14, 10), fur); h.position.y = -0.13; g.add(h); g.userData.cut = new THREE.Vector3(0, -0.24, 0); }
+        else { const a = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 0.42, 10), fur); a.position.y = -0.21; g.add(a); g.userData.cut = new THREE.Vector3(0, -0.42, 0); }
+        const st = new THREE.Mesh(new THREE.SphereGeometry(0.05, 10, 8), stumpMat); st.position.copy(g.userData.cut); g.add(st);
+      }
+      scene.add(g);
+      return g;
+    }
+    const gorePieces = [];
+    const goreHold = [null, null], goreGripPrev = [false, false];
+    function addPiece(part, at, worldScale, hold) {
+      if (gorePieces.length >= 10) dropPiece(gorePieces[0], true);
+      const g = makeSevered(part, worldScale);
+      g.position.copy(at);
+      const pc = { g, part, map: currentMap, vel: new THREE.Vector3(), spin: new THREE.Vector3(), hold, falling: !hold, landed: false, t: 0, dripT: 9, prev: at.clone() };
+      gorePieces.push(pc);
+      return pc;
+    }
+    function dropPiece(pc, remove) {
+      if (remove) {
+        const i = gorePieces.indexOf(pc); if (i >= 0) gorePieces.splice(i, 1);
+        if (pc.g.parent) pc.g.parent.remove(pc.g);
+        pc.g.traverse((o) => { if (o.geometry && o.isMesh && !o.isSkinnedMesh) o.geometry.dispose(); });
+        for (const m of pc.g.userData.dispose || []) { try { m.dispose(); } catch (e) { } }
+        return;
+      }
+      pc.hold = null; pc.falling = true;
+      pc.spin.set((Math.random() - 0.5) * 8, (Math.random() - 0.5) * 6, (Math.random() - 0.5) * 8);
+    }
+    const _pcC = new THREE.Vector3();
+    function updatePieces(dt) {
+      const now = r67Now();
+      for (const pc of [...gorePieces]) {
+        pc.t += dt;
+        pc.g.visible = pc.map === currentMap;
+        if (pc.map !== currentMap || pc.t > 90) { dropPiece(pc, true); continue; }
+        const H = pc.hold;
+        if (H) {
+          if (H.local !== undefined) {                                     // in your fist (the monster)
+            const h = hands[H.local], c = controllers[H.local];
+            if (!h || !h.tracked || !btn(c, 1)) { pc.vel.subVectors(pc.g.position, pc.prev).divideScalar(Math.max(dt, 1e-3)).clampLength(0, 8); dropPiece(pc); }
+            else { pc.prev.copy(pc.g.position); pc.g.position.copy(h.last); c.getWorldQuaternion(pc.g.quaternion); }
+          } else {                                                         // in another monster's fist
+            const rp = netPeers().get(H.id), RH = rp && rp.hand[H.h | 0];
+            if (!RH || !RH.ok || now > H.until) dropPiece(pc);
+            else { pc.prev.copy(pc.g.position); pc.g.position.copy(RH.p); pc.g.quaternion.copy(RH.q); }
+          }
+        }
+        if (pc.falling && !pc.landed) {
+          pc.vel.y -= 9.8 * dt;
+          pc.g.position.addScaledVector(pc.vel, dt);
+          pc.g.rotation.x += pc.spin.x * dt; pc.g.rotation.y += pc.spin.y * dt; pc.g.rotation.z += pc.spin.z * dt;
+          const fl = goreFloor(pc.g.position.x, pc.g.position.z);
+          if (pc.g.position.y < fl + 0.06) {
+            pc.g.position.y = fl + 0.06; pc.landed = true; pc.vel.set(0, 0, 0);
+            pc.g.rotation.x = Math.PI / 2 * (Math.random() < 0.5 ? 1 : -1); pc.g.rotation.z = 0;
+            bloodSplat(pc.g.position.x, pc.g.position.z, 0.16 + Math.random() * 0.1);
+            try { gameAudio.squelch(Math.max(0, _r67V.copy(pc.g.position).distanceTo(camera.getWorldPosition(_r67W)) - 1), 0.8); } catch (e) { }
+          }
+        }
+        // it keeps dripping from the cut for a while
+        if ((pc.dripT -= dt) > 0 && Math.random() < dt * (pc.landed ? 3 : 14)) {
+          _pcC.copy(pc.g.userData.cut || _r67W.set(0, 0, 0)); pc.g.localToWorld(_pcC);
+          if (pc.landed) bloodSplat(_pcC.x + (Math.random() - 0.5) * 0.1, _pcC.z + (Math.random() - 0.5) * 0.1, 0.03 + Math.random() * 0.05);
+          else bloodDrop(_pcC.x, _pcC.y, _pcC.z, (Math.random() - 0.5) * 0.4, -0.2, (Math.random() - 0.5) * 0.4);
+        }
+      }
+    }
+    // ---------- what the ripped survivor sees: blood on their eyes, and a grey death screen ----------
+    const bloodScreenCanvas = document.createElement('canvas'); bloodScreenCanvas.width = 1024; bloodScreenCanvas.height = 640;
+    {
+      const g = bloodScreenCanvas.getContext('2d');
+      const blob = (x, y, r, a) => {
+        g.fillStyle = `rgba(${110 + Math.random() * 50 | 0},${Math.random() * 10 | 0},${Math.random() * 8 | 0},${a})`;
+        g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
+      };
+      for (let k = 0; k < 70; k++) {                                        // splatters, heavier at the edges
+        const ang = Math.random() * Math.PI * 2, rr = 0.55 + Math.random() * 0.5;
+        const x = 512 + Math.cos(ang) * 560 * rr, y = 320 + Math.sin(ang) * 360 * rr, r = 8 + Math.random() * 60;
+        blob(x, y, r, (0.55 + Math.random() * 0.4).toFixed(2));
+        for (let j = 0; j < 8; j++) blob(x + (Math.random() - 0.5) * r * 4, y + (Math.random() - 0.5) * r * 4, 2 + Math.random() * r * 0.3, 0.8);
+        if (Math.random() < 0.5) { g.fillStyle = 'rgba(120,6,4,0.85)'; g.fillRect(x - 3, y, 6 + Math.random() * 4, 30 + Math.random() * 160); }
+      }
+      for (let k = 0; k < 14; k++) blob(200 + Math.random() * 620, 140 + Math.random() * 360, 4 + Math.random() * 18, 0.7);   // a few across the middle
+    }
+    const bloodScreenTex = new THREE.CanvasTexture(bloodScreenCanvas); bloodScreenTex.colorSpace = THREE.SRGBColorSpace;
+    const bloodScreen = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 0.82), new THREE.MeshBasicMaterial({ map: bloodScreenTex, transparent: true, opacity: 0, depthTest: false, depthWrite: false, fog: false }));
+    bloodScreen.position.set(0, 0, -0.29); bloodScreen.renderOrder = 9003; bloodScreen.visible = false; camera.add(bloodScreen);
+    const greyScreen = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 0.9), new THREE.MeshBasicMaterial({ color: 0x141414, transparent: true, opacity: 0, depthTest: false, depthWrite: false, fog: false }));
+    greyScreen.position.set(0, 0, -0.295); greyScreen.renderOrder = 9001; greyScreen.visible = false; camera.add(greyScreen);
+    const bloodEl = document.createElement('div');
+    bloodEl.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:4;opacity:0;background-size:100% 100%;background-repeat:no-repeat;transition:opacity 0.4s ease';
+    document.body.appendChild(bloodEl);
+    let bloodElReady = false;
+    const goreMe = { rp: 0, bloodT: 0, dead: false, deadMap: null };
+    function goreBloodOnScreen(strength) {
+      goreMe.bloodT = Math.max(goreMe.bloodT, 6 * strength);
+      if (!bloodElReady) { bloodElReady = true; try { bloodEl.style.backgroundImage = `url(${bloodScreenCanvas.toDataURL('image/png')})`; } catch (e) { } }
+    }
+    function goreDeathView(on) {
+      goreMe.dead = on;
+      renderer.domElement.style.filter = on ? 'grayscale(1) contrast(1.25) brightness(0.8)' : '';
+      if (!on) { greyScreen.visible = false; greyScreen.material.opacity = 0; }
+    }
+    function updateGoreScreen(dt) {
+      const vr = renderer.xr.isPresenting;
+      if (goreMe.dead && !caught) { goreDeathView(false); goreMe.bloodT = 0; goreMe.rp = 0; }     // respawned
+      if (goreMe.rp && !caught && (survival.hp >= HP_MAX - 0.5 || goreMe.deadMap !== currentMap || playerRole !== 'survivor')) goreMe.rp = 0;   // healed / somewhere new: whole again
+      goreMe.bloodT = Math.max(0, goreMe.bloodT - dt);
+      const a = goreMe.dead ? 0.85 : Math.min(0.95, goreMe.bloodT / 3);
+      bloodScreen.visible = vr && a > 0.01; bloodScreen.material.opacity = a;
+      bloodEl.style.opacity = vr ? 0 : a.toFixed(2);
+      greyScreen.visible = vr && goreMe.dead; greyScreen.material.opacity = goreMe.dead ? Math.min(0.5, greyScreen.material.opacity + dt * 0.5) : 0;
+      // your own torn-off arm keeps bleeding
+      if (goreMe.rp & 3 && renderer.xr.isPresenting && Math.random() < dt * 10) {
+        for (let i = 0; i < hands.length; i++) {
+          const side = controllers[i].userData.inputSource?.handedness === 'left' ? 1 : 2;
+          if (goreMe.rp & side && hands[i].tracked) bloodDrop(hands[i].last.x, hands[i].last.y, hands[i].last.z, (Math.random() - 0.5) * 0.3, -0.3, (Math.random() - 0.5) * 0.3);
+        }
+      }
+    }
+    const PART_BIT = { L: 1, R: 2, H: 4 };
+    const PART_NAME = { L: 'LEFT ARM', R: 'RIGHT ARM', H: 'HEAD' };
+    function partPos(r, part, out) {
+      if (part === 'H') return out.copy(r.pos);
+      const H = r.hand[part === 'L' ? 0 : 1];
+      return H && H.ok ? out.copy(H.p) : null;
+    }
+    const _gpT = new THREE.Vector3();
+    // the monster's free hands: grip a survivor's arm or head and pull
+    function updateGoreGrabs(dt) {
+      const N = netState(), vr = renderer.xr.isPresenting;
+      const able = playerRole === 'monster' && monUnarmed && vr && !titleActive && !!N.room && !(N.stunT > 0);
+      const now = r67Now();
+      controllers.forEach((c, i) => {
+        const grip = btn(c, 1), edge = grip && !goreGripPrev[i];
+        goreGripPrev[i] = grip;
+        const h = hands[i];
+        if (!able || !h || !h.tracked) { goreHold[i] = null; return; }
+        if (edge && !goreHold[i] && !gorePieces.some((p) => p.hold && p.hold.local === i)) {
+          let best = null, bd = 1e9;
+          for (const [id, r] of netPeers()) {
+            const s = r.st;
+            if (!s || s.r !== 's' || s.m !== currentMap || s.hp <= 0 || now - r.seen > 2000 || r.leftAt) continue;
+            const rp = s.rp | 0;
+            for (const part of ['L', 'R', 'H']) {
+              if (rp & PART_BIT[part]) continue;
+              if (!partPos(r, part, _gpT)) continue;
+              const d = _gpT.distanceTo(h.last), reach = part === 'H' ? 0.24 : 0.2;
+              if (d < reach && d < bd) { bd = d; best = { id, part }; }
+            }
+          }
+          if (best) {
+            goreHold[i] = { id: best.id, part: best.part, t: 0 };
+            pulse(c, 0.7, 90);
+            try { gameAudio.squelch(0, 0.45); } catch (e) { }
+            r67Send({ t: 'grab', v: best.id, p: best.part, m: currentMap }, best.id);
+          }
+        }
+        const G = goreHold[i];
+        if (!G) return;
+        if (!grip) { goreHold[i] = null; return; }
+        G.t += dt;
+        const r = netPeers().get(G.id);
+        if (!r || !r.st || r.st.hp <= 0 || !partPos(r, G.part, _gpT)) { goreHold[i] = null; return; }
+        const pull = _gpT.distanceTo(h.last);
+        pulse(c, Math.min(1, 0.25 + pull * 2), 20);
+        if (pull > 0.32 && G.t > 0.08) {                                  // pulled away from them: it tears off
+          goreHold[i] = null;
+          const at = _gpT.clone();
+          r67Send({ t: 'rip', v: G.id, p: G.part, at: [r3(at.x), r3(at.y), r3(at.z)], n: playerName(), m: currentMap, h: itemHandIndex(i) });
+          goreRipFx(r, G.part, at, { local: i });
+          pulse(c, 1, 260);
+          showToast(`${PART_NAME[G.part]} RIPPED OFF`, `${String(r.st.n || 'A survivor').slice(0, 12).toUpperCase()}`);
+        }
+      });
+    }
+    const _gsW = new THREE.Vector3();
+    function rigScaleOf(r) {
+      if (r && r.rig && r.rig.mesh) return r.rig.mesh.getWorldScale(new THREE.Vector3());
+      if (!r && survivorRig && survivorRig.local) return survivorRig.local.mesh.getWorldScale(new THREE.Vector3());
+      return new THREE.Vector3(1, 1, 1);
+    }
+    function goreRipFx(r, part, at, hold) {
+      bloodBurst(at, 70, 1.1);
+      try { gameAudio.squelch(0, 1.6); gameAudio.slice(0); gameAudio.smash(1.2); } catch (e) { }
+      addPiece(part, at, rigScaleOf(r), hold);
+      if (r) r.goreDrip = Object.assign(r.goreDrip || {}, { [part]: 8 });
+    }
+    function netOnRip(id, d) {
+      if (d.m !== currentMap || !PART_BIT[d.p] || !Array.isArray(d.at)) return;
+      const at = new THREE.Vector3(+d.at[0] || 0, +d.at[1] || 0, +d.at[2] || 0);
+      const me = d.v === netSelfId();
+      const victim = me ? null : netPeers().get(d.v);
+      if (victim && victim.st) victim.st.rp = (victim.st.rp | 0) | PART_BIT[d.p];     // (until their next state arrives)
+      goreRipFx(victim, d.p, at, { id, h: d.h | 0, until: r67Now() + 1800 });
+      if (!me) return;
+      // it's you
+      if (playerRole !== 'survivor' || titleActive || caught || survival.dead) return;
+      const by = String(d.n || 'THE MONSTER').slice(0, 12).toUpperCase();
+      goreMe.rp |= PART_BIT[d.p]; goreMe.deadMap = currentMap;
+      goreBloodOnScreen(1);
+      controllers.forEach((c) => pulse(c, 1, 500));
+      rigVelocity.y += 0.6;
+      const dmg = d.p === 'H' ? 999 : 45;
+      if (survival.hp - dmg <= 0) {
+        netEliminate(by);
+        const sub = caughtEl.querySelector('.c-sub'); if (sub) sub.textContent = d.p === 'H' ? `${by} RIPPED YOUR HEAD OFF` : `TORN APART by ${by}`;
+        goreDeathView(true);
+      } else {
+        hurt(dmg, 0xaa0000);
+        showToast(`${by} RIPPED YOUR ${PART_NAME[d.p]} OFF`, `-${dmg} HP  ·  ${Math.round(survival.hp)} HP left`);
+      }
+      netSendState(true);
+    }
+    function netOnGrab(id, d) {
+      if (d.v !== netSelfId() || d.m !== currentMap || playerRole !== 'survivor') return;
+      controllers.forEach((c) => pulse(c, 0.8, 300));
+      redFlash.visible = true; redFlash.material.opacity = 0.5; netState().flashT = 0.4;
+      showToast('THE MONSTER GRABBED YOU', 'Pull free... or lose it');
+    }
+    // other survivors: missing arms / head, a bloody stump, still dripping
+    const _rsW = new THREE.Vector3(), _tiny = new THREE.Vector3(0.001, 0.001, 0.001);
+    function shrinkBone(bone, off) {
+      if (off) {
+        bone.scale.setScalar(0.001);
+        if (!bone.matrixAutoUpdate) { bone.matrix.scale(_tiny); bone.updateMatrixWorld(true); }
+      } else if (bone.scale.x < 0.5) bone.scale.setScalar(1);
+    }
+    function updateRemoteGore(dt) {
+      for (const r of netPeers().values()) {
+        const s = r.st, rp = s && s.r === 's' && s.m === currentMap ? (s.rp | 0) : 0;
+        const B = r.rig && r.rig.bones;
+        if (B) {
+          try {
+            shrinkBone(B.L.u, rp & 1); shrinkBone(B.R.u, rp & 2); shrinkBone(B.head, rp & 4);
+          } catch (e) { }
+        }
+        if (rp & 1 && r.paws && r.paws[0]) r.paws[0].root.visible = false;
+        if (rp & 2 && r.paws && r.paws[1]) r.paws[1].root.visible = false;
+        if (r.cuffs) { if (rp & 1 && r.cuffs[0]) r.cuffs[0].visible = false; if (rp & 2 && r.cuffs[1]) r.cuffs[1].visible = false; }
+        // the stumps
+        r.goreStumps = r.goreStumps || {};
+        for (const part of ['L', 'R', 'H']) {
+          const on = !!(rp & PART_BIT[part]) && !!B;
+          let st = r.goreStumps[part];
+          if (on && !st) { st = r.goreStumps[part] = new THREE.Mesh(new THREE.SphereGeometry(0.05, 10, 8), stumpMat); st.scale.set(1, 0.6, 1); scene.add(st); }
+          if (!st) continue;
+          st.visible = on && !!r.root && r.root.visible !== false;
+          if (!on) continue;
+          (part === 'H' ? B.head : B[part].u).getWorldPosition(_rsW);
+          st.position.copy(_rsW);
+          const drip = r.goreDrip && r.goreDrip[part];
+          if (drip > 0) { r.goreDrip[part] = drip - dt; if (Math.random() < dt * 16) bloodDrop(_rsW.x, _rsW.y, _rsW.z, (Math.random() - 0.5) * 0.6, 0.2 + Math.random() * 0.6, (Math.random() - 0.5) * 0.6); }
+        }
+        // the human monster with the machete put away
+        if (r.monHands && r.monHands[1]) {
+          const mi = mArms[0].hand.children.indexOf(mMachete), mc = mi >= 0 ? r.monHands[1].children[mi] : null;
+          if (mc) mc.visible = !(s && s.r === 'm' && s.mu);
+        }
+      }
+    }
+    {
+      const baseRR = removeRemote;
+      removeRemote = function (r) {
+        try { for (const st of Object.values(r.goreStumps || {})) { if (st.parent) st.parent.remove(st); st.geometry.dispose(); } } catch (e) { }
+        return baseRR(r);
+      };
+    }
+
+    // ---------- 9. weapons round the maps (survivors) ----------
+    const WEAPON_KINDS = ['bat', 'pipe', 'hatchet', 'plank'];
+    function makeWeapon(kind) {
+      const group = new THREE.Group(), inner = new THREE.Group();
+      inner.rotation.x = 0.75;                                             // held at a natural upward angle in your fist
+      group.add(inner);
+      const b = makeBatch();
+      let len = 0.7, dmg = [10, 14];
+      if (kind === 'bat') {
+        len = 0.78;
+        b.add(new THREE.CylinderGeometry(0.018, 0.016, 0.26, 10).rotateX(Math.PI / 2), doorWoodMat, 0, 0, -0.05);         // grip
+        b.add(new THREE.CylinderGeometry(0.042, 0.02, 0.56, 12).rotateX(Math.PI / 2), doorWoodMat, 0, 0, -0.45);          // barrel
+        b.add(new THREE.CylinderGeometry(0.024, 0.024, 0.02, 10).rotateX(Math.PI / 2), ironMat, 0, 0, 0.085);            // knob
+        dmg = [10, 15];
+      } else if (kind === 'pipe') {
+        len = 0.66;
+        b.add(new THREE.CylinderGeometry(0.019, 0.019, 0.66, 10).rotateX(Math.PI / 2), ironMat, 0, 0, -0.25);
+        b.add(new THREE.CylinderGeometry(0.03, 0.03, 0.08, 10).rotateX(Math.PI / 2), ironMat, 0, 0, -0.56);               // the elbow joint
+        b.add(new THREE.CylinderGeometry(0.03, 0.03, 0.05, 10).rotateX(Math.PI / 2), ironMat, 0, 0, 0.06);
+        dmg = [11, 15];
+      } else if (kind === 'hatchet') {
+        len = 0.5;
+        b.add(new THREE.CylinderGeometry(0.017, 0.02, 0.5, 10).rotateX(Math.PI / 2), doorWoodMat, 0, 0, -0.18);
+        b.add(UNIT_BOX, ironMat, 0, 0.055, -0.4, 0, 0, 0, 0.018, 0.13, 0.09);                                             // the head
+        b.add(UNIT_BOX, ironMat, 0, 0.125, -0.4, 0, 0, 0, 0.006, 0.02, 0.1);                                              // the edge
+        dmg = [13, 18];
+      } else {
+        len = 0.82;
+        b.add(UNIT_BOX, doorWoodMat, 0, 0, -0.3, 0, 0, 0, 0.03, 0.09, 0.82);
+        for (let k = 0; k < 5; k++) b.add(new THREE.CylinderGeometry(0.003, 0.003, 0.09, 5), ironMat, 0, 0.07, -0.42 - k * 0.07);   // nails
+        dmg = [12, 16];
+      }
+      b.build(inner);
+      group.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+      return { group, inner, len, dmg };
+    }
+    const weapons = [];
+    function weaponSpots(map) {
+      const M = mapById(map), sp = M && M.spawn, out = [];
+      if (sp) { out.push([sp.x + 1.6, sp.z + 0.6]); out.push([sp.x - 1.6, sp.z + 0.6]); }
+      const gens = map === 'camp' ? generators : (typeof mapGens === 'function' ? mapGens(map) : []);
+      for (const gn of (gens || []).slice(0, 3)) {
+        const p = gn.pos; if (!p || !sp) continue;
+        const dx = sp.x - p.x, dz = sp.z - p.z, dl = Math.hypot(dx, dz) || 1;
+        out.push([p.x + dx / dl * 1.4, p.z + dz / dl * 1.4]);
+      }
+      return out;
+    }
+    {
+      let k = 0;
+      for (const map of ['camp', 'graveyard', 'mine']) {
+        for (const [x, z] of weaponSpots(map)) {
+          const kind = WEAPON_KINDS[k++ % WEAPON_KINDS.length], W = makeWeapon(kind);
+          const yaw = (k * 2.39) % (Math.PI * 2);
+          const w = Object.assign(W, { kind, map, home: new THREE.Vector3(x, 0, z), homeYaw: yaw, held: -1, netBy: null, netSeen: 0, vel: new THREE.Vector3(), falling: false, cool: 0, aiCool: 0, prevTip: new THREE.Vector3(), tipOk: false });
+          w.group.visible = false; scene.add(w.group);
+          weaponHome(w);
+          weapons.push(w);
+        }
+      }
+    }
+    function weaponLay(w, yaw) {
+      w.layYaw = yaw;
+      w.group.quaternion.setFromEuler(new THREE.Euler(0, yaw, Math.PI / 2, 'YXZ'));
+      w.inner.rotation.x = 0;
+      w.group.position.y = goreFloorOf(w.map, w.group.position.x, w.group.position.z) + 0.045;
+    }
+    function goreFloorOf(map, x, z) { try { return groundY(map, x, z); } catch (e) { return 0; } }
+    function weaponHome(w) {
+      w.group.position.copy(w.home); w.held = -1; w.netBy = null; w.falling = false; w.vel.set(0, 0, 0);
+      weaponLay(w, w.homeYaw);
+    }
+    const _wpT = new THREE.Vector3(), _wpH = new THREE.Vector3(), _wpA = new THREE.Vector3(), _wpB = new THREE.Vector3(), _wpC = new THREE.Vector3();
+    function wpSegDist(p, a, b) { _wpC.subVectors(b, a); const t = Math.min(1, Math.max(0, _wpA.subVectors(p, a).dot(_wpC) / Math.max(1e-6, _wpC.lengthSq()))); return _wpB.copy(a).addScaledVector(_wpC, t).distanceTo(p); }
+    const weaponGripPrev = [false, false];
+    let weaponMapWas = null;
+    function handHoldsSomething(i) {
+      if (handBusy(i)) return true;
+      const sg = typeof gunOf === 'function' ? gunOf(currentMap) : null;
+      if (sg && sg.held === i) return true;
+      if (exParts.some((p) => p.held === i) || skulls.some((s) => s.held === i)) return true;
+      return weapons.some((w) => w.held === i);
+    }
+    function updateWeapons(dt) {
+      const vr = renderer.xr.isPresenting, now = r67Now(), N = netState();
+      // arriving on a map nobody else is on: its weapons are back where they started
+      if (weaponMapWas !== currentMap) {
+        weaponMapWas = currentMap;
+        const others = [...netPeers().values()].some((r) => r.st && r.st.m === currentMap && !r.leftAt);
+        if (!others) for (const w of weapons) if (w.map === currentMap) weaponHome(w);
+      }
+      controllers.forEach((c, i) => {
+        const grip = btn(c, 1), edge = grip && !weaponGripPrev[i];
+        weaponGripPrev[i] = grip;
+        const h = hands[i];
+        const held = weapons.find((w) => w.held === i);
+        if (held && (!grip || !h.tracked || playerRole !== 'survivor')) {           // let go: it bloodDropsArr (thrown with your swing)
+          held.held = -1; held.falling = true;
+          held.vel.subVectors(h.last, held.prevHand || h.last).divideScalar(Math.max(dt, 1e-3)).clampLength(0, 7);
+          return;
+        }
+        if (!edge || !vr || playerRole !== 'survivor' || titleActive || !h.tracked || held || handHoldsSomething(i)) return;
+        let best = null, bd = 0.22;
+        for (const w of weapons) {
+          if (w.map !== currentMap || w.held >= 0 || w.netBy) continue;
+          // anywhere along the handle end
+          w.group.updateMatrixWorld(true);
+          _wpH.set(0, 0, -0.08).applyMatrix4(w.inner.matrixWorld);
+          const d = Math.min(_wpH.distanceTo(h.last), w.group.position.distanceTo(h.last));
+          if (d < bd) { bd = d; best = w; }
+        }
+        if (best) {
+          best.held = i; best.falling = false; best.tipOk = false; pulse(c, 0.5, 50);
+          if (!best.told) { best.told = true; showToast(best.kind.toUpperCase() + ' PICKED UP', 'Swing it hard at the monster'); }
+        }
+      });
+      for (const w of weapons) {
+        w.group.visible = w.map === currentMap && currentMap !== 'waiting' && !titleActive;
+        w.cool = Math.max(0, w.cool - dt); w.aiCool = Math.max(0, w.aiCool - dt);
+        if (w.held >= 0) {
+          const h = hands[w.held], c = controllers[w.held];
+          w.prevHand = (w.prevHand || new THREE.Vector3()).copy(w.group.position);
+          w.group.position.copy(h.last); c.getWorldQuaternion(w.group.quaternion);
+          w.inner.rotation.x = 0.75;
+          weaponHits(w, dt);
+          continue;
+        }
+        if (w.netBy) {
+          if (now - w.netSeen > 400) { w.netBy = null; w.falling = true; w.vel.set(0, 0, 0); }
+          else continue;
+        }
+        if (w.falling) {
+          w.vel.y -= 9.8 * dt;
+          w.group.position.addScaledVector(w.vel, dt);
+          const fl = goreFloorOf(w.map, w.group.position.x, w.group.position.z);
+          if (w.group.position.y < fl + 0.05) {
+            w.falling = false; w.vel.set(0, 0, 0);
+            _wpT.set(0, 0, -1).applyQuaternion(w.group.quaternion);
+            const yaw = Math.atan2(-_wpT.x, -_wpT.z);
+            weaponLay(w, yaw);
+            try { gameAudio.clunk(); } catch (e) { }
+            r67Send({ t: 'wpn', k: weapons.indexOf(w), p: [r3(w.group.position.x), r3(w.group.position.z)], y: r3(yaw), m: w.map });
+          }
+        }
+      }
+    }
+    function weaponHits(w, dt) {
+      w.group.updateMatrixWorld(true);
+      _wpT.set(0, 0, -w.len * 0.85).applyMatrix4(w.inner.matrixWorld);
+      const speed = w.tipOk && dt > 0 ? _wpT.distanceTo(w.prevTip) / dt : 0;
+      w.prevTip.copy(_wpT); w.tipOk = true;
+      if (speed < 2.2) return;
+      _wpH.set(0, 0, -w.len * 0.45).applyMatrix4(w.inner.matrixWorld);      // (the middle of the weapon counts too)
+      const c = controllers[w.held];
+      // a human monster
+      if (w.cool <= 0) {
+        for (const [id, r] of netPeers()) {
+          const s = r.st;
+          if (!s || s.r !== 'm' || s.m !== currentMap || s.stn || r.leftAt) continue;
+          _wpA.set(r.pos.x, r.pos.y + 0.05, r.pos.z);
+          const top = _wpA.clone(), bot = _wpA.clone().setY(r.pos.y - 0.95);
+          const d = Math.min(wpSegDist(_wpT, bot, top), wpSegDist(_wpH, bot, top));
+          if (d > 0.3) continue;
+          w.cool = 0.7;
+          const dmg = Math.round(w.dmg[0] + Math.random() * (w.dmg[1] - w.dmg[0]) * Math.min(1, speed / 5));
+          r67Send({ t: 'mdmg', d: dmg, n: playerName(), m: currentMap }, id);
+          bloodBurst(_wpT, 14, 0.6);
+          try { gameAudio.smash(0.8); } catch (e) { }
+          if (c) pulse(c, 0.9, 110);
+          showToast(`HIT THE MONSTER`, `-${dmg} HP`);
+          break;
+        }
+      }
+      // the AI monster: knocked down for a moment
+      if (w.aiCool <= 0 && ai.active && ai.map === currentMap && ai.state !== 'stunned') {
+        const top = new THREE.Vector3(ai.pos.x, ai.pos.y + AI_HEAD_H + 0.1, ai.pos.z), bot = new THREE.Vector3(ai.pos.x, ai.pos.y + 0.3, ai.pos.z);
+        if (Math.min(wpSegDist(_wpT, bot, top), wpSegDist(_wpH, bot, top)) < 0.38) {
+          w.aiCool = 5;
+          _wpA.subVectors(ai.pos, _wpT).setY(0).normalize();
+          const role = aiRole();
+          if (role === 'puppet') r67Send({ t: 'aistun', m: currentMap, k: [r3(_wpA.x * 2), r3(_wpA.z * 2)], s: 3 }, aiAuthorityId());
+          else { ai.state = 'stunned'; ai.stunT = 3; ai.stunAge = 0; ai.slash = null; ai.path = []; ai.goal = null; ai.lostT = 0; ai.stunNoFx = false; ai.knock = new THREE.Vector3(_wpA.x * 2, 0, _wpA.z * 2); ai.targetPeer = null; try { chaseAudio.setTarget(0); } catch (e) { } }
+          try { gameAudio.smash(1); } catch (e) { }
+          if (c) pulse(c, 1, 150);
+          showToast('YOU KNOCKED IT DOWN', 'Run!');
+        }
+      }
+    }
+    {
+      const baseAiStun = netOnAiStun;
+      netOnAiStun = function (id, d) { const r = baseAiStun(id, d); if (d && +d.s > 0 && ai.state === 'stunned') ai.stunT = Math.min(ai.stunT, +d.s); return r; };
+    }
+    {
+      const baseHIP = heldItemsPacket;
+      heldItemsPacket = function () { const out = baseHIP(); weapons.forEach((w, k) => { if (w.held >= 0) out.push(['w', k, itemHandIndex(w.held)]); }); return out; };
+    }
+    function updateRemoteWeapons() {
+      const now = r67Now();
+      for (const [id, r] of netPeers()) {
+        const s = r.st; if (!s || s.m !== currentMap || !Array.isArray(s.it)) continue;
+        for (const it of s.it) {
+          if (!Array.isArray(it) || it[0] !== 'w') continue;
+          const w = weapons[it[1] | 0]; if (!w || w.map !== currentMap || w.held >= 0) continue;
+          const H = r.hand[it[2] ? 1 : 0]; if (!H || !H.ok) continue;
+          w.netBy = id; w.netSeen = now; w.falling = false;
+          w.group.position.copy(H.p); w.group.quaternion.copy(H.q); w.inner.rotation.x = 0.75;
+        }
+      }
+    }
+    function netOnWeapon(d) {
+      const w = weapons[d.k | 0]; if (!w || w.held >= 0 || !Array.isArray(d.p)) return;
+      w.netBy = null; w.falling = false; w.vel.set(0, 0, 0);
+      w.group.position.set(+d.p[0] || 0, 0, +d.p[1] || 0);
+      weaponLay(w, +d.y || 0);
+    }
+
+    // ---------- network: events, state, catching up ----------
+    {
+      const baseEvt = netOnEvent;
+      netOnEvent = function (id, d) {
+        if (d && typeof d === 'object') {
+          try {
+            if (d.t === 'door') return netOnDoor(d);
+            if (d.t === 'cart') return netOnCart(d);
+            if (d.t === 'rip') return netOnRip(id, d);
+            if (d.t === 'grab') return netOnGrab(id, d);
+            if (d.t === 'mdmg') return netOnMonsterHit(id, d);
+            if (d.t === 'wpn') return netOnWeapon(d);
+          } catch (e) { console.warn('[Net] event', d.t, e); return; }
+        }
+        return baseEvt(id, d);
+      };
+    }
+    {
+      const baseOS = netOnState;
+      netOnState = function (id, d) {
+        const r = baseOS(id, d);
+        const p = netPeers().get(id);
+        if (p && p.st && d) { p.st.rp = d.rp | 0; p.st.mu = d.mu ? 1 : 0; }
+        return r;
+      };
+    }
+    {
+      const baseCU = netCatchUp;
+      netCatchUp = function (id) {
+        const r = baseCU(id);
+        if (aiRole() === 'puppet' || currentMap === 'waiting' || titleActive) return r;
+        if (currentMap === 'mine') r67Send(cartState(true), id);
+        doors.forEach((d, k) => { if (!d.broken && Math.abs(d.angle) > 0.02) r67Send({ t: 'door', k, a: r3(d.angle) }, id); });
+        weapons.forEach((w, k) => { if (w.map === currentMap && w.held < 0 && !w.netBy && !w.falling) r67Send({ t: 'wpn', k, p: [r3(w.group.position.x), r3(w.group.position.z)], y: r3(w.layYaw || 0), m: w.map }, id); });
+        return r;
+      };
+    }
+    {
+      const baseRemotes = updateRemotes;
+      updateRemotes = function (dt) {
+        const r = baseRemotes(dt);
+        try { updateRemoteGore(dt); } catch (e) { if (!updateRemotes.warned) { updateRemotes.warned = true; console.warn('[Gore] remote', e); } }
+        try { updateRemoteWeapons(); } catch (e) { }
+        return r;
+      };
+    }
+    {
+      const baseNet = updateNet;
+      updateNet = function (dt) {
+        try { updateMonsterHands(); } catch (e) { }
+        const r = baseNet(dt);
+        const steps = [updateCartNet, updateMonsterHP, updateGoreGrabs, updatePieces, updateBlood, updateGoreScreen, updateWeapons];
+        for (const f of steps) { try { f(dt); } catch (e) { if (!f.warned) { f.warned = true; console.warn('[r67]', f.name, e); } } }
+        try { checkOneMonster(); } catch (e) { }
         return r;
       };
     }
