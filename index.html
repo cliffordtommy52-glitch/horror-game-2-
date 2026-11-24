@@ -6292,6 +6292,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'UPDATE', date: '24/11/26', title: 'FLOPPY',
+        text: 'Torn-off heads drag a long floppy spine, arms trail tendons. Your ripped arms stay gone. Lose both and you live, but you cannot move. Ammo boxes are hidden away now.' },
       { tag: 'UPDATE', date: '24/11/26', title: 'BLOOD AND SHELLS',
         text: 'Lose an arm and it is gone from your own body too. Blood soaks the fur, heads stretch and tear off spine and all. Ammo boxes refill the shotgun; weapons spread out; solid boat hulls.' },
       { tag: 'UPDATE', date: '24/11/26', title: 'TORN APART',
@@ -19554,7 +19556,7 @@
     function updateGoreScreen(dt) {
       const vr = renderer.xr.isPresenting;
       if (goreMe.dead && !caught) { goreDeathView(false); goreMe.bloodT = 0; goreMe.rp = 0; }     // respawned
-      if (goreMe.rp && !caught && (survival.hp >= HP_MAX - 0.5 || goreMe.deadMap !== currentMap || playerRole !== 'survivor')) goreMe.rp = 0;   // healed / somewhere new: whole again
+      if (goreMe.rp && !caught && (goreMe.deadMap !== currentMap || playerRole !== 'survivor')) goreMe.rp = 0;   // (whole again only after a respawn or on another map: healing doesn't grow an arm back)
       goreMe.bloodT = Math.max(0, goreMe.bloodT - dt);
       const a = goreMe.dead ? 0.85 : Math.min(0.95, goreMe.bloodT / 3);
       bloodScreen.visible = vr && a > 0.01; bloodScreen.material.opacity = a;
@@ -19651,14 +19653,15 @@
       goreBloodOnScreen(1);
       controllers.forEach((c) => pulse(c, 1, 500));
       rigVelocity.y += 0.6;
-      const dmg = d.p === 'H' ? 999 : 45;
+      const dmg = d.p === 'H' ? 999 : Math.max(0, Math.min(45, Math.ceil(survival.hp) - 1));   // losing your arms never kills you: losing both leaves you helpless
       if (survival.hp - dmg <= 0) {
         netEliminate(by);
         const sub = caughtEl.querySelector('.c-sub'); if (sub) sub.textContent = d.p === 'H' ? `${by} RIPPED YOUR HEAD OFF` : `TORN APART by ${by}`;
         goreDeathView(true);
       } else {
         hurt(dmg, 0xaa0000);
-        showToast(`${by} RIPPED YOUR ${PART_NAME[d.p]} OFF`, `-${dmg} HP  ·  ${Math.round(survival.hp)} HP left`);
+        if ((goreMe.rp & 3) === 3) showToast('BOTH YOUR ARMS ARE GONE', 'You can\'t move...');
+        else showToast(`${by} RIPPED YOUR ${PART_NAME[d.p]} OFF`, `-${dmg} HP  ·  ${Math.round(survival.hp)} HP left`);
       }
       netSendState(true);
     }
@@ -19765,19 +19768,20 @@
       if (!sp) return out;
       const W = kind === 'weapon';
       const gen = (site, lat) => site && site.pos && site.aim ? out.push(spotToward(site.pos, site.aim[0], site.aim[1], 1.4, lat)) : 0;
+      const genBehind = (site, lat) => site && site.pos && site.aim ? out.push(spotToward(site.pos, site.aim[0], site.aim[1], -0.85, lat)) : 0;
       if (map === 'camp') {
-        out.push([sp.x + (W ? -1.6 : 1.6), sp.z + 0.6]);
+        if (W) out.push([sp.x - 1.6, sp.z + 0.6]);
         if (W) { gen(GEN_SITES[1], 0.5); gen(GEN_SITES[2], 0.5); gen(GEN_SITES[3], 0.5); }
-        else { gen(GEN_SITES[0], -0.7); gen(GEN_SITES[2], -0.7); }
+        else { genBehind(GEN_SITES[0], 0.4); genBehind(GEN_SITES[2], -0.4); genBehind(GEN_SITES[3], 0.4); }   // tucked in behind the generators
       } else if (map === 'graveyard') {
         const B = GY.braziers, A = GY.altar;
         if (W) { for (const k of [0, 2]) if (B[k]) out.push(spotToward(B[k], A.x, A.z, 1.0, 0.4)); gen(GY.gens[0], 0.5); gen(GY.gens[1], 0.5); }
-        else { out.push([A.x + 1.3, A.z + 1.6]); for (const k of [1, 3]) if (B[k]) out.push(spotToward(B[k], A.x, A.z, 1.0, -0.4)); }
+        else { genBehind(GY.gens[0], -0.4); genBehind(GY.gens[1], 0.4); if (B[3]) out.push(spotToward(B[3], A.x, A.z, -0.9, 0.5)); }   // behind generators / a brazier
       } else if (map === 'mine') {
         const front = (b, lat) => b && out.push([b.pos.x + Math.sin(b.yaw) * 1.0 + Math.cos(b.yaw) * lat, b.pos.z + Math.cos(b.yaw) * 1.0 - Math.sin(b.yaw) * lat]);
         const near = (p, lat) => p && out.push(spotToward(p, sp.x, sp.z, 0.7, lat));
         if (W) { gen(MN.gens[0], 0.5); gen(MN.gens[1], 0.5); front(MN.breakers[0], 0.6); near(MN.fuel[0], 0.4); }
-        else { front(MN.breakers[1], -0.6); near(MN.fuel[1], -0.4); out.push([sp.x + 1.6, sp.z + 0.6]); }
+        else { front(MN.breakers[1], -1.2); near(MN.fuel[1], -0.5); genBehind(MN.gens[1], 0.4); }
       }
       return out;
     }
@@ -20154,58 +20158,109 @@
       r67StateExtra = function (d) { baseSE(d); if (playerRole === 'monster' && monBloody) d.bl = 1; };
     }
 
-    // ---------- the severed pieces: a spine under the head, bone and tendons out of an arm ----------
-    const spineBoneMat = new THREE.MeshStandardMaterial({ color: 0xd8ccb0, roughness: 0.55 });
-    const spineGeo = new THREE.CylinderGeometry(0.016, 0.019, 0.026, 8), discGeo = new THREE.CylinderGeometry(0.021, 0.021, 0.012, 8);
-    const spurGeo = new THREE.ConeGeometry(0.007, 0.03, 5), tendonGeo = new THREE.CylinderGeometry(0.004, 0.002, 1, 5);
+    // ---------- the severed pieces: a long, floppy spine under the head; floppy tendons out of an arm ----------
+    // Both are little rope simulations (verlet points under gravity, held to the cut on the piece, lying on the floor
+    // when they reach it); each link is drawn as a vertebra (or a strip of tendon) turned along the rope.
+    const spineBoneMat = new THREE.MeshStandardMaterial({ color: 0x6a1c14, roughness: 0.4, metalness: 0.05, emissive: 0x120202 });   // bone soaked in blood
+    const spinePaleMat = new THREE.MeshStandardMaterial({ color: 0xb89a84, roughness: 0.5 });
+    const fleshMat = new THREE.MeshStandardMaterial({ color: 0x7a0c08, roughness: 0.3, metalness: 0.1, emissive: 0x1a0000 });
+    const vbBody = new THREE.CylinderGeometry(0.017, 0.02, 0.03, 8);
+    const vbProc = new THREE.CylinderGeometry(0.0045, 0.0018, 0.085, 5).rotateZ(Math.PI / 2);       // the long side spikes
+    const vbSpin = new THREE.CylinderGeometry(0.004, 0.0015, 0.05, 5).rotateX(Math.PI / 2);         // the spike at the back
+    const vbDisc = new THREE.CylinderGeometry(0.02, 0.02, 0.012, 8), vbLump = new THREE.SphereGeometry(1, 6, 5);
+    const tendonSeg = new THREE.CylinderGeometry(1, 1, 1, 5);
+    function makeVertebra(k, n) {
+      const g = new THREE.Group(), t = 1 - (k / n) * 0.45;                // tapering towards the tail
+      const body = new THREE.Mesh(vbBody, k % 3 === 0 ? spinePaleMat : spineBoneMat); body.position.y = 0.015; body.scale.setScalar(t); g.add(body);
+      const disc = new THREE.Mesh(vbDisc, fleshMat); disc.position.y = 0.036; disc.scale.setScalar(t); g.add(disc);
+      for (const sx of [-1, 1]) {
+        const pr = new THREE.Mesh(vbProc, spineBoneMat); pr.position.set(sx * 0.05 * t, 0.018, -0.006); pr.scale.setScalar(t); pr.rotation.y = sx * 0.25; g.add(pr);
+      }
+      const sp = new THREE.Mesh(vbSpin, spineBoneMat); sp.position.set(0, 0.02, -0.032 * t); sp.rotation.x = 0.35; sp.scale.setScalar(t); g.add(sp);
+      for (let j = 0; j < 2; j++) {                                        // torn flesh still stuck to it
+        const l = new THREE.Mesh(vbLump, fleshMat);
+        l.position.set((Math.random() - 0.5) * 0.05, 0.01 + Math.random() * 0.02, (Math.random() - 0.5) * 0.04);
+        l.scale.set(0.008 + Math.random() * 0.012, 0.006 + Math.random() * 0.01, 0.008 + Math.random() * 0.012); g.add(l);
+      }
+      return g;
+    }
+    function makeRope(kind, anchorLocal, n, seg, offs) {
+      const grp = new THREE.Group(), meshes = [];
+      for (let k = 0; k < n; k++) {
+        let m;
+        if (kind === 'spine') m = makeVertebra(k, n);
+        else { m = new THREE.Mesh(tendonSeg, fleshMat); m.userData.r = (0.006 - k * 0.0005) * (0.7 + Math.random() * 0.6); }
+        grp.add(m); meshes.push(m);
+      }
+      return { kind, grp, meshes, n, seg, anchor: anchorLocal.clone().add(offs || new THREE.Vector3()), pts: null, prev: null };
+    }
     {
       const baseMS = makeSevered;
       makeSevered = function (part, worldScale) {
         const g = baseMS(part, worldScale);
         const cut = g.userData.cut || new THREE.Vector3();
+        const ropes = [];
         if (part === 'H') {
-          // the spinal column, torn out with the head: a swinging chain of vertebrae, bloody between them
-          const segs = [];
-          let parent = g, at = cut.clone();
-          for (let k = 0; k < 11; k++) {
-            const sgm = new THREE.Group(); sgm.position.copy(at); parent.add(sgm);
-            const v = new THREE.Mesh(spineGeo, spineBoneMat); v.position.y = -0.016; sgm.add(v);
-            const sp = new THREE.Mesh(spurGeo, spineBoneMat); sp.position.set(0, -0.016, -0.022); sp.rotation.x = -1.9; sgm.add(sp);
-            const d = new THREE.Mesh(discGeo, stumpMat); d.position.y = -0.034; sgm.add(d);
-            segs.push(sgm); parent = sgm; at = new THREE.Vector3(0, -0.041, 0);
-          }
-          g.userData.spine = segs;
+          ropes.push(makeRope('spine', cut, 15, 0.042));                     // about 60 cm of spine
+          for (let k = 0; k < 3; k++) ropes.push(makeRope('tendon', cut, 6, 0.03, new THREE.Vector3((Math.random() - 0.5) * 0.06, 0, (Math.random() - 0.5) * 0.06)));
         } else {
-          // the arm bone sticking out of the torn end, and a few tendons hanging from it
-          const b = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.014, 0.08, 7), spineBoneMat);
-          b.position.copy(cut).add(new THREE.Vector3(0, -0.035, 0)); g.add(b);
-          for (let k = 0; k < 4; k++) {
-            const t = new THREE.Mesh(tendonGeo, stumpMat), len = 0.05 + Math.random() * 0.08;
-            t.scale.set(1, len, 1); t.position.copy(cut).add(new THREE.Vector3((Math.random() - 0.5) * 0.04, -len / 2, (Math.random() - 0.5) * 0.04));
-            t.rotation.set((Math.random() - 0.5) * 0.6, 0, (Math.random() - 0.5) * 0.6); g.add(t);
-          }
+          const b = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.014, 0.07, 7), spinePaleMat);   // the arm bone out of the torn end
+          b.position.copy(cut).add(new THREE.Vector3(0, -0.03, 0)); g.add(b);
+          for (let k = 0; k < 5; k++) ropes.push(makeRope('tendon', cut, 7, 0.028, new THREE.Vector3((Math.random() - 0.5) * 0.05, 0, (Math.random() - 0.5) * 0.05)));
         }
+        for (const rp of ropes) scene.add(rp.grp);
+        g.userData.ropes = ropes;
         return g;
       };
+    }
+    const _rpA = new THREE.Vector3(), _rpD = new THREE.Vector3(), _rpUp = new THREE.Vector3(0, 1, 0), _rpT = new THREE.Vector3();
+    function simRope(rp, g, dt, held, visible) {
+      rp.grp.visible = visible;
+      _rpA.copy(rp.anchor); g.localToWorld(_rpA);
+      if (!rp.pts) {                                                         // first frame: hanging straight down
+        rp.pts = []; rp.prev = [];
+        for (let k = 0; k <= rp.n; k++) { const p = _rpA.clone(); p.y -= k * rp.seg; rp.pts.push(p); rp.prev.push(p.clone()); }
+      }
+      const P = rp.pts, Q = rp.prev, h = Math.min(dt, 1 / 30);
+      P[0].copy(_rpA); Q[0].copy(_rpA);
+      const fl = goreFloor(_rpA.x, _rpA.z) + 0.012;
+      for (let k = 1; k <= rp.n; k++) {                                      // verlet: keep moving, fall, a little air drag
+        const p = P[k], q = Q[k];
+        _rpT.subVectors(p, q).multiplyScalar(0.985);
+        q.copy(p); p.add(_rpT); p.y -= 9.8 * h * h;
+      }
+      for (let it = 0; it < 8; it++) {                                       // the links keep their length (floppy: no stiffness)
+        for (let k = 0; k < rp.n; k++) {
+          const a = P[k], b = P[k + 1];
+          _rpD.subVectors(b, a); const L = _rpD.length() || 1e-6, diff = (L - rp.seg) / L;
+          if (k === 0) b.addScaledVector(_rpD, -diff);
+          else { a.addScaledVector(_rpD, diff * 0.5); b.addScaledVector(_rpD, -diff * 0.5); }
+        }
+        for (let k = 1; k <= rp.n; k++) if (P[k].y < fl) { P[k].y = fl; Q[k].x += (P[k].x - Q[k].x) * 0.5; Q[k].z += (P[k].z - Q[k].z) * 0.5; Q[k].y = fl; }   // on the floor: it lies there
+      }
+      if (!visible) return;
+      for (let k = 0; k < rp.n; k++) {
+        const a = P[k], b = P[k + 1], m = rp.meshes[k];
+        _rpD.subVectors(b, a); const L = _rpD.length() || 1e-6; _rpD.multiplyScalar(1 / L);
+        if (rp.kind === 'spine') { m.position.copy(a); m.quaternion.setFromUnitVectors(_rpUp, _rpD); }
+        else { m.position.addVectors(a, b).multiplyScalar(0.5); m.quaternion.setFromUnitVectors(_rpUp, _rpD); const r = m.userData.r || 0.004; m.scale.set(r, L * 1.1, r); }
+      }
+      // blood running off the end while it swings
+      if (held && rp.kind === 'spine' && Math.random() < dt * 9) { const e = P[rp.n]; bloodDrop(e.x, e.y, e.z, (Math.random() - 0.5) * 0.2, -0.3, (Math.random() - 0.5) * 0.2); }
     }
     {
       const baseUP = updatePieces;
       updatePieces = function (dt) {
-        const r = baseUP(dt), t = performance.now() / 1000;
-        for (const pc of gorePieces) {
-          const segs = pc.g.userData.spine; if (!segs) continue;
-          const swing = pc.landed ? 0 : pc.hold ? 0.22 : 0.4;
-          segs.forEach((s, k) => {
-            if (pc.landed) { s.rotation.x *= 0.9; s.rotation.z = 0.12 * Math.sin(k * 1.7); return; }
-            s.rotation.x = swing * Math.sin(t * 4.2 + k * 0.55) + 0.05;
-            s.rotation.z = swing * 0.6 * Math.sin(t * 3.1 + k * 0.8);
-          });
-          if (pc.hold && Math.random() < dt * 8) {                         // blood running off the end of the spine
-            segs[segs.length - 1].getWorldPosition(_ogW);
-            bloodDrop(_ogW.x, _ogW.y - 0.04, _ogW.z, (Math.random() - 0.5) * 0.2, -0.3, (Math.random() - 0.5) * 0.2);
-          }
-        }
+        const r = baseUP(dt);
+        for (const pc of gorePieces) for (const rp of pc.g.userData.ropes || []) simRope(rp, pc.g, dt, !!pc.hold, pc.g.visible);
         return r;
+      };
+    }
+    {
+      const baseDrop = dropPiece;
+      dropPiece = function (pc, remove) {
+        if (remove) for (const rp of pc.g.userData.ropes || []) { if (rp.grp.parent) rp.grp.parent.remove(rp.grp); }
+        return baseDrop(pc, remove);
       };
     }
     {
@@ -20219,6 +20274,15 @@
         return out;
       };
     }
+    // both arms torn off: you can't climb or run any more, you just stay where you are (until the monster finishes you)
+    let armlessPin = null;
+    function updateArmless() {
+      const helpless = playerRole === 'survivor' && !caught && !titleActive && (goreMe.rp & 3) === 3;
+      if (!helpless) { armlessPin = null; return; }
+      if (!armlessPin) armlessPin = playerRig.position.clone();
+      playerRig.position.copy(armlessPin); rigVelocity.set(0, 0, 0);
+      for (const v of velocityHistory) v.set(0, 0, 0);
+    }
     function updateMonsterBlood() {
       if (playerRole !== 'monster') { if (monBloody) { monBloody = false; ownFistBlood[0].visible = ownFistBlood[1].visible = false; } }
     }
@@ -20227,7 +20291,7 @@
     const ammoBoxes = [];
     function makeAmmoBox() {
       const g = new THREE.Group(), b = makeBatch();
-      const olive = new THREE.MeshStandardMaterial({ color: 0x4a5230, roughness: 0.7, metalness: 0.35 });
+      const olive = new THREE.MeshStandardMaterial({ color: 0x2e3220, roughness: 0.85, metalness: 0.25 });
       const shellRed = new THREE.MeshStandardMaterial({ color: 0xb0201a, roughness: 0.45, emissive: 0x200404 });
       const brass = new THREE.MeshStandardMaterial({ color: 0xc8a040, roughness: 0.3, metalness: 0.9 });
       b.add(UNIT_BOX, olive, 0, 0.06, 0, 0, 0, 0, 0.26, 0.12, 0.16);                                // the can
@@ -20239,7 +20303,7 @@
       }
       b.build(g);
       const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xffb040, transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending, depthWrite: false }));
-      glow.scale.set(0.5, 0.3, 1); glow.position.y = 0.08; g.add(glow);
+      glow.scale.set(0.22, 0.12, 1); glow.position.y = 0.06; g.add(glow);   // (only a faint glint: you have to look for them)
       g.userData.glow = glow;
       return g;
     }
@@ -20276,7 +20340,7 @@
         if (box.taken && (box.back -= dt) <= 0) box.taken = false;
         box.g.visible = !box.taken && box.map === currentMap && currentMap !== 'waiting' && !titleActive;
         if (!box.g.visible) continue;
-        box.g.userData.glow.material.opacity = 0.3 + 0.2 * Math.sin(t + box.g.position.x);
+        box.g.userData.glow.material.opacity = Math.max(0, 0.35 * Math.sin(t * 0.6 + box.g.position.x) - 0.15);   // a rare glint
         if (!vr || playerRole !== 'survivor') continue;
         for (let i = 0; i < hands.length; i++) {
           const h = hands[i]; if (!h.tracked) continue;
@@ -20298,7 +20362,7 @@
       const baseNet2 = updateNet;
       updateNet = function (dt) {
         const r = baseNet2(dt);
-        for (const f of [updateOwnGore, updateMonsterBlood, updateAmmo]) { try { f(dt); } catch (e) { if (!f.warned) { f.warned = true; console.warn('[r68]', f.name, e); } } }
+        for (const f of [updateOwnGore, updateMonsterBlood, updateAmmo, updateArmless]) { try { f(dt); } catch (e) { if (!f.warned) { f.warned = true; console.warn('[r68]', f.name, e); } } }
         return r;
       };
     }
