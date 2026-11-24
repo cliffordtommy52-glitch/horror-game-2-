@@ -6292,6 +6292,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'UPDATE', date: '24/11/26', title: 'REAL MEAT',
+        text: 'No more neon: deep red muscle fibre, marbled fat and dark veins, wet blood that gleams in your head lamp, heavy chunks and fat globules, a short red mist.' },
       { tag: 'UPDATE', date: '24/11/26', title: 'HOT MEAT',
         text: 'Gore remade for VR close-ups: veiny, wet, hot-pink glowing meat that breathes, steam, flying chunks, glowing ichor, blood that sticks to your hands, and a grab you feel in your heart.' },
       { tag: 'FIX', date: '24/11/26', title: 'DEAD ARM',
@@ -21019,6 +21021,196 @@
         return r;
       };
     }
+
+    // =====================================================================
+    //  REAL MEAT: the gore re-graded from neon pink to grounded, heavy viscera
+    //  - deep reds, maroon and purple undertones; striated muscle fibre, marbled fat, pale connective tissue, dark veins
+    //  - no glow: a faint deep-red subsurface rim only (so it never goes pitch black in the dark), wet gloss under lights
+    //  - blood is lit (it shines in your head lamp), dark and thick; arterial drops brighter red; splats glossy maroon
+    //  - heavy impacts: fewer, bigger, slower chunks with yellow fat globules among them, a short-lived red mist
+    // =====================================================================
+    const meatTex = (() => {
+      const N = 256, mk = () => { const c = document.createElement('canvas'); c.width = c.height = N; return c; };
+      const colC = mk(), sssC = mk(), roughC = mk(), normC = mk();
+      const g = colC.getContext('2d'), gs = sssC.getContext('2d'), gr = roughC.getContext('2d');
+      const H = new Float32Array(N * N);
+      const stamp = (x, y, r, amp) => {
+        for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+          const d = Math.hypot(dx, dy); if (d > r) continue;
+          const px = ((Math.round(x) + dx) % N + N) % N, py = ((Math.round(y) + dy) % N + N) % N;
+          H[py * N + px] += amp * (1 - d / r);
+        }
+      };
+      g.fillStyle = '#4a070b'; g.fillRect(0, 0, N, N);
+      // maroon and bruised-purple undertones
+      for (let k = 0; k < 120; k++) {
+        const x = Math.random() * N, y = Math.random() * N, r = 10 + Math.random() * 40;
+        const c = ['#2e0308', '#3a0418', '#5c0a10', '#6e0c0e', '#40061e'][(Math.random() * 5) | 0];
+        const gd = g.createRadialGradient(x, y, 0, x, y, r); gd.addColorStop(0, c); gd.addColorStop(1, 'rgba(0,0,0,0)');
+        g.globalAlpha = 0.5; g.fillStyle = gd; g.fillRect(x - r, y - r, r * 2, r * 2);
+      }
+      g.globalAlpha = 1;
+      // striated muscle fibres: long, slightly wavy, closely packed strands in varying reds
+      for (let k = 0; k < 420; k++) {
+        const y0 = Math.random() * N, x0 = Math.random() * N, len = 40 + Math.random() * 140, w = 0.6 + Math.random() * 1.6;
+        g.strokeStyle = ['#7a0e12', '#8c1416', '#5a080c', '#9a1c1a', '#64090f'][(Math.random() * 5) | 0];
+        g.globalAlpha = 0.45 + Math.random() * 0.4; g.lineWidth = w;
+        g.beginPath(); g.moveTo(x0, y0);
+        const ph = Math.random() * 6;
+        for (let s = 0; s <= len; s += 6) { const x = x0 + s, y = y0 + Math.sin(s * 0.05 + ph) * 3; g.lineTo(x, y); if (s % 12 === 0) stamp(x, y, 1, 0.12 * w); }
+        g.stroke();
+      }
+      g.globalAlpha = 1;
+      // marbled fat: pale yellow, waxy, raised
+      for (let k = 0; k < 14; k++) {
+        let x = Math.random() * N, y = Math.random() * N, a = Math.random() * Math.PI * 2;
+        g.strokeStyle = '#d4b67a'; g.lineCap = 'round';
+        for (let s = 0; s < 18; s++) {
+          const w = 2 + Math.random() * 5; g.globalAlpha = 0.75; g.lineWidth = w;
+          const nx = x + Math.cos(a) * 5, ny = y + Math.sin(a) * 5;
+          g.beginPath(); g.moveTo(x, y); g.lineTo(nx, ny); g.stroke();
+          stamp(nx, ny, Math.round(w), 0.35);
+          x = nx; y = ny; a += (Math.random() - 0.5) * 0.9;
+        }
+      }
+      // globules of fat
+      for (let k = 0; k < 26; k++) {
+        const x = Math.random() * N, y = Math.random() * N, r = 2 + Math.random() * 5;
+        const gd = g.createRadialGradient(x - r * 0.3, y - r * 0.3, 0, x, y, r); gd.addColorStop(0, '#f2e0a8'); gd.addColorStop(1, '#b8904e');
+        g.globalAlpha = 0.9; g.fillStyle = gd; g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
+        stamp(x, y, Math.round(r), 0.7);
+      }
+      // pale connective tissue (fascia) and dark veins
+      for (let k = 0; k < 30; k++) {
+        const x = Math.random() * N, y = Math.random() * N;
+        g.globalAlpha = 0.35; g.strokeStyle = '#e8c8c0'; g.lineWidth = 0.7;
+        g.beginPath(); g.moveTo(x, y); g.bezierCurveTo(x + 20, y - 15, x + 30, y + 20, x + 60 * Math.random(), y + 40 * (Math.random() - 0.5)); g.stroke();
+      }
+      for (let k = 0; k < 10; k++) {
+        let x = Math.random() * N, y = Math.random() * N, a = Math.random() * Math.PI * 2;
+        g.globalAlpha = 0.8; g.strokeStyle = '#26041c'; g.lineWidth = 1.5 + Math.random() * 1.5;
+        g.beginPath(); g.moveTo(x, y);
+        for (let s = 0; s < 30; s++) { a += (Math.random() - 0.5) * 0.6; x += Math.cos(a) * 3; y += Math.sin(a) * 3; g.lineTo(x, y); stamp(x, y, 1, 0.25); }
+        g.stroke();
+      }
+      g.globalAlpha = 1;
+      // subsurface mask: soft deep red where the meat is thin (used as a faint emissive, never a glow)
+      gs.fillStyle = '#000'; gs.fillRect(0, 0, N, N);
+      for (let k = 0; k < 40; k++) {
+        const x = Math.random() * N, y = Math.random() * N, r = 12 + Math.random() * 30;
+        const gd = gs.createRadialGradient(x, y, 0, x, y, r); gd.addColorStop(0, 'rgba(150,20,14,0.9)'); gd.addColorStop(1, 'rgba(0,0,0,0)');
+        gs.fillStyle = gd; gs.fillRect(x - r, y - r, r * 2, r * 2);
+      }
+      // roughness: wet overall, a little drier and stringier in places
+      gr.fillStyle = 'rgb(70,70,70)'; gr.fillRect(0, 0, N, N);
+      for (let k = 0; k < 50; k++) {
+        const x = Math.random() * N, y = Math.random() * N, r = 8 + Math.random() * 26;
+        const v = Math.random() < 0.5 ? 30 : 140;
+        const gd = gr.createRadialGradient(x, y, 0, x, y, r); gd.addColorStop(0, `rgba(${v},${v},${v},0.9)`); gd.addColorStop(1, `rgba(${v},${v},${v},0)`);
+        gr.fillStyle = gd; gr.fillRect(x - r, y - r, r * 2, r * 2);
+      }
+      const img = normC.getContext('2d').createImageData(N, N), K = 2.6;
+      for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+        const hx = H[y * N + (x + 1) % N] - H[y * N + (x - 1 + N) % N], hy = H[((y + 1) % N) * N + x] - H[((y - 1 + N) % N) * N + x];
+        let nx = -hx * K, ny = -hy * K, nz = 1; const l = Math.hypot(nx, ny, nz); nx /= l; ny /= l; nz /= l;
+        const i = (y * N + x) * 4; img.data[i] = (nx * 0.5 + 0.5) * 255; img.data[i + 1] = (ny * 0.5 + 0.5) * 255; img.data[i + 2] = (nz * 0.5 + 0.5) * 255; img.data[i + 3] = 255;
+      }
+      normC.getContext('2d').putImageData(img, 0, 0);
+      const T = (c, srgb) => { const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 4; if (srgb) t.colorSpace = THREE.SRGBColorSpace; return t; };
+      return { map: T(colC, true), sss: T(sssC, true), rough: T(roughC, false), normal: T(normC, false) };
+    })();
+    function meatify(mat, o) {
+      mat.color.setHex(o.color); mat.map = meatTex.map; mat.normalMap = meatTex.normal; mat.normalScale = new THREE.Vector2(o.bump, o.bump);
+      mat.roughnessMap = meatTex.rough; mat.roughness = o.rough; mat.metalness = 0.02;
+      mat.emissive.setHex(0x6a0806); mat.emissiveMap = meatTex.sss; mat.emissiveIntensity = o.sss;
+      const rim = o.rim.toFixed(3);
+      mat.onBeforeCompile = (sh) => {
+        sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+          float meatRim = pow(1.0 - clamp(abs(dot(normal, normalize(vViewPosition))), 0.0, 1.0), 3.0);
+          totalEmissiveRadiance += vec3(0.42, 0.03, 0.02) * meatRim * ${rim};`);   // light bleeding through thin edges: deep red only
+      };
+      mat.customProgramCacheKey = () => 'grimapeMeat' + rim;
+      mat.needsUpdate = true;
+      fleshMats.delete(mat);
+    }
+    meatify(woundRed, { color: 0xffffff, rough: 0.4, bump: 1.1, sss: 0.35, rim: 0.5 });
+    meatify(stumpMat, { color: 0xf2e4e4, rough: 0.38, bump: 1.1, sss: 0.3, rim: 0.45 });
+    meatify(fleshMat, { color: 0xffffff, rough: 0.32, bump: 0.9, sss: 0.3, rim: 0.5 });
+    meatify(woundDark, { color: 0x5a3038, rough: 0.5, bump: 1.3, sss: 0.08, rim: 0.15 });
+    meatify(woundFur, { color: 0x6a3a34, rough: 0.8, bump: 1.5, sss: 0.05, rim: 0.12 });
+    meatify(spineBoneMat, { color: 0xc89890, rough: 0.35, bump: 0.6, sss: 0.15, rim: 0.25 });
+    spinePaleMat.color.setHex(0xe4d6c2); spinePaleMat.roughness = 0.28;
+
+    // ---------- blood: lit, dark and thick (it gleams in your head lamp); splats glossy maroon ----------
+    bloodDrops.material = new THREE.MeshStandardMaterial({ color: 0x5c0204, roughness: 0.12, metalness: 0.05, emissive: 0x180000 });
+    bloodSplats.material = new THREE.MeshStandardMaterial({ map: splatTex, color: 0x3e0204, roughness: 0.1, metalness: 0.05, emissive: 0x0c0000,
+      transparent: true, alphaTest: 0.08, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+    ichor.material = new THREE.MeshStandardMaterial({ color: 0x9a0606, roughness: 0.1, metalness: 0.05, emissive: 0x2a0000 });   // arterial: brighter red
+    // the fur smears: dark, wet, no glow
+    for (const m of smearMats) { m.emissiveIntensity = 0; }
+    smearMats.clear();
+    {
+      const baseAS2 = addSmears;
+      addSmears = function (inst) {
+        const out = baseAS2(inst);
+        for (const sm of out) { sm.material.emissiveIntensity = 0; sm.material.color.setHex(0x7a3030); sm.material.roughness = 0.18; smearMats.delete(sm.material); }
+        return out;
+      };
+    }
+    // steam: faint and warm grey (only a breath off fresh wounds)
+    for (const q of steam) q.s.material.color.setHex(0xb8aaa8);
+
+    // ---------- heavy impacts: big slow chunks, fat globules, a short red mist ----------
+    const fatMat = new THREE.MeshStandardMaterial({ color: 0xd8bc80, roughness: 0.25, metalness: 0.02, emissive: 0x100800 });
+    chunks.forEach((c, k) => { if (k % 4 === 3) c.m.material = fatMat; });
+    {
+      const baseMC = meatChunks;
+      meatChunks = function (p, n) {
+        const first = chunkNext;
+        baseMC(p, Math.max(4, Math.round(n * 0.6)));                         // fewer...
+        for (let k = 0, i = first; k < Math.max(4, Math.round(n * 0.6)); k++, i = (i + 1) % CHUNK_N) {
+          const c = chunks[i];
+          c.m.scale.multiplyScalar(1.6);                                     // ...bigger and heavier: they barely fly, they drop
+          c.v.multiplyScalar(0.55); c.spin.multiplyScalar(0.4);
+        }
+      };
+    }
+    const MIST_N = 24;
+    const mist = Array.from({ length: MIST_N }, () => {
+      const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0x5a0404, transparent: true, opacity: 0, depthWrite: false }));
+      s.visible = false; scene.add(s); return { s, t: 0, life: 0, v: new THREE.Vector3() };
+    });
+    let mistNext = 0;
+    function bloodMist(p, n) {
+      for (let k = 0; k < n; k++) {
+        const q = mist[mistNext]; mistNext = (mistNext + 1) % MIST_N;
+        q.s.position.copy(p); q.t = 0; q.life = 0.5 + Math.random() * 0.4; q.s.visible = true;
+        q.v.set((Math.random() - 0.5) * 0.9, 0.2 + Math.random() * 0.6, (Math.random() - 0.5) * 0.9);
+      }
+    }
+    function updateMist(dt) {
+      for (const q of mist) {
+        if (!q.s.visible) continue;
+        q.t += dt; if (q.t >= q.life) { q.s.visible = false; continue; }
+        q.v.y -= 1.5 * dt; q.s.position.addScaledVector(q.v, dt);
+        const f = q.t / q.life; q.s.material.opacity = 0.35 * (1 - f); q.s.scale.setScalar(0.08 + f * 0.25);
+      }
+    }
+    {
+      const baseFx6 = goreRipFx;
+      goreRipFx = function (r, part, at, hold) { const out = baseFx6(r, part, at, hold); try { bloodMist(at, 8); } catch (e) { } return out; };
+    }
+    {
+      const baseNet5 = updateNet;
+      updateNet = function (dt) {
+        const r = baseNet5(dt);
+        try { updateMist(dt); for (const sm of smearMats) sm.emissiveIntensity = 0; } catch (e) { }
+        return r;
+      };
+    }
+    // the grab: a dark red edge on your vision, not pink
+    grabVignette.material.color.setHex(0x8a0000);
+    grabEl.style.background = 'radial-gradient(ellipse at center, rgba(0,0,0,0) 45%, rgba(110,0,0,0.6) 100%)';
 
     // ---------- XR session hooks ----------
     renderer.xr.addEventListener('sessionstart', () => {
