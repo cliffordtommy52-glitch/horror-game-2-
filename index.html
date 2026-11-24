@@ -6290,6 +6290,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'FIX', date: '24/11/26', title: 'RIGID SURVIVOR BODY',
+        text: "The body never stretches: only the head turns, the model's own arms are collapsed away, and the fur arms sit inside rounder shoulder joints." },
       { tag: 'FIX', date: '24/11/26', title: 'STEADIER MULTIPLAYER',
         text: 'Several relays at once, a heartbeat with an 8 s grace period, auto-rejoin after a drop, and smoother player movement.' },
       { tag: 'FIX', date: '23/11/26', title: 'NO SHOULDER GAPS, BANDS SIT ON THE FUR',
@@ -16086,6 +16088,9 @@
       mesh.add(root); mesh.frustumCulled = false; mesh.userData.rig = true;
       mesh.updateMatrixWorld(true);
       mesh.bind(new THREE.Skeleton([root, head, jaw, Lb.u, Lb.l, Lb.h, Rb.u, Rb.l, Rb.h]));
+      // the torso stays rigid in its bind pose: no arm bone is ever turned by the controllers (only the head and jaw move),
+      // and the model's own arm bones are collapsed to nothing, so its frozen arms can never show or pull on the body
+      for (const A of [Lb, Rb]) A.u.scale.setScalar(0.0001);
       // the model is a shell and its arms covered its sides: when they move away, this orange-fur core shows through
       // the openings instead of the inside of the shell (it sits inside the torso, so it's never seen otherwise)
       if (survivorRig.shapeOk) {
@@ -16364,12 +16369,13 @@
     {
       const errText = (err) => err?.message || (typeof err === 'string' ? err : (() => { try { return JSON.stringify(err); } catch (e) { return String(err); } })());
       const gltfLoader = new GLTFLoader();
-      const url = `${SURVIVOR_GLB_URL}?v=${Date.now()}`;                     // cache-busting: never an old cached 404 or old .glb
+      const url = './survivor.glb';
+      if (gltfLoader.setRequestHeader) gltfLoader.setRequestHeader({ 'Cache-Control': 'no-cache' });           // always re-checked: never an old cached 404 or old .glb
       const resolved = new URL(url, window.location.href).href;
       console.info(`[SurvivorGLB] loading ${resolved} ...`);
       glbStatus(`SURVIVOR MODEL: LOADING ${SURVIVOR_GLB_URL}`, 'info');
       let lastPct = -10;
-      gltfLoader.load(url, (gltf) => {
+      const onGlb = (gltf) => {
         survivorGlbSource = SURVIVOR_GLB_URL;
         // what arrived: meshes, bones, size (measured on a plain copy, in the file's own units)
         let meshes = 0, bones = 0; gltf.scene.traverse((o) => { if (o.isMesh) meshes++; if (o.isBone) bones++; });
@@ -16394,15 +16400,18 @@
                     (rigged && survivorRig && survivorRig.local ? ' (rigged arms + head)' : bones ? ' (shown without bones)' : '');
         console.info(msg);
         glbStatus(msg, 'ok', 10000);
-      }, (xhr) => {
+      };
+      const onGlbProgress = (xhr) => {
         if (xhr && xhr.total > 0) {
           const pct = Math.floor(xhr.loaded / xhr.total * 100);
           if (pct >= lastPct + 10 || pct === 100) { lastPct = pct; console.info(`[SurvivorGLB] ${pct}% (${(xhr.loaded / 1048576).toFixed(1)} / ${(xhr.total / 1048576).toFixed(1)} MB)`); }
           glbStatus(`SURVIVOR MODEL: LOADING ${pct}%`, 'info');
         } else if (xhr) glbStatus(`SURVIVOR MODEL: LOADING ${(xhr.loaded / 1048576).toFixed(1)} MB`, 'info');
-      }, (err) => {
+      };
+      const onGlbError = (err) => {
         glbError(`GLB LOAD ERROR: ${errText(err)}\nURL: ${new URL('./survivor.glb', window.location.href).href}\n(fetched as ${resolved})`, err);
-      });
+      };
+      gltfLoader.load('./survivor.glb', onGlb, onGlbProgress, onGlbError);   // the model file next to index.html (nothing built in)
     }
     // ---------- tracked arms on the static model ----------
     // survivor.glb is one unrigged mesh, so its frozen arms are cut off at the shoulders and replaced by two arms that
@@ -16498,7 +16507,7 @@
         const S = {
           side: i === 0 ? -1 : 1,                                          // (updated every frame from the controller's handedness)
           upper: seg(0.093, 0.052, upperMat), fore: seg(0.052, 0.04, foreMat),       // thick, tapered: 1.5x at the shoulder
-          shoulder: ball(0.099, upperMat), elbow: ball(0.054, foreMat), wrist: ball(0.041, foreMat),
+          shoulder: ball(0.11, upperMat), elbow: ball(0.054, foreMat), wrist: ball(0.041, foreMat),   // (the arm's top, 0.093, is <= 0.85 of the shoulder ball: recessed inside)
           wristLocal: SURVIVOR_WRIST.clone(),                              // the forearm ends over the heel of the hand
         };
         // the new hand, in the controller's grip frame (same frame the hand model used): palm, two fingers, thumb
@@ -17513,7 +17522,7 @@
       const mat = remoteHandMats.arm;
       const seg = (r0, r1) => { const m = new THREE.Mesh(new THREE.CylinderGeometry(r1, r0, 1, 14, 1), mat); m.castShadow = false; m.frustumCulled = false; g.add(m); return m; };
       const ball = (r) => { const m = new THREE.Mesh(new THREE.SphereGeometry(r, 14, 10), mat); m.castShadow = false; m.frustumCulled = false; g.add(m); return m; };
-      return { g, sides: [-1, 1].map((side) => ({ side, upper: seg(0.093, 0.052), fore: seg(0.052, 0.04), shoulder: ball(0.099), elbow: ball(0.054), wrist: ball(0.041) })) };
+      return { g, sides: [-1, 1].map((side) => ({ side, upper: seg(0.093, 0.052), fore: seg(0.052, 0.04), shoulder: ball(0.11), elbow: ball(0.054), wrist: ball(0.041) })) };
     }
     const _raT0 = new THREE.Vector3();
     const _raS = new THREE.Vector3(), _raW = new THREE.Vector3(), _raE = new THREE.Vector3(), _raD = new THREE.Vector3(), _raP = new THREE.Vector3();
