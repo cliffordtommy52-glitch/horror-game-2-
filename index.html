@@ -5584,6 +5584,7 @@
     //  updateBoat(dt): drive the boat and carry anyone standing in it.
     //  Runs before updateLocomotion so the physics sees the boat's new floor this frame.
     // =====================================================================
+    let boatNetOverride = null, boatRemoteHeld = () => false;   // (set by the multiplayer code: another player at the tiller)
     function updateBoat(dt) {
       boat.time += dt;
       const prevX = boat.pos.x, prevZ = boat.pos.z, prevYaw = boat.yaw;
@@ -5636,6 +5637,7 @@
       boat.yaw -= steer * BOAT_TURN * grip * Math.sign(boat.speed) * dt;
       boat.pos.x += Math.cos(boat.yaw) * boat.speed * dt;
       boat.pos.z -= Math.sin(boat.yaw) * boat.speed * dt;
+      if (boatNetOverride) boatNetOverride(dt);          // another player is driving: their boat pose (you ride along if aboard)
 
       // ---- shoreline and dock bounds ----
       const m = BOAT_L / 2 + 0.1;
@@ -5764,7 +5766,7 @@
             pulse(c, 0.4, 40);
           }
         }
-        if (!grabbed && (gripEdge || trigEdge) && boat.holding < 0 && !parts.some((p) => p.held === i) &&
+        if (!grabbed && (gripEdge || trigEdge) && boat.holding < 0 && !boatRemoteHeld() && !parts.some((p) => p.held === i) &&
             h.last.distanceTo(wheelWorld) < WHEEL_GRAB_RADIUS) {
           boat.holding = i;
           boat.wheelPrev = wheelHandAngle(h);
@@ -6290,6 +6292,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'UPDATE', date: '24/11/26', title: 'ONE SHOTGUN, ONE BOAT, SHARED',
+        text: 'The shotgun and the boat are shared: you see who holds or drives them and ride along in the boat. Brighter waiting room, computer in the corner, cleaner graveyard.' },
       { tag: 'UPDATE', date: '24/11/26', title: "THE SURVIVOR'S OWN ARMS AND HANDS",
         text: "survivor.glb's own arms, hands and finger bones now follow your controllers (Trigger, Grip, X/A), for everyone; the torso stays rigid." },
       { tag: 'FIX', date: '24/11/26', title: 'RIGID SURVIVOR BODY',
@@ -7449,6 +7453,9 @@
     const FENCE_BAR = new THREE.CylinderGeometry(0.011, 0.011, 1.95, 5), FENCE_TIP = new THREE.ConeGeometry(0.022, 0.09, 4), FENCE_SCROLL = new THREE.TorusGeometry(0.05, 0.007, 4, 12);
     const BOLT_G = new THREE.CylinderGeometry(0.012, 0.012, 0.012, 6), THRU_BOLT_G = new THREE.CylinderGeometry(0.014, 0.014, 0.2, 6), RIVET_G = new THREE.SphereGeometry(0.008, 5, 4);
     const HS_TOP = new THREE.CylinderGeometry(0.21, 0.21, 0.1, 12, 1, false, 0, Math.PI), HS_TOP2 = new THREE.CylinderGeometry(0.2, 0.2, 0.09, 12, 1, false, 0, Math.PI);
+    // a headstone's rounded top, unit size: a half-disc 1 wide, 0.5 tall and 1 thick (along Z), its flat edge at y = 0,
+    // scaled to the slab's width and thickness so it sits exactly flush on it; and the engraved front panel
+    const HS_ARCH = new THREE.CylinderGeometry(0.5, 0.5, 1, 18, 1, false, Math.PI / 2, Math.PI).rotateX(Math.PI / 2), HS_FACE = new THREE.PlaneGeometry(1, 1);
     const MOUND_G = new THREE.SphereGeometry(1, 8, 5, 0, Math.PI * 2, 0, Math.PI / 2), LAMP_POST_G = new THREE.CylinderGeometry(0.03, 0.04, 1.6, 6);
     // mine stairs: smooth collision ramps (stacked thin slices) and the floor height the monster walks on
     const aiRampCols = new Map();                 // ramp collider -> footprint where the monster ignores it (it walks up it instead)
@@ -7473,7 +7480,7 @@
         spawn: { x: MINE.x + 12, z: MINE.z, yaw: Math.PI / 2 }, fog: [0x0d0a07, 0.14], sky: 0x060504, hemi: [0x3a2a1a, 0x050403, 0.18],
         desk: { cam: [MINE.x + 15, 1.6, MINE.z + 3], target: [MINE.x + 6, 0.6, MINE.z] } },
     ];
-    const ROOM_ENV = { fog: [0x1a140e, 0.018], sky: 0x0c0906, hemi: [0x9a8468, 0x3a2e22, 0.95] };   // warm and well lit (was a dim 0.2)
+    const ROOM_ENV = { fog: [0x1a140e, 0.012], sky: 0x0c0906, hemi: [0xd8c2a0, 0x5c4a38, 1.6] };   // warm and brightly lit (benches, shop, computer corner all clear)
     let currentMap = 'waiting';                       // 'waiting' until you launch a map
     function applyEnv(env) {
       scene.fog.color.setHex(env.fog[0]); scene.fog.density = env.fog[1];
@@ -7579,15 +7586,7 @@
         addBoxCollider(W.x + x, 0, W.z + z, L, seatY, 0.44);
         addBoxCollider(W.x + x, seatY, W.z + z + back - 0.03, L, 0.47, 0.1);
       }
-      // a table with dripping candles
-      box(plankMat, -3.0, 0.6, -2.0, 0.9, 0.05, 0.6);
-      for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) box(trimMat, -3.0 + sx * 0.4, 0, -2.0 + sz * 0.25, 0.05, 0.6, 0.05, false);
-      addBoxCollider(W.x - 3.0, 0, W.z - 2.0, 0.9, 0.6, 0.6);
-      const candleMat = new THREE.MeshStandardMaterial({ color: 0xe8e0c8, roughness: 0.6 });
-      for (const [cx, cz, ch] of [[-3.2, -2.1, 0.12], [-3.05, -1.9, 0.08], [-2.85, -2.05, 0.15]]) {
-        rb.add(new THREE.CylinderGeometry(0.018, 0.02, ch, 8), candleMat, W.x + cx, 0.65 + ch / 2, W.z + cz);
-        rb.add(new THREE.SphereGeometry(0.012, 6, 4), glowMatFlame, W.x + cx, 0.665 + ch, W.z + cz, 0, 0, 0, 1, 2, 1);
-      }
+      // (the corner table with the three candles is gone: the multiplayer computer stands in that corner now)
       // faded portraits
       const portraitTex = canvasTexture(128, (g, s) => {
         const grd = g.createLinearGradient(0, 0, 0, s); grd.addColorStop(0, '#3a3128'); grd.addColorStop(1, '#1a1510');
@@ -7614,10 +7613,23 @@
       bulbGlow.scale.set(1.2, 1.2, 1); bulbGlow.position.copy(bulb.position);
       scene.add(bulbGlow);
       roomBulb = { mat: bulbMat, glow: bulbGlow, level: 1, t: 0, drop: 0 };
-      roomBulb.src = { x: W.x, y: W.h - 0.6, z: W.z + 0.6, color: 0xffd2a0, intensity: 16, distance: 12, weight: 6 };   // warm overhead bulb, much brighter
+      roomBulb.src = { x: W.x, y: W.h - 0.6, z: W.z + 0.6, color: 0xffd2a0, intensity: 24, distance: 14, weight: 6 };   // warm overhead bulb, brighter still
       lightSources.push(roomBulb.src);
-      // (the two bare glowing blobs that floated on the side walls are gone; their warm fill light stays)
-      for (const s of [-1, 1]) lightSources.push({ x: W.x + s * (W.w / 2 - 0.12), y: 1.4, z: W.z - 1.6, color: 0xffb060, intensity: 7, distance: 7, weight: 5, fire: true });
+      // (the two flickering fill lights that sat right against the side walls are gone: up close they painted a hot
+      // orange spot on the wall beside the portrait.) Instead, three warm ceiling lamps hang over the shop corner, the
+      // computer corner and the east benches, each a pooled light well clear of the walls.
+      {
+        const shadeMat = new THREE.MeshStandardMaterial({ color: 0x2a2018, roughness: 0.6, metalness: 0.3, side: THREE.DoubleSide });
+        const lampBulbMat = new THREE.MeshStandardMaterial({ color: 0x333333, emissive: 0xffd8a0, emissiveIntensity: 2.4 });
+        const lb = makeBatch();
+        for (const [lx, lz] of [[-2.5, 2.0], [-2.3, -1.9], [2.3, 1.5]]) {
+          lb.add(new THREE.CylinderGeometry(0.004, 0.004, 0.42, 4), ironMat, W.x + lx, W.h - 0.21, W.z + lz);                 // cord
+          lb.add(new THREE.CylinderGeometry(0.05, 0.17, 0.12, 16, 1, true), shadeMat, W.x + lx, W.h - 0.48, W.z + lz);          // shade
+          lb.add(new THREE.SphereGeometry(0.035, 10, 8), lampBulbMat, W.x + lx, W.h - 0.52, W.z + lz);                         // bulb
+          lightSources.push({ x: W.x + lx, y: W.h - 0.62, z: W.z + lz, color: 0xffcf98, intensity: 12, distance: 8, weight: 4.5 });
+        }
+        lb.build(scene, { castShadow: false });
+      }
       // drifting dust
       const n = 160, pos = new Float32Array(n * 3);
       for (let i = 0; i < n; i++) pos.set([W.x + wpr(-W.w / 2, W.w / 2), wpr(0.1, W.h - 0.1), W.z + wpr(-W.d / 2, W.d / 2)], i * 3);
@@ -7635,7 +7647,7 @@
       else b.level = 0.95 + 0.05 * Math.sin(b.t * 50) * Math.sin(b.t * 3.1);
       b.mat.emissiveIntensity = 3 * b.level;
       b.glow.material.opacity = 0.75 * b.level;
-      b.src.intensity = 16 * b.level;           // the pooled point light follows the bulb
+      b.src.intensity = 24 * b.level;           // the pooled point light follows the bulb
       b.dust.rotation.y += dt * 0.01;
     }
 
@@ -7784,9 +7796,22 @@
       const flagMat = new THREE.MeshStandardMaterial({ color: 0x6a6c66, roughness: 0.95, flatShading: true });
       const rng2 = mulberry32(1313);
       // weathered headstone faces: a bevelled border, an engraved cross or RIP and name lines, lichen and moss creeping up
+      // (each headstone is a plain weathered-stone slab with a flush rounded top; the engraved face is a separate panel
+      // on the front only, so R.I.P / the cross never shows on the sides, back or top)
+      const graveSideMats = [];
       const graveMats = [0, 1, 2, 3].map((v) => {
+        const base = [92, 98, 104, 86][v];
+        const weathered = (g, S) => {
+          g.fillStyle = `rgb(${base},${base + 2},${base - 2})`; g.fillRect(0, 0, S, S);
+          for (let k = 0; k < 500; k++) { const c = base - 30 + Math.random() * 60; g.fillStyle = `rgba(${c},${c},${c - 4},0.35)`; g.fillRect(Math.random() * S, Math.random() * S, 1 + Math.random() * 3, 1 + Math.random() * 3); }
+          for (let k = 0; k < 5; k++) {
+            const r = g.createRadialGradient(Math.random() * S, S - Math.random() * 40, 2, Math.random() * S, S, 20 + Math.random() * 30);
+            r.addColorStop(0, 'rgba(70,96,46,0.6)'); r.addColorStop(1, 'rgba(70,96,46,0)'); g.fillStyle = r; g.fillRect(0, 0, S, S);
+          }
+        };
+        const sideTex = canvasTexture(64, weathered);
+        graveSideMats[v] = new THREE.MeshStandardMaterial({ map: sideTex, bumpMap: sideTex, bumpScale: 1.5, roughness: 0.95 });
         const tex = canvasTexture(128, (g, S) => {
-          const base = [92, 98, 104, 86][v];
           g.fillStyle = `rgb(${base},${base + 2},${base - 2})`; g.fillRect(0, 0, S, S);
           for (let k = 0; k < 500; k++) { const c = base - 30 + Math.random() * 60; g.fillStyle = `rgba(${c},${c},${c - 4},0.35)`; g.fillRect(Math.random() * S, Math.random() * S, 1 + Math.random() * 3, 1 + Math.random() * 3); }
           g.strokeStyle = 'rgba(30,30,28,0.55)'; g.lineWidth = 3; g.strokeRect(10, 10, S - 20, S - 20);             // bevelled border
@@ -7801,8 +7826,18 @@
           }
           for (let k = 0; k < 6; k++) { g.fillStyle = 'rgba(190,190,140,0.35)'; g.beginPath(); g.arc(Math.random() * S, Math.random() * S, 2 + Math.random() * 4, 0, 6.3); g.fill(); }
         });
-        return new THREE.MeshStandardMaterial({ map: tex, bumpMap: tex, bumpScale: 2.5, roughness: 0.95 });
+        return new THREE.MeshStandardMaterial({ map: tex, bumpMap: tex, bumpScale: 2.5, roughness: 0.95, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
       });
+      // one headstone: the slab (w x h x d, base on the ground), its semicircular top exactly as wide and as thick as the
+      // slab and sitting flush on it, and the engraved face 5 mm proud of the front (+Z) face; all three share one tilt
+      const _hsE = new THREE.Euler(), _hsV = new THREE.Vector3();
+      const headstone = (x, z, w, h, d, lean, twist, v) => {
+        _hsE.set(lean, twist, 0);
+        const at = (lx, ly, lz) => _hsV.set(lx, ly, lz).applyEuler(_hsE);
+        let p = at(0, h / 2, 0); gb.add(UNIT_BOX, graveSideMats[v], x + p.x, p.y, z + p.z, lean, twist, 0, w, h, d);
+        p = at(0, h, 0); gb.add(HS_ARCH, graveSideMats[v], x + p.x, p.y, z + p.z, lean, twist, 0, w, w, d);
+        p = at(0, h / 2, d / 2 + 0.005); gb.add(HS_FACE, graveMats[v], x + p.x, p.y, z + p.z, lean, twist, 0, w * 0.94, h * 0.94, 1);
+      };
       // winding flagstone paths (centre lines, kept clear of everything else)
       const pathLines = [
         [[0, 28], [0, 22], [-3, 16], [0, 10], [0, 5]],
@@ -7814,12 +7849,21 @@
       for (const c of pathLines) {
         const n = Math.ceil(c.getLength() / 0.55);
         for (let k = 0; k <= n; k++) {
-          const p = c.getPointAt(k / n); pathPts.push(p);
-          const tng = c.getTangentAt(k / n), ry = Math.atan2(tng.x, tng.z);
-          for (const s of [-0.32, 0.32]) {
-            if (rng2() < 0.12) continue;                                                       // a few missing stones
-            const ox = Math.cos(ry) * s + (rng2() - 0.5) * 0.08, oz = -Math.sin(ry) * s + (rng2() - 0.5) * 0.08;
-            gb.add(UNIT_BOX, flagMat, p.x + ox, 0.012, p.z + oz, (rng2() - 0.5) * 0.04, ry + (rng2() - 0.5) * 0.3, 0, 0.55, 0.03, 0.45);
+          pathPts.push(c.getPointAt(k / n));
+          for (let s = 0; s < 2; s++) if (rng2() >= 0.12) { rng2(); rng2(); rng2(); rng2(); }    // (the old jumbled stones' dice: the rest of the layout stays put)
+        }
+      }
+      // clean flagstone paths: one flat slab every 0.62 m along each path, square to it, all at the same height just
+      // above the grass; a slab that would overlap one already laid (a bend, or where paths meet) is left out
+      {
+        const laid = [], SL = 0.5, SW = 0.86, STEP = 0.62;
+        for (const c of pathLines) {
+          const n = Math.max(1, Math.round(c.getLength() / STEP));
+          for (let k = 0; k <= n; k++) {
+            const p = c.getPointAt(k / n), tng = c.getTangentAt(k / n), ry = Math.atan2(tng.x, tng.z);
+            if (laid.some((q) => Math.hypot(q.x - p.x, q.z - p.z) < 0.58)) continue;
+            laid.push(p);
+            gb.add(UNIT_BOX, flagMat, p.x, 0.016, p.z, 0, ry, 0, SW, 0.03, SL);
           }
         }
       }
@@ -7931,9 +7975,8 @@
           const x = G.x + x0 + 1.0 + c * 1.3 + (rng2() - 0.5) * 0.15, z = G.z + z0 + 0.9 + r * 1.5;
           if (keepClear.some(([cx, cz, rr]) => Math.hypot(x - cx, z - cz) < rr)) continue;
           if (rng2() < 0.15) continue;
-          const h = 0.5 + rng2() * 0.3, lean = (rng2() - 0.5) * 0.2, mat = graveMats[(rng2() * 4) | 0];
-          gb.add(UNIT_BOX, mat, x, h / 2, z, lean, 0, 0, 0.4, h, 0.09);
-          gb.add(HS_TOP2, mat, x, h, z, Math.PI / 2 + lean, Math.PI / 2, 0);
+          const h = 0.5 + rng2() * 0.3, lean = (rng2() - 0.5) * 0.2, gi = (rng2() * 4) | 0;
+          headstone(x, z, 0.4, h, 0.09, lean, 0, gi);
           gb.add(MOUND_G, dirtMat, x, 0, z + 0.62, 0, 0, 0, 0.3, 0.08, 0.55);
           addBoxCollider(x, 0, z, 0.42, h, 0.16);
         }
@@ -7943,12 +7986,11 @@
         if (rng2() < 0.42) continue;
         const x = G.x - 25 + col * 2.2 + (rng2() - 0.5) * 0.7, z = G.z - 25 + row * 2.2 + (rng2() - 0.5) * 0.6;
         if (blocked(x, z) || blocked(x, z + 0.65) || inPlot(x, z, 1.0)) continue;
-        const kind = rng2(), mat = kind < 0.5 ? graveMats[(rng2() * 4) | 0] : rng2() < 0.4 ? mossStone : stoneMat;
+        const kind = rng2(), gi = kind < 0.5 ? (rng2() * 4) | 0 : -1, mat = kind < 0.5 ? graveSideMats[gi] : rng2() < 0.4 ? mossStone : stoneMat;
         const lean = (rng2() - 0.5) * 0.35, twist = (rng2() - 0.5) * 0.3;
         if (kind < 0.5) {
           const h = 0.45 + rng2() * 0.35;
-          gb.add(UNIT_BOX, mat, x, h / 2, z, lean, twist, 0, 0.42, h, 0.1);
-          gb.add(HS_TOP, mat, x, h, z, Math.PI / 2 + lean, twist + Math.PI / 2, 0);
+          headstone(x, z, 0.42, h, 0.1, lean, twist, gi);
         } else if (kind < 0.75) {
           gb.add(UNIT_BOX, mat, x, 0.42, z, lean, twist, 0, 0.08, 0.84, 0.08);
           gb.add(UNIT_BOX, mat, x, 0.6, z, lean, twist, 0, 0.42, 0.08, 0.08);
@@ -12901,9 +12943,12 @@
         ai.senseT = 0.12;
         const seen = canSee(ph), lit = !seen && ph && litByFlashlight(ph);
         // in a multiplayer room the monster's eyes check every survivor on its map, not just you
-        let seenHead = seen || lit ? ph : null;
-        if (seenHead) ai.targetPeer = null;
-        else { const rs = mpRemoteSighting(); if (rs) { seenHead = rs.head; ai.targetPeer = rs.id; } }
+        // every survivor it can see (you and, in a room, the others) is weighed each look: the closest wins, anyone
+        // repairing a generator or working on an objective counts as much closer, and it sticks to its current prey
+        // unless another is clearly nearer
+        let seenHead = null;
+        const pick = mpPickTarget(seen || lit ? ph : null);
+        if (pick) { seenHead = pick.head; ai.targetPeer = pick.id; }
         if (seenHead) {
           // first sight (or caught in your torch beam): it stops dead at the edge of the light, stares, then charges
           if (ai.state !== 'chase' && ai.state !== 'stare') { ai.state = 'stare'; ai.stareT = 1.1 + Math.random() * 0.8; ai.slash = null; ai.path = []; aiAudio.snarl(); }
@@ -14221,7 +14266,7 @@
             sg.held = -1; sg.onRack = false; sg.vel.copy(sg.handVel).clampLength(0, 5);
             continue;
           }
-          if (sg.held < 0 && gripEdge && !stunGuns.some((g) => g.held === i) && !parts.some((p) => p.held === i)) {
+          if (sg.held < 0 && !sg.netHeldBy && gripEdge && !stunGuns.some((g) => g.held === i) && !parts.some((p) => p.held === i)) {   // (not while another player holds it)
             _sgGrip.copy(sg.gun.group.position);
             const d = Math.min(h.last.distanceTo(_sgGrip), h.last.distanceTo(_sgT.set(0, 0.03, -0.25).applyMatrix4(sg.gun.group.matrixWorld)));
             if (d < 0.26) {
@@ -14241,7 +14286,7 @@
           sg.gun.group.rotateX(0.12 + sg.kick * 0.55);           // a slight natural cant, plus the recoil flip
           sg.gun.group.position.copy(h.last).addScaledVector(_sgT.set(0, 0, 1).applyQuaternion(sg.gun.group.quaternion), sg.kick * 0.05);
           clampGunToWalls(sg);
-        } else if (!sg.onRack) {                               // dropped: fall and lie on the ground
+        } else if (!sg.onRack && !sg.netHeldBy) {              // dropped: fall and lie on the ground
           const p = sg.gun.group.position;
           const floor = mapFloor(sg.map, p.x, p.z) + 0.025;
           if (p.y > floor + 0.001 || sg.vel.y > 0) {
@@ -17192,10 +17237,23 @@
     }
 
     // ---------- the waiting-room computer: desk, retro CRT monitor, keyboard, mouse, tower ----------
-    const PC = { x: WAIT_ROOM.x + WAIT_ROOM.w / 2 - 0.32, z: WAIT_ROOM.z + 2.45, top: 0.46 };   // against the east wall, facing into the room
+    const PC = { x: WAIT_ROOM.x + WAIT_ROOM.w / 2 - 0.32, z: WAIT_ROOM.z + 2.45, top: 0.46 };   // (where it was modelled: against the east wall)
+    // It now stands in the north-west corner (where the candle table was, beside the SELECT A MAP screen), its back
+    // to the corner and turned 135° so the screen and keyboard face the middle of the room: everything below is built
+    // at the modelled spot and carried there by this one move (PC_XF), colliders included.
+    const PC_AT = { x: WAIT_ROOM.x - WAIT_ROOM.w / 2 + 0.85, z: WAIT_ROOM.z - WAIT_ROOM.d / 2 + 0.85, ry: Math.PI * 3 / 4 };
+    const PC_XF = new THREE.Matrix4().makeTranslation(PC_AT.x, 0, PC_AT.z).multiply(new THREE.Matrix4().makeRotationY(PC_AT.ry)).multiply(new THREE.Matrix4().makeTranslation(-PC.x, 0, -PC.z));
+    const pcXf = (x, y, z) => new THREE.Vector3(x, y, z).applyMatrix4(PC_XF);
     const pcUI = { tab: 'public', code: '', name: '', typing: false, note: '' };
     const pcPanel = (() => {
-      const b = makeBatch();
+      const b0 = makeBatch(), _pcM = new THREE.Matrix4(), _pcQ = new THREE.Quaternion(), _pcE = new THREE.Euler(), _pcP = new THREE.Vector3(), _pcS = new THREE.Vector3();
+      const b = {                                   // the same batch, every piece carried to the corner
+        add(geo, mat, x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0, sx = 1, sy = 1, sz = 1) {
+          _pcM.compose(_pcP.set(x, y, z), _pcQ.setFromEuler(_pcE.set(rx, ry, rz)), _pcS.set(sx, sy, sz)).premultiply(PC_XF);
+          return b0.addMatrix(geo, mat, _pcM);
+        },
+        build: (...a) => b0.build(...a),
+      };
       const deskWood = new THREE.MeshStandardMaterial({ map: woodTex, color: 0x7a5434, roughness: 0.7 });
       const beige = new THREE.MeshStandardMaterial({ color: 0xcdc2a4, roughness: 0.55 });
       const beigeDark = new THREE.MeshStandardMaterial({ color: 0xa59a7e, roughness: 0.6 });
@@ -17235,17 +17293,18 @@
       b.build(scene, { rayTarget: true });
       for (const [lx, ly, lz] of [[MX - 0.122, MY - 0.2, Z - 0.15], [X - 0.193, 0.12, TZ]]) {
         const led = new THREE.Mesh(new THREE.SphereGeometry(0.005, 8, 6), new THREE.MeshStandardMaterial({ color: 0x002200, emissive: 0x30ff60, emissiveIntensity: 2 }));
-        led.position.set(lx, ly, lz); scene.add(led);
+        led.position.copy(pcXf(lx, ly, lz)); scene.add(led);
       }
-      addBoxCollider(X, 0, Z, 0.62, T, 1.15);
-      addBoxCollider(MX + 0.08, T, Z, 0.38, 0.5, 0.52);
+      // colliders (axis-aligned): the turned desk as three boxes along its length, and the monitor
+      for (const k of [-0.38, 0, 0.38]) { const c = pcXf(X + 0.02, 0, Z + k); addBoxCollider(c.x, 0, c.z, 0.5, T, 0.5); }
+      { const c = pcXf(MX + 0.08, 0, Z); addBoxCollider(c.x, T, c.z, 0.46, 0.5, 0.46); }
       // the glass: a clickable screen (VR pointer + Trigger, or the mouse)
       const p = makePanel(0.44, 0.33, 1024, 768, (g, p) => drawPC(g, p), (id) => pcClick(id), { opaque: true });
-      p.mesh.position.set(MX - 0.122, MY + 0.01, Z); p.mesh.rotation.y = -Math.PI / 2;
+      p.mesh.position.copy(pcXf(MX - 0.122, MY + 0.01, Z)); p.mesh.rotation.y = -Math.PI / 2 + PC_AT.ry;
       scene.add(p.mesh);
       const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0x40ff80, transparent: true, opacity: 0.12, blending: THREE.AdditiveBlending, depthWrite: false }));
-      glow.scale.set(0.8, 0.6, 1); glow.position.set(MX - 0.14, MY, Z); scene.add(glow);
-      lightSources.push({ x: MX - 0.3, y: MY, z: Z, color: 0x70ffa0, intensity: 1.2, distance: 2.5, weight: 1.5 });
+      glow.scale.set(0.8, 0.6, 1); glow.position.copy(pcXf(MX - 0.14, MY, Z)); scene.add(glow);
+      { const lp = pcXf(MX - 0.3, MY, Z); lightSources.push({ x: lp.x, y: lp.y, z: lp.z, color: 0x70ffa0, intensity: 1.2, distance: 2.5, weight: 1.5 }); }
       return p;
     })();
     function pcRedraw() { try { if (pcRedraw.ready) redrawPanel(pcPanel); } catch (e) { } }
@@ -17548,7 +17607,7 @@
         y: r3(playerRole === 'monster' ? monsterYaw : survivorBodyYaw),
         L: vr ? handPacket('left') : null, R: vr ? handPacket('right') : null,
         b: save.equipped.band || 'none', c: save.equipped.charm || 'none', hp: Math.round(survival.hp),
-        mo: r3(mouthOpenness()), st: N.stunT > 0 ? 1 : 0, it: heldItemsPacket(), hid: tentHide.inside && !tentHide.spotted ? 1 : 0,
+        mo: r3(mouthOpenness()), st: N.stunT > 0 ? 1 : 0, it: heldItemsPacket(), hid: tentHide.inside && !tentHide.spotted ? 1 : 0, wk: localWorking() ? 1 : 0,
       };
       try { target ? N.send(d, target) : N.send(d); } catch (e) { }
     }
@@ -17919,6 +17978,8 @@
       else if (d.t === 'end') netOnEnd(id, d);
       else if (d.t === 'quest') netApplyQuest(d.q);
       else if (d.t === 'stun') netOnStun(id, d);
+      else if (d.t === 'gun') netOnGun(id, d);
+      else if (d.t === 'bpos') netOnBoat(id, d);
     }
     function netOnHit(id, d) {
       const N = netState();
@@ -18063,8 +18124,20 @@
       }
       updateVoice(dt);
       updateAiNet(dt);
+      if (N.mapWas !== currentMap) { N.mapWas = currentMap; N.mapSince = performance.now(); }
+      updateBoatNet(dt);
+      // the one who's been on this map longest (and is the AI's host) keeps everyone's shotgun where theirs is
+      if (N.room && N.sendEvent && (N.gunT = (N.gunT || 0) + dt) > 2) {
+        N.gunT = 0;
+        const sg = gunOf(currentMap);
+        if (sg && aiRole() === 'host' && performance.now() - (N.mapSince || 0) > 4000 && (sg.held >= 0 || sg.onRack || sg.vel.lengthSq() === 0)) N.sendEvent(netGunState(sg));
+      }
       // quest progress that moved without a questChanged (generator repairs): checked once a second
-      if (N.room && (N.questT = (N.questT || 0) + dt) > 1) { N.questT = 0; if (currentMap !== 'waiting') netSendQuest(currentMap); }
+      if (N.room && (N.questT = (N.questT || 0) + dt) > 1) {
+        N.questT = 0;
+        if ((N.questFullT = (N.questFullT || 0) + 1) >= 5) { N.questFullT = 0; if (N.questSent) delete N.questSent[currentMap]; }   // every 5 s: the whole snapshot again
+        if (currentMap !== 'waiting') netSendQuest(currentMap);
+      }
       updateRemotes(dt);
       updateMacheteHits(dt);
       // the hit flash fades (unless a takedown or a struggle owns the red flash)
@@ -18079,6 +18152,220 @@
       }
       // the computer screen keeps its room status fresh
       if ((N.screenT = (N.screenT || 0) + dt) > 1 && currentMap === 'waiting') { N.screenT = 0; pcRedraw(); }
+    }
+
+
+    // =====================================================================
+    //  ONE SHARED SHOTGUN, ONE SHARED BOAT, QUESTS FOR LATECOMERS, AND SMARTER AI TARGETS
+    //  - The shotgun on a map is the same gun for everyone: picking it up is announced (it leaves the rack on every
+    //    screen and rides in that player's hand), so is dropping it (it falls where they let go), where it comes to rest,
+    //    and firing it (1/1 -> 0/1 for all). Whoever has been on the map longest keeps everyone's copy where theirs is.
+    //  - The boat: whoever has the tiller sends the boat's position and heading 15 times a second; on every other
+    //    screen the boat follows, and anyone standing in it rides along with it. Nobody else can take a tiller that's held.
+    //  - Arriving on a map where others already are: they send you the quest progress, the shotgun and the boat.
+    //  - The AI monster weighs every survivor it can see, every look.
+    // =====================================================================
+    const gunOf = (map) => stunGuns.find((g) => g.map === map);
+    const gunHand = (i) => (controllers[i]?.userData.inputSource?.handedness === 'left' ? 0 : 1);
+    const v3a = (v) => [r3(v.x), r3(v.y), r3(v.z)], q4a = (q) => [r3(q.x), r3(q.y), r3(q.z), r3(q.w)];
+    const okArr = (a, n) => Array.isArray(a) && a.length >= n && a.slice(0, n).every((v) => Number.isFinite(+v));
+    function netGunState(sg) {
+      const g = sg.gun.group;
+      return { t: 'gun', a: 'state', m: sg.map, sh: sg.shells, rk: sg.onRack ? 1 : 0, p: v3a(g.position), q: q4a(g.quaternion),
+               rp: v3a(sg.restPos), rq: q4a(sg.restQuat), by: sg.held >= 0 ? netSelfId() : (sg.netHeldBy || ''), hd: sg.held >= 0 ? gunHand(sg.held) : (sg.netHand | 0) };
+    }
+    function netSendGun(d, target) { const N = netState(); if (N.sendEvent) N.sendEvent(d, target); }
+    function netOnGun(id, d) {
+      const sg = gunOf(d.m); if (!sg) return;
+      const g = sg.gun.group;
+      if (d.a === 'pick') {
+        if (sg.held >= 0) {                                   // both grabbed it at once: the lower player id keeps it
+          if (id < netSelfId()) { sg.held = -1; showToast('THEY GRABBED IT FIRST', 'The shotgun is in another player\'s hands'); } else return;
+        }
+        sg.netHeldBy = id; sg.netHand = d.hd | 0; sg.onRack = false; sg.vel.set(0, 0, 0);
+        if (Number.isFinite(+d.sh) && +d.sh !== sg.shells) { sg.shells = +d.sh ? 1 : 0; drawShells(sg); }
+      } else if (d.a === 'drop' || d.a === 'rest') {
+        if (sg.held >= 0) return;
+        sg.netHeldBy = null;
+        if (okArr(d.p, 3)) g.position.set(+d.p[0], +d.p[1], +d.p[2]);
+        if (okArr(d.q, 4)) g.quaternion.set(+d.q[0], +d.q[1], +d.q[2], +d.q[3]).normalize();
+        if (d.a === 'drop' && okArr(d.v, 3)) sg.vel.set(+d.v[0], +d.v[1], +d.v[2]); else sg.vel.set(0, 0, 0);
+        sg.onRack = d.a === 'rest' && !!d.rk;
+        g.visible = true;
+      } else if (d.a === 'fire') {
+        if (sg.shells) { sg.shells = 0; drawShells(sg); }
+        if (sg.map === currentMap) { sg.flashT = 0.09; sg.kick = 1; try { gunAudio.blast(); } catch (e) { } }
+      } else if (d.a === 'state') {
+        if (sg.held >= 0) return;                             // (you're holding it: yours stands)
+        if (okArr(d.rp, 3)) sg.restPos.set(+d.rp[0], +d.rp[1], +d.rp[2]);
+        if (okArr(d.rq, 4)) sg.restQuat.set(+d.rq[0], +d.rq[1], +d.rq[2], +d.rq[3]).normalize();
+        sg.glow.position.set(sg.restPos.x, sg.restPos.y + 0.032, sg.restPos.z);
+        if (Number.isFinite(+d.sh) && +d.sh !== sg.shells) { sg.shells = +d.sh ? 1 : 0; drawShells(sg); }
+        if (d.by && d.by !== netSelfId()) { sg.netHeldBy = String(d.by); sg.netHand = d.hd | 0; sg.onRack = false; }
+        else {
+          sg.netHeldBy = null; sg.vel.set(0, 0, 0); sg.onRack = !!d.rk;
+          if (okArr(d.p, 3)) g.position.set(+d.p[0], +d.p[1], +d.p[2]);
+          if (okArr(d.q, 4)) g.quaternion.set(+d.q[0], +d.q[1], +d.q[2], +d.q[3]).normalize();
+        }
+        g.visible = true;
+      }
+    }
+    {
+      const baseReset = resetStunGuns;
+      resetStunGuns = function () { for (const sg of stunGuns) sg.netHeldBy = null; return baseReset(); };
+      const baseUpdate = updateStunGuns;
+      const was = new Map();
+      updateStunGuns = function (dt) {
+        for (const sg of stunGuns) was.set(sg, { held: sg.held, shells: sg.shells });
+        const r = baseUpdate(dt);
+        const N = netState(), online = !!(N.room && N.sendEvent);
+        for (const sg of stunGuns) {
+          const w = was.get(sg), g = sg.gun.group;
+          if (online && sg.map === currentMap) {
+            if (w.held < 0 && sg.held >= 0) netSendGun({ t: 'gun', a: 'pick', m: sg.map, hd: gunHand(sg.held), sh: sg.shells });
+            if (w.held >= 0 && sg.held < 0) { netSendGun({ t: 'gun', a: 'drop', m: sg.map, p: v3a(g.position), q: q4a(g.quaternion), v: v3a(sg.vel) }); sg.netLand = true; }
+            if (w.shells > 0 && sg.shells === 0) netSendGun({ t: 'gun', a: 'fire', m: sg.map });
+            if (sg.netLand && sg.held < 0 && !sg.onRack && sg.vel.lengthSq() === 0) { sg.netLand = false; netSendGun({ t: 'gun', a: 'rest', m: sg.map, p: v3a(g.position), q: q4a(g.quaternion), rk: 0 }); }
+          }
+          // held by another player: it rides in their hand on your screen
+          if (sg.netHeldBy) {
+            const rp = netPeers().get(sg.netHeldBy), H = rp && rp.hand[sg.netHand ? 1 : 0];
+            if (!rp || performance.now() - Math.max(rp.seen || 0, rp.heard || 0) > NET_GRACE) { sg.netHeldBy = null; sg.vel.set(0, 0, 0); continue; }   // they're gone: it drops where it is
+            sg.onRack = false; g.visible = sg.map === currentMap;
+            if (H && H.ok) { g.position.copy(H.p); g.quaternion.copy(H.q); g.rotateX(0.12 + sg.kick * 0.55); }
+          }
+        }
+        return r;
+      };
+    }
+    // ---------- the boat ----------
+    const NETBOAT = { camp: null, graveyard: null, mine: null };   // the latest boat pose from the player driving it, per map
+    const nbFresh = (T) => !!T && performance.now() - T.at < 800;
+    let nbSendT = 0, nbCampDriveT = -1e9;
+    boatRemoteHeld = () => currentMap === 'camp' && nbFresh(NETBOAT.camp) && !!NETBOAT.camp.h;
+    boatNetOverride = (dt) => {
+      const T = NETBOAT.camp;
+      if (currentMap !== 'camp' || !nbFresh(T) || boat.holding >= 0 || performance.now() - nbCampDriveT < 600) return;
+      const k = T.snap ? 1 : 1 - Math.exp(-dt * 10); T.snap = false;
+      boat.pos.x += (+T.p[0] - boat.pos.x) * k; boat.pos.z += (+T.p[1] - boat.pos.z) * k;
+      boat.yaw += Math.atan2(Math.sin(+T.y - boat.yaw), Math.cos(+T.y - boat.yaw)) * k;
+      boat.speed = +T.s || 0; boat.wheelAngle = +T.w || 0; boat.tillerTilt = +T.tt || 0;
+    };
+    function campBoatState(snap) { return { t: 'bpos', m: 'camp', p: [r3(boat.pos.x), r3(boat.pos.z)], y: r3(boat.yaw), s: r3(boat.speed), w: r3(boat.wheelAngle), tt: r3(boat.tillerTilt), h: boat.holding >= 0 ? 1 : 0, snap: snap ? 1 : 0 }; }
+    function escBoatState(b, snap) { return { t: 'bpos', m: b.map, p: [r3(b.group.position.x), r3(b.group.position.z)], y: r3(b.yaw), s: r3(b.speed), run: b.t >= 0 ? 1 : 0, snap: snap ? 1 : 0 }; }
+    function netOnBoat(id, d) {
+      if (!['camp', 'graveyard', 'mine'].includes(d.m) || !okArr(d.p, 2) || !Number.isFinite(+d.y)) return;
+      NETBOAT[d.m] = Object.assign({}, d, { at: performance.now(), from: id, snap: !!d.snap });
+      const b = escapeBoats[d.m];
+      if (b && d.run && b.t < 0) {                          // their engine is running: so is yours
+        b.t = 0; b.speed = 0;
+        b.lamp.material.emissive.setHex(0x30ff50); b.glow.material.color.setHex(0x40ff60);
+        if (d.m === currentMap) { try { gameAudio.engine(true); } catch (e) { } }
+      }
+    }
+    const escDriving = (b) => {
+      if (b.t < 0 || b.map !== currentMap) return false;
+      if (renderer.xr.isPresenting) return playerRole !== 'monster' && escapeBoatAboard() && (b.tillerHand >= 0 || controllers.some((c) => btn(c, 0)));
+      return !!b.deskOff && (deskBoat.up || deskBoat.down || deskBoat.left || deskBoat.right);
+    };
+    {
+      const baseEsc = updateEscapeBoats;
+      const _nbP = new THREE.Vector3();
+      updateEscapeBoats = function (dt) {
+        const follow = [];
+        for (const b of Object.values(escapeBoats)) {
+          b.netDrive = escDriving(b);
+          if (!b.netDrive && b.t >= 0 && nbFresh(NETBOAT[b.map])) { b.speed = 0; follow.push(b); }   // another player drives this one
+        }
+        const r = baseEsc(dt);
+        for (const b of follow) {
+          const T = NETBOAT[b.map], k = T.snap ? 1 : 1 - Math.exp(-dt * 10); T.snap = false;
+          _nbP.copy(b.group.position); const y0 = b.yaw;
+          b.group.position.x += (+T.p[0] - b.group.position.x) * k; b.group.position.z += (+T.p[1] - b.group.position.z) * k;
+          b.yaw += Math.atan2(Math.sin(+T.y - b.yaw), Math.cos(+T.y - b.yaw)) * k;
+          b.group.rotation.y = b.yaw;
+          try { updateBoatCol(b); } catch (e) { }
+          if (b.map === currentMap && renderer.xr.isPresenting && escapeBoatAboard()) carryRig(b.group.position, b.group.position.x - _nbP.x, b.group.position.z - _nbP.z, b.yaw - y0);   // you ride along
+        }
+        return r;
+      };
+    }
+    function updateBoatNet(dt) {
+      const N = netState(); if (!N.room || !N.sendEvent || titleActive) return;
+      const now = performance.now();
+      if (currentMap === 'camp' && (boat.holding >= 0 || (!renderer.xr.isPresenting && (deskBoat.up || deskBoat.down || deskBoat.left || deskBoat.right)))) nbCampDriveT = now;
+      if ((nbSendT -= dt) > 0) return;
+      nbSendT = 1 / 15;                                     // 15 times a second while you drive (and a moment after you let go)
+      if (currentMap === 'camp' && now - nbCampDriveT < 1500) N.sendEvent(campBoatState(false));
+      const b = escapeBoats[currentMap];
+      if (b) { if (b.netDrive) b.netDriveT = now; if (now - (b.netDriveT || -1e9) < 1500) N.sendEvent(escBoatState(b, false)); }
+    }
+    // ---------- arriving on a map where others already are: bring them up to date ----------
+    function netCatchUp(id) {
+      const N = netState(); if (!N.sendEvent || currentMap === 'waiting' || titleActive) return;
+      netSendQuest(currentMap, id);
+      const sg = gunOf(currentMap); if (sg) N.sendEvent(netGunState(sg), id);
+      if (currentMap === 'camp') N.sendEvent(campBoatState(true), id);
+      const b = escapeBoats[currentMap]; if (b) N.sendEvent(escBoatState(b, true), id);
+    }
+    {
+      const baseOnState = netOnState;
+      netOnState = function (id, d) {
+        const before = netPeers().get(id), wasMap = before && before.st ? before.st.m : null;
+        const r = baseOnState(id, d);
+        const now = netPeers().get(id);
+        if (now && now.st) {
+          now.st.wk = !!d.wk;
+          // they've just come onto the map you've been on for a while: send them where everything stands
+          if (now.st.m === currentMap && wasMap !== currentMap && currentMap !== 'waiting' && performance.now() - (netState().mapSince || 0) > 1500) netCatchUp(id);
+        }
+        return r;
+      };
+    }
+    // ---------- AI: who to go after ----------
+    const _lwH = new THREE.Vector3();
+    function localWorking() {                               // repairing a generator, or carrying a part / relic
+      if (currentMap === 'waiting' || titleActive || playerRole !== 'survivor') return false;
+      if (renderer.xr.isPresenting) headWorld(_lwH); else camera.getWorldPosition(_lwH);
+      const gens = currentMap === 'camp' ? generators : mapGens(currentMap);
+      if (gens.some((g) => !g.running && Math.hypot(g.pos.x - _lwH.x, g.pos.z - _lwH.z) < 1.8)) return true;
+      return parts.some((p) => p.held >= 0) || exParts.some((p) => p.held >= 0) || skulls.some((s) => s.held >= 0);
+    }
+    function mpRemoteSightings() {
+      const out = [];
+      if (aiRole() !== 'host' || !ai.active) return out;
+      const nav = NAV[ai.map]; if (!nav) return out;
+      _msEye.set(ai.pos.x, ai.pos.y + AI_HEAD_H, ai.pos.z);
+      const now = performance.now();
+      for (const [id, r] of netPeers()) {
+        const s = r.st;
+        if (!s || s.r !== 's' || s.m !== ai.map || !s.vr || s.hp <= 0 || s.hid || now - r.seen > 2000 || (r.aiIgnoreUntil || 0) > now) continue;
+        _msTo.subVectors(r.pos, _msEye); const d = _msTo.length();
+        if (d > AI_SIGHT) continue;
+        if (d > AI_SENSE) {
+          const fx = Math.sin(ai.heading + ai.headYaw), fz = Math.cos(ai.heading + ai.headYaw);
+          if ((_msTo.x * fx + _msTo.z * fz) / Math.max(1e-4, Math.hypot(_msTo.x, _msTo.z)) < AI_FOV_COS) continue;
+        }
+        if (!lineOfSight(nav, _msEye, r.pos)) continue;
+        out.push({ id, head: r.pos, wk: !!s.wk });
+      }
+      return out;
+    }
+    // every survivor it can see right now: the closest wins; anyone working on a generator or an objective counts as
+    // 6 m closer; the one it's already after counts as 1.5 m closer (so it doesn't flip-flop between two)
+    function mpPickTarget(localHead) {
+      const cands = [];
+      if (localHead) cands.push({ id: null, head: localHead, wk: localWorking() });
+      for (const c of mpRemoteSightings()) cands.push(c);
+      let best = null, bs = Infinity;
+      const hunting = ai.state === 'chase' || ai.state === 'stare';
+      for (const c of cands) {
+        let sc = Math.hypot(c.head.x - ai.pos.x, c.head.z - ai.pos.z);
+        if (c.wk) sc -= 6;
+        if (hunting && c.id === (ai.targetPeer || null)) sc -= 1.5;
+        if (sc < bs) { bs = sc; best = c; }
+      }
+      return best;
     }
 
     // ---------- camp performance: static scenery skips the per-frame matrix update ----------
@@ -18504,7 +18791,7 @@
         updateSurvivorExtras(dt); // hinged breaker doors, the monster's mine waypoints, lobby PLAY always on top
         updateSurvivorGLB(dt); // the playable survivor body (survivor.glb): follows you on the ground, yaw only; hidden as MONSTER
         updateNet(dt); // multiplayer: send your state, draw the other players, the machete's hits
-      } catch (err) 
+      } catch (err) {
         if (!loopErrorReported) {
           loopErrorReported = true;
           console.error(err);
