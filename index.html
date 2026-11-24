@@ -6292,6 +6292,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'UPDATE', date: '24/11/26', title: 'HOT MEAT',
+        text: 'Gore remade for VR close-ups: veiny, wet, hot-pink glowing meat that breathes, steam, flying chunks, glowing ichor, blood that sticks to your hands, and a grab you feel in your heart.' },
       { tag: 'FIX', date: '24/11/26', title: 'DEAD ARM',
         text: 'A torn-off arm is useless: that hand cannot climb, push, grab or hold anything. New gore lines when limbs come off.' },
       { tag: 'UPDATE', date: '24/11/26', title: 'RAW',
@@ -20686,6 +20688,335 @@
         const out = baseRipFx4(r, part, at, hold);
         try { if (hold && hold.local !== undefined) showToast(part === 'H' ? 'HEAD TORN OFF' : 'ARM TORN OFF', goreLine(part === 'H' ? 'head' : 'arm')); } catch (e) { }
         return out;
+      };
+    }
+
+    // =====================================================================
+    //  HOT MEAT: the gore restyled for VR close-ups
+    //  - one procedural "living meat" surface for every wound, tendon, lump, stump and vertebra: mottled crimson
+    //    with raised veins and tumour nodules (a real normal map), wet / dry roughness patches, hot-pink
+    //    bioluminescent veins and cores that breathe slowly (no flicker), and a pink fresnel rim that fakes the light
+    //    glowing through the edges (subsurface)
+    //  - wetter, pinker blood: glossy glowing drops, irregular splats, glowing ichor, steam off fresh wounds, chunks
+    //    of meat that fly off and stick where they land
+    //  - your hands: blood sticks to them (ripping, touching wounds, torn-off parts and bodies), drips, fades slowly
+    //  - the grab: the victim gets a slow pink pulse round their vision and a heartbeat in both controllers while held;
+    //    the monster feels and hears the skin tearing as it pulls, with spray from the tear
+    //  Comfort: no screen shake, no strobing; every glow pulses at about one beat a second.
+    // =====================================================================
+    const FLESH_N = 256;
+    const fleshTex = (() => {
+      const N = FLESH_N, mk = () => { const c = document.createElement('canvas'); c.width = c.height = N; return c; };
+      const colC = mk(), glowC = mk(), roughC = mk(), normC = mk();
+      const g = colC.getContext('2d'), gg = glowC.getContext('2d'), gr = roughC.getContext('2d');
+      const H = new Float32Array(N * N);
+      const stamp = (x, y, r, amp) => {
+        for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+          const d = Math.hypot(dx, dy); if (d > r) continue;
+          const px = ((Math.round(x) + dx) % N + N) % N, py = ((Math.round(y) + dy) % N + N) % N;
+          H[py * N + px] += amp * (1 - d / r) * (1 - d / r);
+        }
+      };
+      // the meat: mottled crimson, maroon and hot pink
+      g.fillStyle = '#4c0414'; g.fillRect(0, 0, N, N);
+      for (let k = 0; k < 240; k++) {
+        const x = Math.random() * N, y = Math.random() * N, r = 6 + Math.random() * 28;
+        const c = ['#7a0a22', '#9c1032', '#5c0618', '#b8164c', '#3a020e'][(Math.random() * 5) | 0];
+        const gd = g.createRadialGradient(x, y, 0, x, y, r); gd.addColorStop(0, c); gd.addColorStop(1, 'rgba(0,0,0,0)');
+        g.globalAlpha = 0.35; g.fillStyle = gd; g.fillRect(x - r, y - r, r * 2, r * 2);
+        stamp(x, y, Math.min(10, r * 0.4), 0.15 * (Math.random() - 0.3));
+      }
+      g.globalAlpha = 1;
+      gg.fillStyle = '#000'; gg.fillRect(0, 0, N, N);
+      gr.fillStyle = 'rgb(150,150,150)'; gr.fillRect(0, 0, N, N);             // (roughness lives in the green channel)
+      // wet, glossy patches
+      for (let k = 0; k < 60; k++) {
+        const x = Math.random() * N, y = Math.random() * N, r = 8 + Math.random() * 30;
+        const gd = gr.createRadialGradient(x, y, 0, x, y, r); gd.addColorStop(0, 'rgba(40,40,40,0.9)'); gd.addColorStop(1, 'rgba(40,40,40,0)');
+        gr.fillStyle = gd; gr.fillRect(x - r, y - r, r * 2, r * 2);
+      }
+      // tumour nodules: raised domes with glowing cores
+      for (let k = 0; k < 22; k++) {
+        const x = Math.random() * N, y = Math.random() * N, r = 4 + Math.random() * 9;
+        const gd = g.createRadialGradient(x, y, 0, x, y, r); gd.addColorStop(0, '#e0306a'); gd.addColorStop(0.6, '#a0123a'); gd.addColorStop(1, 'rgba(90,6,24,0)');
+        g.fillStyle = gd; g.fillRect(x - r, y - r, r * 2, r * 2);
+        const gl = gg.createRadialGradient(x, y, 0, x, y, r * 1.3); gl.addColorStop(0, '#ff7ab8'); gl.addColorStop(0.5, 'rgba(255,40,120,0.5)'); gl.addColorStop(1, 'rgba(0,0,0,0)');
+        gg.fillStyle = gl; gg.fillRect(x - r * 1.3, y - r * 1.3, r * 2.6, r * 2.6);
+        stamp(x, y, Math.round(r), 0.9);
+      }
+      // the veins: branching random walks, dark in the colour, hot pink in the glow, raised in the height
+      const vein = (x, y, a, w, n, depth) => {
+        const pts = [[x, y]];
+        for (let k = 0; k < n; k++) {
+          a += (Math.random() - 0.5) * 0.7; x += Math.cos(a) * 3; y += Math.sin(a) * 3; pts.push([x, y]);
+          stamp(x, y, Math.max(1, Math.round(w)), 0.35 * w / 3);
+          if (depth < 2 && Math.random() < 0.04) vein(x, y, a + (Math.random() < 0.5 ? 0.9 : -0.9), w * 0.6, n * 0.5 | 0, depth + 1);
+        }
+        for (const [ctx, col, lw, blur] of [[g, '#22000c', w, 0], [gg, '#ff2a7a', Math.max(0.8, w * 0.55), 6]]) {
+          ctx.save(); ctx.strokeStyle = col; ctx.lineWidth = lw; ctx.lineCap = 'round'; ctx.shadowBlur = blur; ctx.shadowColor = '#ff2a78';
+          ctx.beginPath(); pts.forEach(([px, py], i) => (i ? ctx.lineTo(px, py) : ctx.moveTo(px, py))); ctx.stroke(); ctx.restore();
+        }
+      };
+      for (let k = 0; k < 12; k++) vein(Math.random() * N, Math.random() * N, Math.random() * Math.PI * 2, 2 + Math.random() * 2.5, 50 + (Math.random() * 40 | 0), 0);
+      // the normal map, from the height field
+      const img = normC.getContext('2d').createImageData(N, N), K = 2.2;
+      for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+        const hx = H[y * N + (x + 1) % N] - H[y * N + (x - 1 + N) % N], hy = H[((y + 1) % N) * N + x] - H[((y - 1 + N) % N) * N + x];
+        let nx = -hx * K, ny = -hy * K, nz = 1; const l = Math.hypot(nx, ny, nz); nx /= l; ny /= l; nz /= l;
+        const i = (y * N + x) * 4; img.data[i] = (nx * 0.5 + 0.5) * 255; img.data[i + 1] = (ny * 0.5 + 0.5) * 255; img.data[i + 2] = (nz * 0.5 + 0.5) * 255; img.data[i + 3] = 255;
+      }
+      normC.getContext('2d').putImageData(img, 0, 0);
+      const T = (c, srgb) => { const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 4; if (srgb) t.colorSpace = THREE.SRGBColorSpace; return t; };
+      return { map: T(colC, true), glow: T(glowC, true), rough: T(roughC, false), normal: T(normC, false) };
+    })();
+    const fleshPulse = { value: 0.5 };                                       // the shared heartbeat (0..1, about 0.9 beats a second)
+    const fleshMats = new Set();
+    // turn one of the gore materials into the living meat (keeps the same material object, so every mesh using it changes)
+    function fleshify(mat, o) {
+      mat.color.setHex(o.color); mat.map = fleshTex.map; mat.normalMap = fleshTex.normal; mat.normalScale = new THREE.Vector2(o.bump, o.bump);
+      mat.roughnessMap = fleshTex.rough; mat.roughness = o.rough; mat.metalness = 0.08;
+      mat.emissive.setHex(o.emissive); mat.emissiveMap = fleshTex.glow; mat.emissiveIntensity = o.glow;
+      const rim = o.rim.toFixed(3);
+      mat.onBeforeCompile = (sh) => {
+        sh.uniforms.uPulse = fleshPulse;
+        sh.fragmentShader = 'uniform float uPulse;\n' + sh.fragmentShader.replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+          totalEmissiveRadiance *= (0.7 + 0.5 * uPulse);
+          float fleshRim = pow(1.0 - clamp(abs(dot(normal, normalize(vViewPosition))), 0.0, 1.0), 2.4);
+          totalEmissiveRadiance += vec3(1.0, 0.16, 0.42) * fleshRim * (0.55 + 0.45 * uPulse) * ${rim};`);
+      };
+      mat.customProgramCacheKey = () => 'grimapeFlesh' + rim;
+      mat.needsUpdate = true;
+      fleshMats.add(mat);
+    }
+    fleshify(woundRed, { color: 0xffffff, rough: 0.55, bump: 1.0, emissive: 0xff2a78, glow: 1.1, rim: 0.9 });
+    fleshify(stumpMat, { color: 0xf0d0d8, rough: 0.5, bump: 1.0, emissive: 0xff2a78, glow: 1.0, rim: 0.8 });
+    fleshify(fleshMat, { color: 0xffffff, rough: 0.45, bump: 0.8, emissive: 0xff3a88, glow: 1.3, rim: 1.0 });
+    fleshify(woundDark, { color: 0x6a3040, rough: 0.6, bump: 1.2, emissive: 0xb01048, glow: 0.45, rim: 0.3 });
+    fleshify(woundFur, { color: 0x9a5060, rough: 0.85, bump: 1.4, emissive: 0x801030, glow: 0.25, rim: 0.35 });
+    fleshify(spineBoneMat, { color: 0xd8a0a8, rough: 0.4, bump: 0.6, emissive: 0xff2a78, glow: 0.55, rim: 0.5 });
+    spinePaleMat.color.setHex(0xe8dccc); spinePaleMat.roughness = 0.3;            // wet bone
+
+    // ---------- blood: wetter, pinker, glowing a little; irregular splats ----------
+    bloodMat.color.setHex(0xe8123e);
+    const splatTex = (() => {
+      const c = document.createElement('canvas'); c.width = c.height = 128; const g = c.getContext('2d');
+      const blob = (x, y, r, a) => { const gd = g.createRadialGradient(x, y, r * 0.2, x, y, r); gd.addColorStop(0, `rgba(255,255,255,${a})`); gd.addColorStop(0.8, `rgba(255,255,255,${a * 0.85})`); gd.addColorStop(1, 'rgba(255,255,255,0)'); g.fillStyle = gd; g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill(); };
+      blob(64, 64, 40, 0.95);
+      for (let k = 0; k < 16; k++) { const a = Math.random() * Math.PI * 2, d = 30 + Math.random() * 28; blob(64 + Math.cos(a) * d, 64 + Math.sin(a) * d, 3 + Math.random() * 9, 0.9); }
+      for (let k = 0; k < 6; k++) { const a = Math.random() * Math.PI * 2; g.strokeStyle = 'rgba(255,255,255,0.9)'; g.lineWidth = 3 + Math.random() * 3; g.lineCap = 'round'; g.beginPath(); g.moveTo(64 + Math.cos(a) * 30, 64 + Math.sin(a) * 30); g.lineTo(64 + Math.cos(a) * (45 + Math.random() * 15), 64 + Math.sin(a) * (45 + Math.random() * 15)); g.stroke(); }
+      const t = new THREE.CanvasTexture(c); return t;
+    })();
+    splatMat.map = splatTex; splatMat.color.setHex(0x9c0c30); splatMat.opacity = 1; splatMat.alphaTest = 0.05; splatMat.needsUpdate = true;
+    // glowing ichor: a few hot-pink drops in every burst
+    const ICHOR_N = 120;
+    const ichorMat = new THREE.MeshBasicMaterial({ color: 0xff3a9a, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false });
+    const ichor = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 6, 4), ichorMat, ICHOR_N);
+    ichor.frustumCulled = false; ichor.instanceMatrix.setUsage(THREE.DynamicDrawUsage); scene.add(ichor);
+    const ichorP = Array.from({ length: ICHOR_N }, () => ({ on: false, p: new THREE.Vector3(), v: new THREE.Vector3(), s: 0.01, t: 0 }));
+    let ichorNext = 0;
+    const _icM = new THREE.Matrix4(), _icS = new THREE.Vector3(), _icQ = new THREE.Quaternion(), _icZ = new THREE.Matrix4().makeScale(0, 0, 0);
+    for (let k = 0; k < ICHOR_N; k++) ichor.setMatrixAt(k, _icZ);
+    function ichorDrop(p, vx, vy, vz) { const d = ichorP[ichorNext]; ichorNext = (ichorNext + 1) % ICHOR_N; d.on = true; d.p.copy(p); d.v.set(vx, vy, vz); d.s = 0.006 + Math.random() * 0.008; d.t = 0; }
+    // steam off fresh, hot wounds (slow, soft, never flickering)
+    const STEAM_N = 36;
+    const steam = Array.from({ length: STEAM_N }, () => {
+      const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xffd0e0, transparent: true, opacity: 0, depthWrite: false }));
+      s.visible = false; scene.add(s); return { s, t: 0, life: 0, v: new THREE.Vector3() };
+    });
+    let steamNext = 0;
+    function steamPuff(p) { const q = steam[steamNext]; steamNext = (steamNext + 1) % STEAM_N; q.s.position.copy(p); q.t = 0; q.life = 2 + Math.random(); q.v.set((Math.random() - 0.5) * 0.06, 0.18 + Math.random() * 0.12, (Math.random() - 0.5) * 0.06); q.s.visible = true; }
+    // chunks of meat that fly off and stick where they land
+    const CHUNK_N = 48;
+    const chunkGeo = new THREE.DodecahedronGeometry(1, 0);
+    const chunks = Array.from({ length: CHUNK_N }, () => { const m = new THREE.Mesh(chunkGeo, fleshMat); m.visible = false; scene.add(m); return { m, v: new THREE.Vector3(), spin: new THREE.Vector3(), flying: false, map: null }; });
+    let chunkNext = 0;
+    function meatChunks(p, n) {
+      for (let k = 0; k < n; k++) {
+        const c = chunks[chunkNext]; chunkNext = (chunkNext + 1) % CHUNK_N;
+        const s = 0.008 + Math.random() * 0.016;
+        c.m.scale.set(s * (0.7 + Math.random() * 0.8), s * (0.5 + Math.random() * 0.5), s * (0.7 + Math.random() * 0.8));
+        c.m.position.copy(p); c.m.visible = true; c.flying = true; c.map = currentMap;
+        const a = Math.random() * Math.PI * 2, sp = 0.6 + Math.random() * 1.6;
+        c.v.set(Math.cos(a) * sp, 0.8 + Math.random() * 1.8, Math.sin(a) * sp);
+        c.spin.set(Math.random() * 10, Math.random() * 10, Math.random() * 10);
+      }
+    }
+    const _fxW = new THREE.Vector3();
+    function updateHotMeatFx(dt) {
+      const t = performance.now() / 1000;
+      // the heartbeat: a soft double pulse, about 0.9 a second
+      const ph = (t * 0.9) % 1;
+      fleshPulse.value = Math.exp(-Math.pow((ph - 0.12) / 0.07, 2)) + 0.6 * Math.exp(-Math.pow((ph - 0.34) / 0.08, 2));
+      for (const sm of smearMats) sm.emissiveIntensity = 0.25 + 0.25 * fleshPulse.value;
+      // ichor
+      let any = false;
+      for (let k = 0; k < ICHOR_N; k++) {
+        const d = ichorP[k]; if (!d.on) continue;
+        any = true; d.t += dt;
+        d.v.y -= 9.8 * dt; d.p.addScaledVector(d.v, dt);
+        if (d.p.y < goreFloor(d.p.x, d.p.z) || d.t > 3) { d.on = false; ichor.setMatrixAt(k, _icZ); if (d.t <= 3) bloodSplat(d.p.x, d.p.z, 0.02 + Math.random() * 0.03); continue; }
+        _icS.setScalar(d.s); _icM.compose(d.p, _icQ, _icS); ichor.setMatrixAt(k, _icM);
+      }
+      if (any || ichor.userData.any) ichor.instanceMatrix.needsUpdate = true;
+      ichor.userData.any = any;
+      // steam
+      for (const q of steam) {
+        if (!q.s.visible) continue;
+        q.t += dt;
+        if (q.t >= q.life) { q.s.visible = false; continue; }
+        q.s.position.addScaledVector(q.v, dt);
+        const f = q.t / q.life;
+        q.s.material.opacity = 0.16 * Math.sin(Math.PI * f);
+        q.s.scale.setScalar(0.06 + f * 0.22);
+      }
+      // chunks
+      for (const c of chunks) {
+        if (!c.m.visible) continue;
+        if (c.map !== currentMap) { c.m.visible = false; continue; }
+        if (!c.flying) continue;
+        c.v.y -= 9.8 * dt; c.m.position.addScaledVector(c.v, dt);
+        c.m.rotation.x += c.spin.x * dt; c.m.rotation.y += c.spin.y * dt; c.m.rotation.z += c.spin.z * dt;
+        const fl = goreFloor(c.m.position.x, c.m.position.z);
+        if (c.m.position.y < fl + c.m.scale.y) { c.m.position.y = fl + c.m.scale.y * 0.6; c.flying = false; c.m.scale.y *= 0.55; bloodSplat(c.m.position.x, c.m.position.z, 0.03 + Math.random() * 0.03); }   // splat: it stays stuck there
+      }
+      // fresh wounds steam
+      const steamFrom = (w) => { if (w && w.visible && w.userData.age < 10 && Math.random() < dt * 3) { w.getWorldPosition(_fxW); steamPuff(_fxW); } };
+      for (const w of Object.values(ownWounds)) steamFrom(w);
+      for (const r of netPeers().values()) for (const w of Object.values(r.goreWounds || {})) steamFrom(w);
+      for (const rd of ragdolls.values()) for (const w of Object.values(rd.wounds)) steamFrom(w);
+    }
+    // the smears on the fur glow a little too
+    const smearMats = new Set();
+    {
+      const baseAS = addSmears;
+      addSmears = function (inst) {
+        const out = baseAS(inst);
+        for (const sm of out) { sm.material.emissive.setHex(0xff2a6a); sm.material.emissiveMap = smearTex; sm.material.emissiveIntensity = 0.3; sm.material.roughness = 0.2; sm.material.needsUpdate = true; smearMats.add(sm.material); }
+        return out;
+      };
+    }
+    // every rip: chunks, ichor, steam, and blood on the hand that did it
+    {
+      const baseFx5 = goreRipFx;
+      goreRipFx = function (r, part, at, hold) {
+        const out = baseFx5(r, part, at, hold);
+        try {
+          meatChunks(at, part === 'H' ? 14 : 10);
+          for (let k = 0; k < 16; k++) ichorDrop(at, (Math.random() - 0.5) * 1.6, 0.5 + Math.random() * 2, (Math.random() - 0.5) * 1.6);
+          for (let k = 0; k < 4; k++) steamPuff(at);
+          if (hold && hold.local !== undefined) handBlood[hold.local] = Math.min(1, handBlood[hold.local] + 0.75);
+          try { gameAudio.thud ? gameAudio.thud(0) : 0; } catch (e) { }
+        } catch (e) { }
+        return out;
+      };
+    }
+
+    // ---------- blood that sticks to your hands ----------
+    const handBlood = [0, 0];
+    const handBloodGeo = new THREE.SphereGeometry(1, 8, 6);
+    const handBlobs = [null, null];                                          // per hand: { parent, g, blobs }
+    function handBloodParent(i) {
+      const left = controllers[i].userData.inputSource?.handedness === 'left';
+      let obj = null;
+      if (playerRole === 'monster') obj = left ? mArms[1].hand : mArms[0].hand;
+      else if (survivorRig && survivorRig.local) obj = survivorRig.local.bones[left ? 'L' : 'R'].h;
+      else obj = hands[i].model && hands[i].model.group;
+      if (!obj) return null;
+      const ws = obj.getWorldScale(_fxW);
+      return { obj, s: 1 / Math.max(1e-3, Math.abs(ws.x) || 1) };
+    }
+    function makeHandBlobs(par) {
+      const g = new THREE.Group(), blobs = [];
+      for (let k = 0; k < 9; k++) {
+        const m = new THREE.Mesh(handBloodGeo, stumpMat);
+        const r = 0.009 + Math.random() * 0.012;
+        m.position.set((Math.random() - 0.5) * 0.07, (Math.random() - 0.5) * 0.05, (Math.random() - 0.5) * 0.07).multiplyScalar(par.s);
+        m.scale.set(r * 1.4, r * 0.45, r).multiplyScalar(par.s);
+        m.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
+        m.visible = false; g.add(m); blobs.push(m);
+      }
+      par.obj.add(g);
+      return { parent: par.obj, g, blobs };
+    }
+    const _hbP = new THREE.Vector3();
+    function updateHandBlood(dt) {
+      const vr = renderer.xr.isPresenting;
+      for (let i = 0; i < hands.length; i++) {
+        const h = hands[i];
+        // touching gore smears more on: torn-off parts, wounds, bodies, fresh meat
+        if (vr && h.tracked) {
+          let touch = false;
+          for (const pc of gorePieces) if (pc.g.visible && pc.g.position.distanceTo(h.last) < 0.16) { touch = true; break; }
+          if (!touch) for (const rd of ragdolls.values()) if (rd.pivot.visible && rd.holder.getWorldPosition(_hbP).distanceTo(h.last) < 0.4) { touch = true; break; }
+          if (!touch) for (const r of netPeers().values()) for (const w of Object.values(r.goreWounds || {})) if (w.visible && w.position.distanceTo(h.last) < 0.14) { touch = true; break; }
+          if (touch) handBlood[i] = Math.min(1, handBlood[i] + dt * 1.2);
+        }
+        handBlood[i] = Math.max(0, handBlood[i] - dt / 120);                // it slowly dries and flakes off (2 minutes)
+        let par = null; try { par = handBloodParent(i); } catch (e) { }
+        if (!par || !par.obj) continue;
+        let B = handBlobs[i];
+        if (!B || B.parent !== par.obj) { if (B && B.g.parent) B.g.parent.remove(B.g); B = handBlobs[i] = makeHandBlobs(par); }
+        const n = Math.ceil(handBlood[i] * B.blobs.length);
+        const hidden = !!h.goreHid || (playerRole === 'survivor' && (goreMe.rp & (controllers[i].userData.inputSource?.handedness === 'left' ? 1 : 2)));
+        B.blobs.forEach((m, k) => { m.visible = k < n && !hidden; });
+        if (handBlood[i] > 0.25 && !hidden && Math.random() < dt * 4 * handBlood[i]) { B.blobs[0].getWorldPosition(_hbP); bloodDrop(_hbP.x, _hbP.y, _hbP.z, 0, -0.1, 0, 0.005); }
+      }
+    }
+
+    // ---------- the grab: tearing as the monster pulls; the victim's vision pulses pink, the heartbeat in their hands ----------
+    let grabTearT = 0;
+    const grabSendT = [0, 0];
+    {
+      const baseGG = updateGoreGrabs;
+      updateGoreGrabs = function (dt) {
+        const r = baseGG(dt);
+        const now = performance.now();
+        goreHold.forEach((G, i) => {
+          if (!G) return;
+          const rr = netPeers().get(G.id); if (!rr || !partPos(rr, G.part, _hbP)) return;
+          const pull = _hbP.distanceTo(hands[i].last);
+          // the skin tearing: wet creaks and a fine spray from the tear, building as you pull
+          if (pull > 0.15 && (grabTearT -= dt) <= 0) {
+            grabTearT = 0.32 - Math.min(0.2, pull * 0.3);
+            try { gameAudio.squelch(0, 0.25 + pull * 1.4); } catch (e) { }
+            for (let k = 0; k < 3; k++) bloodDrop(_hbP.x, _hbP.y, _hbP.z, (Math.random() - 0.5) * 0.8, 0.3 + Math.random() * 0.8, (Math.random() - 0.5) * 0.8, 0.006);
+            if (Math.random() < 0.5) ichorDrop(_hbP, (Math.random() - 0.5) * 0.5, 0.4, (Math.random() - 0.5) * 0.5);
+          }
+          // keep telling them they're held
+          if (now - grabSendT[i] > 450) { grabSendT[i] = now; r67Send({ t: 'grab', v: G.id, p: G.part, m: currentMap, held: 1 }, G.id); }
+        });
+        return r;
+      };
+    }
+    let grabbedT = 0, grabToastAt = 0, grabBeatT = 0;
+    const grabVignette = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 0.85), new THREE.MeshBasicMaterial({ map: vignetteTex, color: 0xff1a6a, transparent: true, opacity: 0, depthTest: false, depthWrite: false, fog: false }));
+    grabVignette.position.set(0, 0, -0.3); grabVignette.renderOrder = 9002; grabVignette.visible = false; camera.add(grabVignette);
+    const grabEl = document.createElement('div');
+    grabEl.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:4;opacity:0;background:radial-gradient(ellipse at center, rgba(0,0,0,0) 45%, rgba(255,20,100,0.55) 100%)';
+    document.body.appendChild(grabEl);
+    {
+      const baseGrab = netOnGrab;
+      netOnGrab = function (id, d) {
+        if (d.v !== netSelfId() || d.m !== currentMap || playerRole !== 'survivor') return;
+        grabbedT = 1.2;
+        if (performance.now() - grabToastAt > 4000) { grabToastAt = performance.now(); return baseGrab(id, d); }
+      };
+    }
+    function updateGrabbed(dt) {
+      grabbedT = Math.max(0, grabbedT - dt);
+      const vr = renderer.xr.isPresenting, held = grabbedT > 0 && !caught;
+      const a = held ? 0.25 + 0.3 * fleshPulse.value : Math.max(0, grabVignette.material.opacity - dt * 1.5);
+      grabVignette.material.opacity = a; grabVignette.visible = vr && a > 0.01;
+      grabEl.style.opacity = vr ? 0 : a.toFixed(2);
+      if (held && (grabBeatT -= dt) <= 0) { grabBeatT = 0.55; controllers.forEach((c) => pulse(c, 0.7, 70)); }
+    }
+
+    {
+      const baseNet4 = updateNet;
+      updateNet = function (dt) {
+        const r = baseNet4(dt);
+        for (const f of [updateHotMeatFx, updateHandBlood, updateGrabbed]) { try { f(dt); } catch (e) { if (!f.warned) { f.warned = true; console.warn('[r70]', f.name, e); } } }
+        return r;
       };
     }
 
