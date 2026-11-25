@@ -6293,6 +6293,10 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'NEW', date: '25/11/26', title: 'CLEAN DISMEMBERMENT',
+        text: 'A torn-off arm or head now comes away exactly where it was, falls with real weight, hits the ground, tumbles and lies flat for at least 18 seconds. Clean dark wound caps with a pale bone centre on the socket and the limb, one small burst of blood and a pool underneath.' },
+      { tag: 'NEW', date: '25/11/26', title: 'CHAIN HIM TO THE LAKE FLOOR',
+        text: 'Alternate win on every map: a heavy chain and cinderblock anchor wait by the dock. Stun the monster with the shotgun, let go of the chain next to him to wrap it round his chest, then drag him into deep water before the stun wears off. The anchor takes him to the bottom: LAKE CONTAINMENT VICTORY and bonus coins for every survivor.' },
       { tag: 'FIX', date: '25/11/26', title: 'SAFE WAITING ROOM',
         text: 'Nobody can be hit, grabbed, ripped or cut in the waiting room any more, and the monster coat sleeves no longer spike when its arms move.' },
       { tag: 'FIX', date: '25/11/26', title: 'PLAYTEST FIXES',
@@ -22540,6 +22544,865 @@
       const bRip = netOnRip; netOnRip = function (id, d) { if (inLobby() || (d && d.m === 'waiting')) return; return bRip(id, d); };
       const bGrab = netOnGrab; netOnGrab = function (id, d) { if (inLobby() || (d && d.m === 'waiting')) return; return bGrab(id, d); };
       const bSl = netOnSlice; netOnSlice = function (id, d) { if (inLobby() || (d && d.m === 'waiting')) return; return bSl(id, d); };
+    }
+
+    // =====================================================================
+    //  ALTERNATE WIN: CHAIN THE MONSTER TO THE BOTTOM OF THE LAKE
+    //  A heavy iron chain on a cinderblock anchor waits by the dock on every map (camp, graveyard, mine). Stun the
+    //  monster with the shotgun (AI or a human MONSTER player), carry the anchor over by its chain (GRIP), and while
+    //  he is down let go (or pull TRIGGER) within 1.8 m of his chest: the chain snaps round him. Then drag the anchor,
+    //  or grip his body and haul (more survivors pulling = faster), into deep water (1.5 m, or the deepest water a map
+    //  has) before the 15 s stun runs out. The anchor drags him to the lakebed: LAKE CONTAINMENT VICTORY for every
+    //  survivor in the room, bonus coins, saved. Everything is shared over Trystero ('lch*' events).
+    // =====================================================================
+    const LKC_GRAB_R = 0.42, LKC_ATTACH_R = 1.8, LKC_HANG = 0.55, LKC_CHAIN_L = 2.6, LKC_SLACK = 1.4, LKC_SINK_T = 4.5, LKC_REWARD = 150;
+    const LKC = {
+      map: null, pos: new THREE.Vector3(), prev: new THREE.Vector3(), held: -1, remoteBy: null, remoteUntil: 0, netA: new THREE.Vector3(),
+      att: null, sink: null, pulls: new Map(), bodyGrip: [null, null], gripWas: [false, false], trigWas: [false, false],
+      sendT: 0, hintT: 0, won: false, lostEnd: new THREE.Vector3(1, 0, 0.3).normalize(), defeatT: -1,
+    };
+    // ---------- water depth on each map ----------
+    function lkcLake(map, x, z, m = 0.8) {
+      return extraLakes.find((l) => l.map === map && x > l.x0 + m && x < l.x1 - m && z > l.z0 + m && z < l.z1 - m) || null;
+    }
+    function lkcBed(map) { return map === 'graveyard' ? GY.lake.bed : map === 'mine' ? MN.lake.bed : -LAKE_DEPTH; }
+    function lkcLevel(map) { if (map === 'camp') return WATER_LEVEL; const L = extraLakes.find((l) => l.map === map); return L ? L.level : 0; }
+    function lkcDepth(map, x, z) {
+      if (map === 'camp') return waterAt(x, z) ? WATER_LEVEL - lakeHeight(x, z) : 0;
+      return lkcLake(map, x, z) ? lkcLevel(map) - lkcBed(map) : 0;
+    }
+    function lkcBedAt(map, x, z) { return map === 'camp' ? lakeHeight(x, z) : lkcBed(map); }
+    function lkcDeep(map) { return map === 'camp' ? 1.5 : Math.min(1.5, lkcLevel(map) - lkcBed(map) - 0.05); }   // (the graveyard and mine lakes are 1.3 / 1.5 m deep)
+    function lkcFloor(map, x, z) {
+      if (map !== 'camp' && lkcLake(map, x, z, 0.03)) return lkcBed(map);
+      try { return groundY(map, x, z) || 0; } catch (e) { return 0; }
+    }
+    // ---------- where the anchor waits on each map: beside the dock, on dry ground ----------
+    function lkcSpawn(map) {
+      const c = map === 'camp' ? [[DOCK.x0 - 0.9, DOCK.z1 + 0.9], [DOCK.x0 - 1.6, DOCK.z0 - 1.0], [DOCK.x0 - 2.6, DOCK.z1 + 1.6], [2.0, 1.0]]
+        : map === 'graveyard' ? [[GY.dock.x0 + 0.6, GY.dock.z1 + 1.1], [GY.dock.x0 + 0.6, GY.dock.z0 - 1.1], [GY.dock.x0 - 0.8, GY.dock.z1]]
+        : [[MN.dock.x1 + 0.6, MN.dock.z1 + 0.9], [MN.dock.x1 + 0.6, MN.dock.z0 - 0.9], [MN.dock.x1 + 1.4, MN.dock.z1]];
+      for (const [x, z] of c) if (lkcDepth(map, x, z) <= 0 && !(map !== 'camp' && lkcLake(map, x, z, -0.3))) return new THREE.Vector3(x, lkcFloor(map, x, z), z);
+      const [x, z] = c[0]; return new THREE.Vector3(x, lkcFloor(map, x, z), z);
+    }
+
+    // ---------- the models: a weathered cinderblock with a big shackle, and the iron links (one instanced mesh) ----------
+    const lkcIron = new THREE.MeshStandardMaterial({ color: 0x3b3a3a, metalness: 0.85, roughness: 0.42 });
+    const lkcRust = new THREE.MeshStandardMaterial({ color: 0x5a3a26, metalness: 0.55, roughness: 0.7 });
+    const lkcConcrete = new THREE.MeshStandardMaterial({ map: canvasTexture(128, (g, s) => {
+      g.fillStyle = '#8a8680'; g.fillRect(0, 0, s, s);
+      for (let k = 0; k < 900; k++) { const v = 90 + Math.random() * 70 | 0; g.fillStyle = `rgba(${v},${v - 4},${v - 10},0.5)`; g.fillRect(Math.random() * s, Math.random() * s, 2, 2); }
+      for (let k = 0; k < 14; k++) { g.fillStyle = 'rgba(70,90,50,0.25)'; g.beginPath(); g.arc(Math.random() * s, Math.random() * s, 6 + Math.random() * 14, 0, 7); g.fill(); }   // algae stains
+      g.strokeStyle = 'rgba(40,36,32,0.6)'; g.lineWidth = 1.5;
+      for (let k = 0; k < 5; k++) { g.beginPath(); let x = Math.random() * s, y = Math.random() * s; g.moveTo(x, y); for (let j = 0; j < 5; j++) { x += (Math.random() - 0.5) * 30; y += Math.random() * 20; g.lineTo(x, y); } g.stroke(); }
+    }), roughness: 0.95 });
+    const lkcHoleMat = new THREE.MeshStandardMaterial({ color: 0x1c1a18, roughness: 1 });
+    const lkcAnchor = new THREE.Group(); lkcAnchor.visible = false; scene.add(lkcAnchor);
+    {
+      const blk = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.2, 0.2), lkcConcrete); blk.castShadow = blk.receiveShadow = true; lkcAnchor.add(blk);
+      for (const x of [-0.095, 0.095]) { const h = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.202, 0.13), lkcHoleMat); h.position.x = x; lkcAnchor.add(h); }
+      // two chain wraps through the holes and a big shackle on top
+      for (const x of [-0.095, 0.095]) { const w = new THREE.Mesh(new THREE.TorusGeometry(0.115, 0.016, 6, 18), lkcIron); w.position.x = x; w.rotation.y = Math.PI / 2; w.scale.set(1, 1.15, 1); lkcAnchor.add(w); }
+      const sh = new THREE.Mesh(new THREE.TorusGeometry(0.06, 0.014, 6, 16, Math.PI * 1.3), lkcRust); sh.position.y = 0.13; sh.rotation.z = -Math.PI * 0.15; lkcAnchor.add(sh);
+      const pin = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.13, 6), lkcIron); pin.rotation.z = Math.PI / 2; pin.position.y = 0.105; lkcAnchor.add(pin);
+    }
+    const LKC_MAXL = 220;
+    const lkcLinkGeo = new THREE.TorusGeometry(0.034, 0.011, 6, 12); lkcLinkGeo.scale(1, 1.55, 1);
+    const lkcLinks = new THREE.InstancedMesh(lkcLinkGeo, lkcIron, LKC_MAXL);
+    lkcLinks.instanceMatrix.setUsage(THREE.DynamicDrawUsage); lkcLinks.frustumCulled = false; lkcLinks.castShadow = true; lkcLinks.count = 0; lkcLinks.visible = false;
+    scene.add(lkcLinks);
+    const _lqM = new THREE.Matrix4(), _lqX = new THREE.Vector3(), _lqY = new THREE.Vector3(), _lqZ = new THREE.Vector3(), _lqP = new THREE.Vector3(), _lqQ = new THREE.Vector3(), _lqUp = new THREE.Vector3(0, 1, 0);
+    let lkcN = 0;
+    function lkcLink(p, tangent, k) {
+      if (lkcN >= LKC_MAXL) return;
+      _lqY.copy(tangent).normalize();
+      _lqX.crossVectors(Math.abs(_lqY.y) > 0.9 ? _lqZ.set(1, 0, 0) : _lqUp, _lqY).normalize();
+      _lqZ.crossVectors(_lqX, _lqY).normalize();
+      if (k & 1) { const t = _lqX.clone(); _lqX.copy(_lqZ); _lqZ.copy(t).negate(); }   // every other link turned 90 degrees
+      _lqM.makeBasis(_lqX, _lqY, _lqZ).setPosition(p);
+      lkcLinks.setMatrixAt(lkcN++, _lqM);
+    }
+    // a hanging run of chain from a to b (sagging when there's slack)
+    function lkcRun(a, b, len) {
+      const d = a.distanceTo(b), sag = Math.max(0.03, (Math.max(len, d) - d) * 0.55), n = Math.max(2, Math.min(70, Math.round(Math.max(len, d) / 0.068)));
+      let prevX = a.x, prevY = a.y, prevZ = a.z;
+      for (let k = 1; k <= n; k++) {
+        const t = k / n;
+        _lqP.lerpVectors(a, b, t); _lqP.y -= sag * 4 * t * (1 - t);
+        _lqQ.set(_lqP.x - prevX, _lqP.y - prevY, _lqP.z - prevZ);
+        const mid = new THREE.Vector3((_lqP.x + prevX) / 2, (_lqP.y + prevY) / 2, (_lqP.z + prevZ) / 2);
+        if (_lqQ.lengthSq() > 1e-8) lkcLink(mid, _lqQ, k);
+        prevX = _lqP.x; prevY = _lqP.y; prevZ = _lqP.z;
+      }
+    }
+    // coils wrapped tight round his chest (around the body's long axis)
+    const _lqCX = new THREE.Vector3(), _lqCZ = new THREE.Vector3(), _lqCP = new THREE.Vector3(), _lqCT = new THREE.Vector3();
+    function lkcCoils(c, axis, r) {
+      const _lqX = _lqCX.crossVectors(Math.abs(axis.y) > 0.9 ? new THREE.Vector3(1, 0, 0) : _lqUp, axis).normalize();
+      const _lqZ = _lqCZ.crossVectors(axis, _lqX).normalize(), _lqP = _lqCP, _lqQ = _lqCT;
+      let k = 0;
+      for (let loop = 0; loop < 3; loop++) {
+        const off = (loop - 1) * 0.13, n = 26;
+        for (let i = 0; i < n; i++) {
+          const a = (i / n) * Math.PI * 2 + loop * 0.4, ca = Math.cos(a), sa = Math.sin(a);
+          _lqP.copy(c).addScaledVector(axis, off + (i / n - 0.5) * 0.05).addScaledVector(_lqX, ca * r).addScaledVector(_lqZ, sa * r);
+          _lqQ.copy(_lqX).multiplyScalar(-sa).addScaledVector(_lqZ, ca);
+          lkcLink(_lqP, _lqQ, k++);
+        }
+      }
+    }
+
+    // ---------- sounds: chain rattle, and the muffled deep-water rumble with bubbles ----------
+    const lkcAudio = (() => {
+      let ctx = null, out = null, noise = null;
+      function ok() {
+        try {
+          if (!ctx) {
+            ctx = new (window.AudioContext || window.webkitAudioContext)(); audioTag(ctx, 'sfx');
+            try { out = audioMaster(ctx); } catch (e) { out = ctx.destination; }
+            noise = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
+            const d = noise.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+          }
+          if (ctx.state !== 'running') ctx.resume?.();
+          return ctx.state === 'running';
+        } catch (e) { return false; }
+      }
+      function burst(t0, f, q, g, dur) {
+        if (!Number.isFinite(g) || !Number.isFinite(t0)) g = 0.3, t0 = ctx.currentTime;
+        const s = ctx.createBufferSource(); s.buffer = noise; s.playbackRate.value = 0.8 + Math.random() * 0.5;
+        const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = f; bp.Q.value = q;
+        const v = ctx.createGain(); v.gain.setValueAtTime(0, t0); v.gain.linearRampToValueAtTime(g, t0 + 0.004); v.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+        s.connect(bp); bp.connect(v); v.connect(out); s.start(t0, Math.random()); s.stop(t0 + dur + 0.05);
+      }
+      return {
+        rattle(vol = 1) {
+          if (!ok()) return; const t = ctx.currentTime;
+          for (let k = 0; k < 9; k++) burst(t + k * 0.045 + Math.random() * 0.03, 2200 + Math.random() * 2600, 6, 0.35 * vol, 0.09);
+          burst(t, 160, 1, 0.5 * vol, 0.25);
+        },
+        clank(vol = 1) { if (!ok()) return; const t = ctx.currentTime; burst(t, 1400, 3, 0.4 * vol, 0.12); burst(t + 0.05, 3400, 8, 0.25 * vol, 0.08); },
+        sink(dist = 0) {
+          if (!ok()) return; const t = ctx.currentTime; let vol = THREE.MathUtils.clamp(1.2 - dist / 30, 0.15, 1); if (!Number.isFinite(vol)) vol = 0.6;
+          for (const [f, g] of [[34, 0.6], [51, 0.4]]) {                  // the deep bass rumble
+            const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.setValueAtTime(f * 1.3, t); o.frequency.exponentialRampToValueAtTime(f, t + 3.5);
+            const v = ctx.createGain(); v.gain.setValueAtTime(0, t); v.gain.linearRampToValueAtTime(g * vol, t + 0.6); v.gain.exponentialRampToValueAtTime(0.001, t + 5.5);
+            o.connect(v); v.connect(out); o.start(t); o.stop(t + 5.6);
+          }
+          const s = ctx.createBufferSource(); s.buffer = noise; s.loop = true;    // the water closing over him, muffled
+          const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.setValueAtTime(900, t); lp.frequency.exponentialRampToValueAtTime(140, t + 4);
+          const v = ctx.createGain(); v.gain.setValueAtTime(0, t); v.gain.linearRampToValueAtTime(0.5 * vol, t + 0.2); v.gain.exponentialRampToValueAtTime(0.001, t + 5);
+          s.connect(lp); lp.connect(v); v.connect(out); s.start(t); s.stop(t + 5.1);
+          for (let k = 0; k < 22; k++) {                                     // bubbly bloops rising
+            const t0 = t + 0.2 + Math.random() * 4.2 * (k / 22) ** 0.7;
+            const o = ctx.createOscillator(); o.type = 'sine'; const f0 = 180 + Math.random() * 260;
+            o.frequency.setValueAtTime(f0, t0); o.frequency.exponentialRampToValueAtTime(f0 * 2.6, t0 + 0.09);
+            const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 700;
+            const g = ctx.createGain(); g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(0.22 * vol * (1 - k / 30), t0 + 0.01); g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.12);
+            o.connect(f); f.connect(g); g.connect(out); o.start(t0); o.stop(t0 + 0.14);
+          }
+        },
+      };
+    })();
+
+    // ---------- bubbles rising off him as he goes down ----------
+    const LKC_NB = 90;
+    const lkcBubGeo = new THREE.BufferGeometry(); lkcBubGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(LKC_NB * 3), 3));
+    const lkcBubbles = new THREE.Points(lkcBubGeo, new THREE.PointsMaterial({ map: bubbleTex, size: 0.07, transparent: true, depthWrite: false, color: 0xd8ecff, opacity: 0.85 }));
+    lkcBubbles.frustumCulled = false; lkcBubbles.visible = false; scene.add(lkcBubbles);
+    const lkcBub = Array.from({ length: LKC_NB }, () => ({ p: new THREE.Vector3(), v: 0, live: false }));
+
+    // ---------- who is the monster, where his chest is, and is he down? ----------
+    const lkcSelf = () => netSelfId();
+    function lkcLocalAtt(w) { return w === 'ai' ? 'ai' : w === lkcSelf() ? 'self' : w; }
+    const _lqC = new THREE.Vector3(), _lqA = new THREE.Vector3(), _lqH = new THREE.Vector3(), _lqD = new THREE.Vector3();
+    function lkcChest(att, out, axis) {
+      if (att === 'ai') {
+        if (!ai.active || ai.map !== currentMap) return false;
+        const root = (typeof monAI !== 'undefined' && monAI && monAI.root.visible) ? monAI.root : aiRoot;
+        if (root === aiRoot) { out.copy(aiRoot.position); if (axis) axis.set(0, 1, 0).applyQuaternion(aiRoot.quaternion); return true; }
+        _lqD.set(0, 1, 0).applyQuaternion(root.quaternion);
+        out.copy(root.position).addScaledVector(_lqD, 0.6 * MON_AI_HEIGHT);
+        if (axis) axis.copy(_lqD);
+        return true;
+      }
+      if (att === 'self') { headWorld(out); out.y -= 0.55; if (axis) axis.set(0, 1, 0); return true; }
+      const r = netPeers().get(att);
+      if (!r || !r.st || r.st.r !== 'm' || r.st.m !== currentMap) return false;
+      out.copy(r.pos); out.y -= 0.55; if (axis) axis.set(0, 1, 0);
+      return true;
+    }
+    // stunned monsters you could chain right now: [{ w, chest }]
+    function lkcStunnedTargets() {
+      const list = [];
+      if (ai.active && ai.map === currentMap && ai.state === 'stunned' && lkcChest('ai', _lqC)) list.push({ w: 'ai', c: _lqC.clone() });
+      for (const [id, r] of netPeers()) {
+        if (r && r.st && r.st.r === 'm' && r.st.m === currentMap && r.st.st === 1 && lkcChest(id, _lqC)) list.push({ w: id, c: _lqC.clone() });
+      }
+      return list;
+    }
+    const lkcAuthority = () => LKC.att === 'self' || (LKC.att === 'ai' && aiRole() !== 'puppet');
+    const lkcStillDown = () => LKC.att === 'self' ? netState().stunT > 0
+      : LKC.att === 'ai' ? (ai.active && ai.state === 'stunned')
+      : (() => { const r = netPeers().get(LKC.att); return !!(r && r.st && r.st.st === 1); })();
+
+    // ---------- state changes (local + shared) ----------
+    function lkcReset(map) {
+      LKC.map = map === 'waiting' ? null : map;
+      LKC.held = -1; LKC.remoteBy = null; LKC.att = null; LKC.sink = null; LKC.pulls.clear(); LKC.bodyGrip = [null, null]; LKC.won = false; LKC.defeatT = -1;
+      lkcBubbles.visible = false; for (const b of lkcBub) b.live = false;
+      if (LKC.map) { LKC.pos.copy(lkcSpawn(LKC.map)); LKC.pos.y += 0.1; LKC.prev.copy(LKC.pos); }
+      lkcAnchor.visible = lkcLinks.visible = !!LKC.map;
+    }
+    function lkcAttach(w, fromNet) {
+      if (LKC.att || LKC.sink) return;
+      LKC.att = lkcLocalAtt(w); LKC.pulls.clear();
+      if (!fromNet) r67Send({ t: 'lchA', m: currentMap, w });
+      camera.getWorldPosition(_lqH);
+      lkcAudio.rattle(THREE.MathUtils.clamp(1.3 - _lqH.distanceTo(LKC.pos) / 14, 0.2, 1));
+      if (LKC.att === 'self') {
+        showToast('YOU ARE CHAINED!', 'They are dragging you to the lake. Hold on until the stun wears off');
+        controllers.forEach((c) => pulse(c, 1, 250));
+      } else if (playerRole !== 'monster') showToast('MONSTER CHAINED!', 'Drag him into DEEP water before the 15 s stun wears off');
+    }
+    function lkcFree(fromNet) {
+      if (!LKC.att || LKC.sink) return;
+      const was = LKC.att;
+      LKC.att = null; LKC.pulls.clear(); LKC.bodyGrip = [null, null];
+      if (!fromNet) r67Send({ t: 'lchF', m: currentMap });
+      lkcAudio.rattle(0.7);
+      if (was === 'self') showToast('YOU THREW OFF THE CHAIN', 'Hunt them down');
+      else if (playerRole !== 'monster') showToast('HE BROKE FREE!', 'The stun wore off before he reached deep water');
+    }
+    function lkcStartSink(p, map, fromNet) {
+      if (LKC.sink) return;
+      LKC.sink = { t: 0, map, x: p[0], y: p[1], z: p[2], here: map === currentMap };
+      LKC.held = -1; LKC.bodyGrip = [null, null];
+      if (!fromNet) r67Send({ t: 'lchS', m: map, p: p.map(r3) });
+      if (LKC.sink.here) { camera.getWorldPosition(_lqH); lkcAudio.sink(Math.hypot(_lqH.x - p[0], _lqH.z - p[2])); }
+      if (LKC.att === 'self') { showToast('THE ANCHOR DRAGS YOU DOWN', 'Chained to the bottom of the lake...'); controllers.forEach((c) => pulse(c, 1, 900)); }
+      else if (playerRole !== 'monster') showToast('HE IS GOING UNDER!', 'The anchor is pulling him to the lake floor');
+    }
+    // ---------- the LAKE CONTAINMENT VICTORY ----------
+    const lkcVicGroup = new THREE.Group(); lkcVicGroup.visible = false; scene.add(lkcVicGroup);
+    const lkcVicPanel = makePanel(0.62, 0.38, 1024, 628, (g, p) => {
+      const W = p.cw, H = p.ch;
+      const grd = g.createLinearGradient(0, 0, 0, H); grd.addColorStop(0, 'rgba(4,14,22,0.93)'); grd.addColorStop(1, 'rgba(2,6,10,0.96)');
+      roundRect(g, 4, 4, W - 8, H - 8, 30); g.fillStyle = grd; g.fill();
+      g.lineWidth = 6; g.strokeStyle = '#3a8ab0'; g.stroke();
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.shadowColor = 'rgba(120,200,255,0.8)'; g.shadowBlur = 24;
+      g.fillStyle = '#e4f4ff'; g.font = 'bold 120px Georgia, serif'; g.fillText('VICTORY', W / 2, 140);
+      g.shadowColor = 'rgba(200,0,0,0.9)'; g.shadowBlur = 16;
+      g.fillStyle = '#d0140c'; g.font = 'bold 46px Georgia, serif'; g.fillText('MONSTER CHAINED TO THE LAKE FLOOR!', W / 2, 258);
+      g.shadowBlur = 0;
+      for (let k = 0; k < 11; k++) { g.strokeStyle = '#6a6a70'; g.lineWidth = 5; g.beginPath(); g.ellipse(200 + k * 57, 318, 22, 11, 0, 0, Math.PI * 2); g.stroke(); }   // a row of chain links
+      g.fillStyle = '#ffd27a'; g.font = 'bold 30px "Courier New", monospace';
+      g.fillText(`LAKE CONTAINMENT  ·  +${LKC.reward || LKC_REWARD} COINS  ·  ${save.coins} COINS`, W / 2, 392);
+      drawButton(g, W / 2 - 300, 456, 600, 104, 'RETURN TO WAITING ROOM', { hover: uiButton(p, 'return', W / 2 - 300, 456, 600, 104), size: 38 });
+      g.textAlign = 'left';
+    }, (id) => { if (id === 'return') returnFromVictory(); }, { onTop: true });
+    lkcVicGroup.add(lkcVicPanel.mesh);
+    const lkcVicText = { t: null, s: null };
+    function lkcPlaceVic(snap) {
+      camera.getWorldPosition(_lqH); camera.getWorldDirection(_lqD);
+      _lqD.y = 0; if (_lqD.lengthSq() < 1e-6) _lqD.set(0, 0, -1); _lqD.normalize();
+      _lqA.copy(_lqH).addScaledVector(_lqD, renderer.xr.isPresenting ? 0.5 : 0.75);
+      if (snap) lkcVicGroup.position.copy(_lqA); else lkcVicGroup.position.lerp(_lqA, 0.04);
+      lkcVicGroup.scale.setScalar(renderer.xr.isPresenting ? 1 : 1.3);
+      lkcVicGroup.lookAt(_lqH.x, lkcVicGroup.position.y, _lqH.z);
+    }
+    function lkcVictory(map) {
+      if (LKC.won || ending || playerRole === 'monster' || titleActive) return;
+      LKC.won = true;
+      const reward = LKC_REWARD + (save.lakeWins ? 0 : 50);
+      LKC.reward = reward;
+      save.coins += reward; save.lakeWins = (save.lakeWins || 0) + 1; save.escapes = (save.escapes || 0) + 1; writeSave();
+      if (typeof redrawShop === 'function') redrawShop();
+      camera.getWorldDirection(_lqD); _lqD.y = 0; if (_lqD.lengthSq() < 1e-6) _lqD.set(0, 0, -1); _lqD.normalize();
+      // the dawn comes up like a normal escape (no boat run, its own victory screen)
+      ending = { map: currentMap === 'waiting' ? map : currentMap, t: 0, reward, bonus: 0, lake: true,
+        from: { fog: scene.fog.color.getHex(), density: scene.fog.density, sky: scene.background.getHex(), hemi: hemiLight ? [hemiLight.color.getHex(), hemiLight.groundColor.getHex(), hemiLight.intensity] : null },
+        dir: _lqD.clone(), moved: true, shown: true, run: true };
+      gameAudio.fanfare();
+      showToast('LAKE CONTAINMENT VICTORY', `The monster is chained to the lake floor. +${reward} coins`);
+      redrawPanel(lkcVicPanel);
+      if (renderer.xr.isPresenting) { lkcVicGroup.visible = true; lkcPlaceVic(true); }
+      else {
+        const t = victoryEl.querySelector('.v-title'), s = victoryEl.querySelector('.v-sub');
+        if (t && lkcVicText.t === null) { lkcVicText.t = t.textContent; lkcVicText.s = s.textContent; }
+        if (t) t.textContent = 'VICTORY'; if (s) s.textContent = 'MONSTER CHAINED TO THE LAKE FLOOR!';
+        document.getElementById('v-coins').textContent = `LAKE CONTAINMENT  ·  +${reward} COINS  ·  ${save.coins} COINS`;
+        victoryEl.classList.add('show');
+      }
+    }
+    function lkcRestoreVicText() {
+      const t = victoryEl.querySelector('.v-title'), s = victoryEl.querySelector('.v-sub');
+      if (lkcVicText.t !== null && t) { t.textContent = lkcVicText.t; s.textContent = lkcVicText.s; lkcVicText.t = null; }
+    }
+    renderer.xr.addEventListener('sessionstart', () => { if (ending && ending.lake) { victoryEl.classList.remove('show'); lkcVicGroup.visible = true; lkcPlaceVic(true); } });
+    renderer.xr.addEventListener('sessionend', () => { if (ending && ending.lake) { lkcVicGroup.visible = false; victoryEl.classList.add('show'); } });
+
+    // ---------- network ----------
+    function lkcOnNet(id, d) {
+      if (d.t === 'lchS') { lkcStartSink(d.p || [0, 0, 0], d.m, true); return; }
+      if (d.m !== currentMap || !LKC.map) return;
+      if (d.t === 'lchP') {
+        if (Array.isArray(d.a)) { LKC.netA.set(+d.a[0], +d.a[1], +d.a[2]); LKC.remoteBy = id; LKC.remoteUntil = performance.now() + 600; if (LKC.held >= 0 && id < lkcSelf()) LKC.held = -1; }
+        if (Array.isArray(d.d) && lkcAuthority()) LKC.pulls.set(id, { x: +d.d[0], z: +d.d[1], t: performance.now() });
+      } else if (d.t === 'lchR') {
+        if (Array.isArray(d.a)) { LKC.pos.set(+d.a[0], +d.a[1], +d.a[2]); LKC.prev.copy(LKC.pos); }
+        if (LKC.remoteBy === id) LKC.remoteBy = null;
+      } else if (d.t === 'lchA') lkcAttach(d.w, true);
+      else if (d.t === 'lchF') lkcFree(true);
+    }
+    {
+      const baseEvtL = netOnEvent;
+      netOnEvent = function (id, d) {
+        if (d && typeof d.t === 'string' && d.t.startsWith('lch')) { try { lkcOnNet(id, d); } catch (e) { console.warn('[LakeChain]', e); } return; }
+        return baseEvtL(id, d);
+      };
+      const baseHB = handBusy;
+      handBusy = function (i) { return baseHB(i) || LKC.held === i || !!LKC.bodyGrip[i]; };
+      const baseArriveL = arrive;
+      arrive = function (id) {
+        const wasLake = !!(ending && ending.lake);
+        lkcVicGroup.visible = false; lkcRestoreVicText();
+        const r = baseArriveL(id);
+        lkcReset(id);
+        if (wasLake && id === 'waiting') { try { resetRunProgress(true); } catch (e) { } }   // a clean slate for the next match
+        return r;
+      };
+      // the objectives tab: the alternate win, under the normal checklist
+      const baseMenuObj = drawMenuObjectives;
+      drawMenuObjectives = function (g, p, y0, y1) {
+        const survivor = playerRole !== 'monster', show = survivor && currentMap !== 'waiting';
+        const r = baseMenuObj(g, p, y0, show ? y1 - 96 : y1);
+        if (!show) return r;
+        const LX = 34, LW = 330, y = y1 - 84;
+        g.save();
+        g.fillStyle = 'rgba(30,70,100,0.35)'; g.fillRect(LX - 8, y - 8, LW + 4, 88);
+        g.strokeStyle = LKC.won ? '#6dff8a' : '#5ab0e0'; g.lineWidth = 2; g.strokeRect(LX - 8, y - 8, LW + 4, 88);
+        g.textAlign = 'left'; g.textBaseline = 'middle';
+        g.fillStyle = LKC.won ? '#8aff9a' : '#9ad8ff'; g.font = `bold 17px ${UI_FONT}`;
+        g.fillText(LKC.won ? '[X] ALTERNATE WIN: STUN MONSTER' : 'ALTERNATE WIN: STUN MONSTER', LX, y + 8);
+        g.fillStyle = '#e8f4ff'; g.font = `bold 15px ${UI_FONT}`;
+        g.fillText('WITH SHOTGUN -> WRAP LAKE CHAIN ->', LX, y + 32);
+        g.fillText('SINK HIM IN DEEP WATER', LX, y + 54);
+        g.fillStyle = '#9ab0c0'; g.font = `13px ${UI_FONT}`;
+        g.fillText(LKC.att ? 'CHAINED! Drag him into deep water' : 'Chain + anchor wait by the dock', LX, y + 74);
+        g.restore();
+        return r;
+      };
+    }
+
+    // ---------- every frame ----------
+    const _lqHand = [new THREE.Vector3(), new THREE.Vector3()];
+    function updateLakeChain(dt) {
+      const on = !!LKC.map && currentMap === LKC.map && !titleActive;
+      lkcAnchor.visible = lkcLinks.visible = on;
+      if (lkcVicGroup.visible) { if (renderer.xr.isPresenting) lkcPlaceVic(false); if (!ending) lkcVicGroup.visible = false; }
+      // the sink (and the win) runs even if you're on another map: everyone in the room wins together
+      if (LKC.sink) {
+        const S = LKC.sink; S.t += dt;
+        if (S.t > LKC_SINK_T) {
+          if (playerRole !== 'monster') lkcVictory(S.map);
+          else if (LKC.att === 'self' && LKC.defeatT < 0) { LKC.defeatT = 0; showToast('CHAINED TO THE LAKE FLOOR', 'The survivors win. Back to the waiting room...'); }
+        }
+      }
+      if (LKC.defeatT >= 0 && (LKC.defeatT += dt) > 4 && !travel) { LKC.defeatT = -1; const N = netState(); N.stunT = 0; N.stunPin = null; try { goTo('waiting'); } catch (e) { } }
+      if (!on) return;
+      const vr = renderer.xr.isPresenting, now = performance.now(), survivor = playerRole !== 'monster';
+      const map = currentMap;
+      // hands
+      for (let i = 0; i < 2; i++) { const h = hands[i]; if (h && h.tracked) _lqHand[i].copy(h.last); }
+      const remoteHeld = LKC.remoteBy && now < LKC.remoteUntil;
+      if (!remoteHeld && LKC.remoteBy) LKC.remoteBy = null;
+      // ---- grabbing / letting go of the anchor's chain, gripping his chained body ----
+      if (vr && survivor && !LKC.sink && !ending) {
+        controllers.forEach((c, i) => {
+          const h = hands[i]; if (!c || !h) return;
+          const grip = btn(c, 1), trig = btn(c, 0), edge = grip && !LKC.gripWas[i], tEdge = trig && !LKC.trigWas[i];
+          LKC.gripWas[i] = grip; LKC.trigWas[i] = trig;
+          if (!h.tracked) return;
+          if (LKC.held === i) {
+            const targets = LKC.att ? [] : lkcStunnedTargets();
+            const near = targets.find((t) => t.c.distanceTo(LKC.pos) < LKC_ATTACH_R || t.c.distanceTo(_lqHand[i]) < LKC_ATTACH_R);
+            if (near && (LKC.hintT -= dt) <= 0) { LKC.hintT = 4; showToast('HE IS DOWN!', 'Let go of GRIP (or pull TRIGGER) to wrap the chain round him'); pulse(c, 0.3, 40); }
+            if (near && (tEdge || !grip)) lkcAttach(near.w, false);
+            if (!grip) { LKC.held = -1; r67Send({ t: 'lchR', m: map, a: [r3(LKC.pos.x), r3(LKC.pos.y), r3(LKC.pos.z)] }); lkcAudio.clank(0.6); }
+            return;
+          }
+          if (LKC.bodyGrip[i]) { if (!grip) LKC.bodyGrip[i] = null; return; }
+          if (!edge || handBusy(i)) return;
+          // the anchor, or the chain hanging off it
+          _lqA.copy(LKC.pos); _lqA.y += 0.12;
+          if (!remoteHeld && LKC.held < 0 && (_lqA.distanceTo(_lqHand[i]) < LKC_GRAB_R || LKC.pos.distanceTo(_lqHand[i]) < LKC_GRAB_R)) {
+            LKC.held = i; LKC.prev.copy(LKC.pos); pulse(c, 0.7, 80); lkcAudio.rattle(0.6);
+            if (!LKC.told) { LKC.told = true; showToast('HEAVY LAKE CHAIN', 'Shotgun the monster, then let go next to him to chain him up'); }
+            return;
+          }
+          // his chained body: grip and haul
+          if (LKC.att && lkcChest(LKC.att, _lqC) && _lqC.distanceTo(_lqHand[i]) < 0.75) {
+            LKC.bodyGrip[i] = { dx: _lqC.x - _lqHand[i].x, dz: _lqC.z - _lqHand[i].z }; pulse(c, 0.8, 90); lkcAudio.clank(0.5);
+          }
+        });
+      }
+      // ---- the anchor: hanging from your hand, following another player's, or lying / dragging ----
+      if (LKC.held >= 0) {
+        const H = _lqHand[LKC.held];
+        const vx = (LKC.pos.x - LKC.prev.x) * 0.97, vy = (LKC.pos.y - LKC.prev.y) * 0.97, vz = (LKC.pos.z - LKC.prev.z) * 0.97;
+        LKC.prev.copy(LKC.pos);
+        LKC.pos.x += vx; LKC.pos.y += vy - 9.8 * dt * dt; LKC.pos.z += vz;
+        _lqD.subVectors(LKC.pos, H); const dd = _lqD.length();
+        if (dd > LKC_HANG) LKC.pos.copy(H).addScaledVector(_lqD, LKC_HANG / dd);
+      } else if (remoteHeld) {
+        LKC.pos.lerp(LKC.netA, Math.min(1, dt * 12)); LKC.prev.copy(LKC.pos);
+      } else if (!LKC.sink) {
+        const vy = Math.max(-6, (LKC.pos.y - LKC.prev.y) - 9.8 * dt * dt);
+        const water = lkcDepth(map, LKC.pos.x, LKC.pos.z) > 0;
+        const vx = (LKC.pos.x - LKC.prev.x) * (water ? 0.85 : 0.9), vz = (LKC.pos.z - LKC.prev.z) * (water ? 0.85 : 0.9);
+        LKC.prev.copy(LKC.pos);
+        LKC.pos.x += vx; LKC.pos.z += vz; LKC.pos.y += water ? Math.max(vy, -0.9 * dt) : vy;
+        const fl = lkcFloor(map, LKC.pos.x, LKC.pos.z) + 0.1;
+        if (LKC.pos.y < fl) { LKC.pos.y = fl; LKC.prev.y = fl; LKC.prev.x = LKC.pos.x - vx * 0.3; LKC.prev.z = LKC.pos.z - vz * 0.3; }
+      }
+      // ---- chained: pulls, the body moving (only where he is simulated), the anchor dragging behind ----
+      let chestOk = false;
+      const axis = new THREE.Vector3(0, 1, 0);
+      if (LKC.att) chestOk = lkcChest(LKC.att, _lqC, axis);
+      if (LKC.att && !chestOk && !LKC.sink) { if (LKC.att !== 'ai' && !netPeers().get(LKC.att)) lkcFree(true); }
+      if (LKC.att && chestOk && !LKC.sink) {
+        // what you want: the anchor held taut, or his body hauled by your grip
+        let want = null;
+        if (LKC.held >= 0) {
+          const d = Math.hypot(_lqC.x - LKC.pos.x, _lqC.z - LKC.pos.z);
+          if (d > LKC_SLACK) want = [LKC.pos.x + (_lqC.x - LKC.pos.x) * (LKC_SLACK / d), LKC.pos.z + (_lqC.z - LKC.pos.z) * (LKC_SLACK / d)];
+        }
+        for (let i = 0; i < 2; i++) { const G = LKC.bodyGrip[i]; if (G) want = [_lqHand[i].x + G.dx, _lqHand[i].z + G.dz]; }
+        if (want && lkcAuthority()) LKC.pulls.set(lkcSelf(), { x: want[0], z: want[1], t: now });
+        if ((LKC.sendT -= dt) <= 0 && (LKC.held >= 0 || want)) {
+          LKC.sendT = 0.1;
+          if (!lkcAuthority() || LKC.held >= 0) r67Send({ t: 'lchP', m: map, a: LKC.held >= 0 ? [r3(LKC.pos.x), r3(LKC.pos.y), r3(LKC.pos.z)] : 0, d: want ? [r3(want[0]), r3(want[1])] : 0 });
+        }
+        if (lkcAuthority()) {
+          let n = 0, tx = 0, tz = 0;
+          for (const [id, P] of LKC.pulls) { if (now - P.t > 500) { LKC.pulls.delete(id); continue; } n++; tx += P.x; tz += P.z; }
+          if (n > 0) {
+            tx /= n; tz /= n;
+            const dx = tx - _lqC.x, dz = tz - _lqC.z, d = Math.hypot(dx, dz);
+            if (d > 0.02) {
+              const step = Math.min(d, 1.15 * (1 + 0.6 * (n - 1)) * dt), mx = dx / d * step, mz = dz / d * step;   // more survivors pulling: faster
+              if (LKC.att === 'ai') {
+                const nx = ai.pos.x + mx, nz = ai.pos.z + mz;
+                let free = inAnyLake(ai.map, nx, nz, 0.4);
+                if (!free) { try { free = circleFree(NAV[ai.map], nx, nz, 0.3, groundY(ai.map, nx, nz), false); } catch (e) { free = true; } }
+                if (free) { ai.pos.x = nx; ai.pos.z = nz; ai.pos.y = groundY(ai.map, nx, nz); ai.knock && ai.knock.set(0, 0, 0); }
+              } else {
+                const N = netState();
+                if (N.stunPin) { N.stunPin.x += mx; N.stunPin.z += mz; const fl = lkcFloor(map, N.stunPin.x, N.stunPin.z); if (lkcDepth(map, N.stunPin.x, N.stunPin.z) <= 0) N.stunPin.y = fl; }
+              }
+              _lqC.x += mx; _lqC.z += mz;
+            }
+          }
+          // deep enough: the anchor takes him down
+          if (lkcDepth(map, _lqC.x, _lqC.z) >= lkcDeep(map)) lkcStartSink([_lqC.x, _lqC.y, _lqC.z], map, false);
+          else if (!lkcStillDown()) lkcFree(false);
+        }
+        // the anchor, if nobody is holding it, scrapes along behind him on its chain
+        if (LKC.held < 0 && !remoteHeld) {
+          const d = LKC.pos.distanceTo(_lqC);
+          if (d > LKC_CHAIN_L) { LKC.pos.lerp(_lqC, 1 - LKC_CHAIN_L / d); LKC.prev.copy(LKC.pos); }
+        }
+      }
+      // ---- the sink itself: everyone moves him (visually) down to the lakebed with the anchor ----
+      if (LKC.sink && LKC.sink.here) {
+        const S = LKC.sink, f = THREE.MathUtils.smoothstep(S.t, 0.2, LKC_SINK_T * 0.85);
+        const bed = lkcBedAt(map, S.x, S.z);
+        LKC.pos.lerp(_lqA.set(S.x + 0.3, bed + 0.1, S.z), Math.min(1, dt * 3));
+        if (LKC.att === 'ai' && ai.active && aiRole() !== 'puppet') { ai.state = 'stunned'; ai.stunT = Math.max(ai.stunT, 6); ai.knock && ai.knock.set(0, 0, 0); }
+        if (LKC.att === 'self') {
+          const N = netState(); N.stunT = Math.max(N.stunT, 3);
+          if (N.stunPin) { N.stunPin.x = S.x; N.stunPin.z = S.z; N.stunPin.y = THREE.MathUtils.lerp(N.stunPin.y, lkcLevel(map) - 2.4, Math.min(1, dt * 1.2 * f + dt * 0.2)); }
+          if (Math.random() < dt * 4) controllers.forEach((c) => pulse(c, 0.5 * (1 - f), 60));
+        }
+        // bubbles
+        lkcBubbles.visible = true;
+        const pa = lkcBubGeo.attributes.position, lvl = lkcLevel(map);
+        lkcBub.forEach((b, k) => {
+          if (!b.live && Math.random() < dt * 30 * (1 - f * 0.7)) { b.live = true; b.p.set(S.x + (Math.random() - 0.5) * 0.6, Math.min(lvl - 0.05, (chestOk ? _lqC.y : bed + 0.4) + (Math.random() - 0.5) * 0.3), S.z + (Math.random() - 0.5) * 0.6); b.v = 0.4 + Math.random() * 0.8; }
+          if (b.live) { b.p.y += b.v * dt; b.p.x += Math.sin(now * 0.004 + k) * 0.002; if (b.p.y > lvl) b.live = false; }
+          pa.setXYZ(k, b.p.x, b.live ? b.p.y : -999, b.p.z);
+        });
+        pa.needsUpdate = true;
+      } else lkcBubbles.visible = false;
+      // ---- draw: anchor, chain runs, coils ----
+      lkcAnchor.position.copy(LKC.pos);
+      lkcN = 0;
+      _lqA.copy(LKC.pos); _lqA.y += 0.13;
+      if (LKC.att && chestOk) {
+        lkcRun(_lqA, _lqH.copy(_lqC).addScaledVector(axis, -0.05), LKC.held >= 0 || remoteHeld ? LKC_SLACK + 0.2 : LKC_CHAIN_L * 0.9);
+        lkcCoils(_lqC, axis, LKC.att === 'ai' ? 0.3 : 0.28);
+        _lqD.subVectors(_lqC, LKC.pos); lkcAnchor.rotation.y = Math.atan2(_lqD.x, _lqD.z);
+      } else {
+        // the loose end: lying in a heap beside the anchor
+        _lqH.copy(LKC.pos).addScaledVector(LKC.lostEnd, 0.9); _lqH.y = lkcFloor(map, _lqH.x, _lqH.z) + 0.02;
+        lkcRun(_lqA, _lqH, 1.15);
+      }
+      if (LKC.held >= 0) lkcRun(_lqHand[LKC.held], _lqA, LKC_HANG);
+      else if (remoteHeld) lkcRun(_lqH.copy(LKC.pos).setY(LKC.pos.y + LKC_HANG), _lqA, LKC_HANG);
+      lkcLinks.count = lkcN; lkcLinks.instanceMatrix.needsUpdate = true;
+    }
+    // the chained AI body: floats half under while you haul it through the water, thrashes as it sinks, then lies still on the bed
+    {
+      const baseAIL = updateAI;
+      updateAI = function (dt) {
+        const r = baseAIL(dt);
+        try {
+          if (LKC.att === 'ai' && ai.active && ai.map === currentMap) {
+            const map = currentMap, x = ai.pos.x, z = ai.pos.z, g0 = groundY(map, x, z), depth = lkcDepth(map, x, z);
+            if (depth > 0 || LKC.sink) {
+              const lvl = lkcLevel(map), bed = lkcBedAt(map, x, z);
+              let y = Math.max(g0, lvl - 0.35);
+              if (LKC.sink && LKC.sink.here) y = THREE.MathUtils.lerp(y, bed + 0.05, THREE.MathUtils.smoothstep(LKC.sink.t, 0.2, LKC_SINK_T * 0.85));
+              const dy = y - g0;
+              const roots = [aiRoot]; if (typeof monAI !== 'undefined' && monAI) roots.push(monAI.root);
+              const thrash = LKC.sink && LKC.sink.here ? Math.max(0, 1 - LKC.sink.t / (LKC_SINK_T * 0.7)) : 0, tm = performance.now() * 0.001;
+              for (const R of roots) {
+                R.position.y += dy;
+                if (thrash > 0) { R.rotation.z += Math.sin(tm * 17) * 0.18 * thrash; R.rotation.x += Math.sin(tm * 13 + 1) * 0.12 * thrash; }
+                R.updateMatrixWorld(true);
+              }
+            }
+          }
+        } catch (e) { if (!updateAI.lkWarned) { updateAI.lkWarned = true; console.warn('[LakeChain] AI', e); } }
+        return r;
+      };
+      const baseNetL = updateNet;
+      updateNet = function (dt) {
+        const r = baseNetL(dt);
+        try { updateLakeChain(dt); } catch (e) { if (!updateNet.lkWarned) { updateNet.lkWarned = true; console.warn('[LakeChain]', e); } }
+        return r;
+      };
+    }
+    lkcReset(currentMap);
+
+    // =====================================================================
+    //  DISMEMBERMENT PHYSICS: clean socket detachment, a heavy tumbling limb, clean wound caps, minimal blood
+    //  1. When an arm or head comes off (grab-and-pull rip, or any severing that goes through the rip), the part is hidden
+    //     on the survivor's rig at once and a standalone clone of that exact limb appears at its exact world position and
+    //     rotation (elbow, wrist and finger bends copied). In the monster's fist it keeps that exact offset.
+    //  2. Out of the fist it is a rigid body: gravity, a slight pull impulse from the wrench, a little spin. It arcs
+    //     down, hits the ground / floor / dock (impulses at both ends: bounce, friction, tumble), settles and lies flat.
+    //     It stays at least 18 s (the pieces are capped and the caps / burst / pools come from shared pools).
+    //  3. The open socket on the survivor and the cut end of the limb get a clean dark-crimson cap with a pale bone
+    //     centre. One small burst of dark droplets from the socket when it separates, one pool under the socket and
+    //     one under the limb where it lands. (DMX_CLEAN = false brings back the old heavy gore effects.)
+    // =====================================================================
+    const DMX_CLEAN = true, DMX_MIN_LIFE = 18;
+    const DMX = { mute: 0, force: false };
+    // ---------- one rip = one small burst: mute every other blood / meat effect while the rip runs ----------
+    {
+      const wrap = (fn) => function (...a) { if (DMX_CLEAN && DMX.mute > 0) return; return fn.apply(this, a); };
+      bloodDrop = wrap(bloodDrop); bloodBurst = wrap(bloodBurst); bloodSplat = wrap(bloodSplat); bloodPool = wrap(bloodPool);
+      bloodMist = wrap(bloodMist); meatChunks = wrap(meatChunks); ichorDrop = wrap(ichorDrop); steamPuff = wrap(steamPuff); heavySpatter = wrap(heavySpatter);
+    }
+    // ---------- the wound cap: dark crimson disc, a darker rim, a pale bone centre with a marrow dot (shared) ----------
+    const dmxCapGeo = new THREE.CircleGeometry(1, 22).rotateX(-Math.PI / 2);
+    const dmxRimGeo = new THREE.TorusGeometry(1, 0.09, 6, 22).rotateX(-Math.PI / 2);
+    const dmxCapMat = new THREE.MeshStandardMaterial({ color: 0x4a0707, roughness: 0.42, metalness: 0.05, emissive: 0x140000, side: THREE.DoubleSide });
+    const dmxRimMat = new THREE.MeshStandardMaterial({ color: 0x2c0404, roughness: 0.6 });
+    const dmxBoneMat = new THREE.MeshStandardMaterial({ color: 0xd8cfba, roughness: 0.55, side: THREE.DoubleSide });
+    const dmxMarrowMat = new THREE.MeshStandardMaterial({ color: 0x5a1010, roughness: 0.7, side: THREE.DoubleSide });
+    const dmxCapPool = [];
+    function dmxCap(neck) {
+      let g = dmxCapPool.pop();
+      if (!g) {
+        g = new THREE.Group(); g.userData.dmxCap = true;
+        const disc = new THREE.Mesh(dmxCapGeo, dmxCapMat); g.add(disc);
+        const rim = new THREE.Mesh(dmxRimGeo, dmxRimMat); rim.scale.set(0.97, 0.6, 0.97); g.add(rim);
+        const bone = new THREE.Mesh(dmxCapGeo, dmxBoneMat); bone.position.y = 0.012; g.add(bone);
+        const marrow = new THREE.Mesh(dmxCapGeo, dmxMarrowMat); marrow.position.y = 0.02; g.add(marrow);
+        g.userData.bone = bone; g.userData.marrow = marrow;
+      }
+      // the neck: a bigger vertebra set back a little; the shoulder: the ball of the arm bone, centred
+      const b = g.userData.bone, m = g.userData.marrow;
+      b.scale.setScalar(neck ? 0.3 : 0.26); b.position.set(0, 0.012, neck ? -0.22 : 0);
+      m.scale.setScalar(neck ? 0.11 : 0.08); m.position.set(0, 0.02, neck ? -0.22 : 0);
+      g.visible = true;
+      return g;
+    }
+    function dmxFreeCap(g) { if (!g) return; if (g.parent) g.parent.remove(g); g.visible = false; g.scale.setScalar(1); g.position.set(0, 0, 0); g.quaternion.identity(); if (dmxCapPool.length < 24) dmxCapPool.push(g); }
+    const dmxLayersOf = (g, mask) => g.traverse((o) => { o.layers.mask = mask; });
+
+    // ---------- the severed limb: clean cap on its cut end, no dangling extras ----------
+    {
+      const baseMSx = makeSevered;
+      makeSevered = function (part, worldScale) {
+        const g = baseMSx(part, worldScale);
+        if (!DMX_CLEAN) return g;
+        try {
+          for (const rp of g.userData.ropes || []) { if (rp.grp.parent) rp.grp.parent.remove(rp.grp); }
+          g.userData.ropes = [];
+          g.traverse((o) => { if (o.isMesh && !o.isSkinnedMesh && (o.material === boneMat || o.material === spinePaleMat || o.material === stumpMat)) o.visible = false; });
+          const cut = g.userData.cut || new THREE.Vector3();
+          const toFar = cut.clone().negate(); if (toFar.lengthSq() < 1e-8) toFar.set(0, 1, 0); toFar.normalize();   // from the cut towards the hand / top of the head
+          const sy = Math.max(0.6, worldScale.y || 1);
+          const cap = dmxCap(part === 'H');
+          cap.position.copy(cut).addScaledVector(toFar, 0.013);
+          cap.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), toFar.clone().negate());          // facing out of the cut
+          cap.scale.setScalar((part === 'H' ? 0.062 : 0.046) * sy);
+          g.add(cap);
+          g.userData.dmxCap = cap;
+          g.userData.dmxR = (part === 'H' ? 0.085 : 0.042) * sy;
+        } catch (e) { console.warn('[Dismember] piece cap', e); }
+        return g;
+      };
+      const baseDPx = dropPiece;
+      dropPiece = function (pc, remove) {
+        // a piece on the ground stays at least 18 s, even if its owner respawns or leaves (unless it's on another map
+        // or there are too many)
+        if (remove && !DMX.force && pc && pc.t < DMX_MIN_LIFE && pc.map === currentMap && gorePieces.length < 10) { pc.dmxKill = true; return; }
+        if (remove && pc && pc.g && pc.g.userData.dmxCap) { dmxFreeCap(pc.g.userData.dmxCap); pc.g.userData.dmxCap = null; }
+        return baseDPx(pc, remove);
+      };
+    }
+
+    // ---------- the moment it comes off ----------
+    const _dxM = new THREE.Matrix4(), _dxM2 = new THREE.Matrix4(), _dxP = new THREE.Vector3(), _dxQ = new THREE.Quaternion(), _dxS = new THREE.Vector3();
+    const _dxP2 = new THREE.Vector3(), _dxQ2 = new THREE.Quaternion(), _dxR = new THREE.Vector3(), _dxN = new THREE.Vector3();
+    function dmxVictimBones(r) {
+      if (r) return r.rig && r.rig.bones;
+      return survivorRig && survivorRig.local && survivorRig.local.bones;
+    }
+    // put the clone exactly where the limb was: the kept bone's world pose = the victim's bone world pose
+    function dmxMatchPose(pc, B, part) {
+      const g = pc.g, vb = part === 'H' ? B.head : B[part].u;
+      let sk = null; g.traverse((o) => { if (o.isSkinnedMesh && !sk) sk = o; });
+      if (!sk || !vb) return false;
+      const kb = sk.skeleton.bones.find((b) => b.name === vb.name);
+      if (!kb) return false;
+      // the bends below it (elbow, wrist, fingers, jaw), by bone name
+      const byName = new Map(); vb.traverse((o) => { if (o.isBone && o !== vb) byName.set(o.name, o); });
+      kb.traverse((o) => { if (o.isBone && o !== kb) { const s = byName.get(o.name); if (s) o.quaternion.copy(s.quaternion); } });
+      g.updateMatrixWorld(true);                                        // (the kept bone itself stays as built, so its cut and cap stay square to it)
+      vb.updateWorldMatrix(true, false);
+      vb.matrixWorld.decompose(_dxP, _dxQ, _dxS);                       // where the limb was (its scale ignored: it may already be shrunk)
+      kb.matrixWorld.decompose(_dxP2, _dxQ2, _dxS);                     // where the clone's limb is now
+      if (![_dxP.x, _dxP.y, _dxP.z, _dxQ.w].every(Number.isFinite)) return false;
+      const rot = _dxQ.clone().multiply(_dxQ2.clone().invert());        // turn the whole piece so its bone lines up...
+      const off = g.position.clone().sub(_dxP2).applyQuaternion(rot);
+      g.quaternion.premultiply(rot);
+      g.position.copy(_dxP).add(off);                                    // ...and move it so the bone sits where it was
+      g.updateMatrixWorld(true);
+      // its far end (the hand, after the elbow and wrist bends) for the physics
+      if (part !== 'H' && B[part].h) { const hb = kb.getObjectByName(B[part].h.name); if (hb) g.userData.dmxFar = g.worldToLocal(hb.getWorldPosition(new THREE.Vector3())); }
+      return true;
+    }
+    function dmxHandMatrix(hold, out) {
+      if (hold.local !== undefined) { const h = hands[hold.local], c = controllers[hold.local]; if (!h || !c) return null; c.getWorldQuaternion(_dxQ); return out.compose(h.last, _dxQ, _dxS.set(1, 1, 1)); }
+      if (hold.id !== undefined) { const rp = netPeers().get(hold.id), RH = rp && rp.hand[hold.h | 0]; if (!RH || !RH.ok) return null; return out.compose(RH.p, RH.q, _dxS.set(1, 1, 1)); }
+      return null;
+    }
+    {
+      const baseFxX = goreRipFx;
+      goreRipFx = function (r, part, at, hold) {
+        const n0 = gorePieces.length, last0 = gorePieces[n0 - 1];
+        DMX.mute++;
+        let out;
+        try { out = baseFxX(r, part, at, hold); } finally { DMX.mute--; }
+        if (!DMX_CLEAN) return out;
+        try {
+          const pc = gorePieces[gorePieces.length - 1];
+          const B = dmxVictimBones(r);
+          // hide the part on the rig right now (not next frame)
+          if (r && B) { try { shrinkBone(part === 'H' ? B.head : B[part].u, true); } catch (e) { } }
+          if (r && r.goreDrip) r.goreDrip[part] = 0;                     // (no long drip from the socket)
+          if (pc && pc !== last0 && pc.part === part) {
+            pc.dripT = 0;
+            if (B) dmxMatchPose(pc, B, part);
+            if (hold && dmxHandMatrix(hold, _dxM)) { pc.dmxOff = _dxM.clone().invert().multiply(pc.g.matrixWorld); }
+            // the wrench: out from the body, a bit up
+            const root = B && B.root ? B.root.getWorldPosition(new THREE.Vector3()) : at.clone().setY(at.y - 0.5);
+            _dxN.subVectors(at, root); _dxN.y = 0; if (_dxN.lengthSq() < 1e-6) _dxN.set(Math.random() - 0.5, 0, Math.random() - 0.5); _dxN.normalize();
+            pc.dmxPull = _dxN.clone().multiplyScalar(0.9 + Math.random() * 0.5).add(new THREE.Vector3(0, 0.7 + Math.random() * 0.4, 0));
+            pc.victimId = r ? r.id : 'self';
+          }
+          // one localized burst of dark droplets out of the socket, and a pool under it
+          _dxN.subVectors(at, B && B.root ? B.root.getWorldPosition(_dxR) : _dxR.copy(at).setY(at.y - 0.5)); if (_dxN.lengthSq() < 1e-6) _dxN.set(0, 1, 0); _dxN.normalize();
+          for (let k = 0; k < 16; k++) {
+            const sp = 0.7 + Math.random() * 1.1;
+            bloodDrop(at.x, at.y, at.z, _dxN.x * sp + (Math.random() - 0.5) * 0.5, Math.max(0.2, _dxN.y * sp) + Math.random() * 0.7, _dxN.z * sp + (Math.random() - 0.5) * 0.5, 0.006 + Math.random() * 0.007);
+          }
+          bloodPool(at.x, at.z, r ? r.id : 'self', part === 'H' ? 0.34 : 0.26);
+        } catch (e) { console.warn('[Dismember] rip', e); }
+        return out;
+      };
+    }
+
+    // ---------- the limb as a rigid body ----------
+    const _dxA = new THREE.Vector3(), _dxB = new THREE.Vector3(), _dxC = new THREE.Vector3(), _dxV = new THREE.Vector3(), _dxW = new THREE.Vector3(), _dxT = new THREE.Vector3();
+    const _dxUp = new THREE.Vector3(0, 1, 0), _dxQa = new THREE.Quaternion();
+    function dmxStart(pc) {
+      const g = pc.g, cut = g.userData.cut || new THREE.Vector3();
+      const D = pc.dmx = pc.dmx || {};
+      D.a = cut.clone(); D.b = g.userData.dmxFar ? g.userData.dmxFar.clone() : new THREE.Vector3();                     // the two ends (cut, hand / top of head) in the piece's frame
+      D.mid = D.a.clone().add(D.b).multiplyScalar(0.5);
+      D.r = g.userData.dmxR || (pc.part === 'H' ? 0.085 : 0.042);
+      D.invI = 1 / (pc.part === 'H' ? 0.012 : 0.028);
+      D.c = D.mid.clone().applyMatrix4(g.matrixWorld);                  // centre of mass (world)
+      D.v = pc.vel.clone().clampLength(0, 6);
+      if (pc.dmxPull && pc.t < 0.4) { D.v.add(pc.dmxPull); pc.dmxPull = null; }   // torn straight off: the wrench throws it a little
+      D.w = pc.spin.clone().multiplyScalar(0.35).clampLength(0, 4);
+      if (D.w.lengthSq() < 0.5) D.w.set((Math.random() - 0.5) * 3, (Math.random() - 0.5) * 2, (Math.random() - 0.5) * 3);
+      D.on = true; D.rest = false; D.restT = 0; D.settle = 0; D.hitT = 0;
+      pc.landed = true;                                                  // (the old fall code stands down)
+    }
+    function dmxStep(pc, dt) {
+      const D = pc.dmx, g = pc.g;
+      if (D.rest) {
+        if (D.settle < 1) {                                              // easing down flat onto the ground
+          D.settle = Math.min(1, D.settle + dt / 0.35);
+          g.quaternion.slerp(D.flatQ, Math.min(1, dt * 10));
+          dmxPlace(pc);
+          dmxLowest(pc, true);
+        }
+        return;
+      }
+      const h = Math.min(dt, 1 / 30);
+      D.v.y -= 9.8 * h;
+      D.v.multiplyScalar(Math.exp(-0.12 * h)); D.w.multiplyScalar(Math.exp(-0.3 * h));
+      D.c.addScaledVector(D.v, h);
+      const wl = D.w.length();
+      if (wl > 1e-5) { _dxQa.setFromAxisAngle(_dxT.copy(D.w).multiplyScalar(1 / wl), wl * h); g.quaternion.premultiply(_dxQa).normalize(); }
+      dmxPlace(pc);
+      // contacts: both ends and the middle against the ground under each
+      let touching = false;
+      for (const L of [D.a, D.b, D.mid]) {
+        _dxA.copy(L).applyQuaternion(g.quaternion).add(g.position);
+        const fl = goreFloor(_dxA.x, _dxA.z), pen = fl + D.r - _dxA.y;
+        if (pen <= 0) continue;
+        touching = true;
+        D.c.y += pen; g.position.y += pen; _dxA.y += pen;
+        _dxR.subVectors(_dxA, D.c);
+        _dxV.crossVectors(D.w, _dxR).add(D.v);                           // velocity of the contact point
+        const vn = _dxV.y;
+        if (vn < 0) {
+          const e = vn < -1.2 ? 0.28 : 0.05;                             // a hard landing bounces a little, a soft one doesn't
+          _dxT.crossVectors(_dxR, _dxUp);
+          const denom = 1 + _dxT.lengthSq() * D.invI;
+          const j = -(1 + e) * vn / denom;
+          D.v.y += j;
+          D.w.addScaledVector(_dxT, j * D.invI);
+          // friction: the part drags along the ground and tips over instead of sliding forever
+          _dxW.set(_dxV.x, 0, _dxV.z);
+          const vt = _dxW.length();
+          if (vt > 1e-4) {
+            const jt = Math.min(0.6 * j, vt / (1 + _dxR.lengthSq() * D.invI));
+            _dxW.multiplyScalar(-jt / vt);
+            D.v.add(_dxW);
+            D.w.add(_dxT.crossVectors(_dxR, _dxW).multiplyScalar(D.invI));
+          }
+          if (vn < -1.0 && D.hitT <= 0) {                                // the thud of it landing
+            D.hitT = 0.25;
+            try { camera.getWorldPosition(_dxB); gameAudio.squelch(Math.max(0, _dxB.distanceTo(_dxA) - 1), Math.min(1, -vn / 4)); } catch (e) { }
+            if (!pc.dmxPooled) { pc.dmxPooled = true; bloodPool(_dxA.x, _dxA.z, pc.victimId || pc.victim || 'piece', pc.part === 'H' ? 0.2 : 0.15); }
+          }
+        }
+      }
+      if (D.hitT > 0) D.hitT -= h;
+      if (touching) { D.w.multiplyScalar(Math.exp(-3.5 * h)); D.v.x *= Math.exp(-2 * h); D.v.z *= Math.exp(-2 * h); }
+      D.w.clampLength(0, 9);                                            // (a hard landing tips it over, never spins it like a top)
+      dmxPlace(pc);
+      // fell through something (or out of the world): put it back on the floor
+      const fl0 = goreFloor(D.c.x, D.c.z);
+      if (D.c.y < fl0 - 1.5) { D.c.y = fl0 + D.r + 0.05; D.v.set(0, 0, 0); dmxPlace(pc); }
+      // nearly still on the ground: settle it flat and stop simulating it
+      if (touching && Math.hypot(D.v.x, D.v.z) < 0.18 && Math.abs(D.v.y) < 0.4 && D.w.length() < 1.2) D.restT += h; else D.restT = 0;   // (gravity's own step each frame isn't motion)
+      if (D.restT > 0.3 || pc.t > 12) {
+        D.rest = true; D.settle = 0;
+        _dxA.copy(D.a).sub(D.b).applyQuaternion(g.quaternion).normalize();   // the limb's long axis...
+        _dxB.set(_dxA.x, 0, _dxA.z); if (_dxB.lengthSq() < 1e-6) _dxB.set(1, 0, 0); _dxB.normalize();
+        D.flatQ = new THREE.Quaternion().setFromUnitVectors(_dxA, _dxB).multiply(g.quaternion);   // ...laid flat, keeping its roll
+        if (!pc.dmxPooled) { pc.dmxPooled = true; bloodPool(D.c.x, D.c.z, pc.victimId || pc.victim || 'piece', pc.part === 'H' ? 0.2 : 0.15); }
+      }
+    }
+    // the piece's origin from its centre of mass and rotation
+    function dmxPlace(pc) {
+      const D = pc.dmx, g = pc.g;
+      _dxT.copy(D.mid).applyQuaternion(g.quaternion);
+      g.position.copy(D.c).sub(_dxT);
+    }
+    // lift it so its lowest end rests on the ground
+    function dmxLowest(pc, snap) {
+      const D = pc.dmx, g = pc.g;
+      let need = -Infinity;
+      for (const L of [D.a, D.b, D.mid]) { _dxA.copy(L).applyQuaternion(g.quaternion).add(g.position); need = Math.max(need, goreFloor(_dxA.x, _dxA.z) + D.r - _dxA.y); }
+      if (snap && Number.isFinite(need)) { D.c.y += need; g.position.y += need; }
+    }
+    {
+      const baseUPx = updatePieces;
+      updatePieces = function (dt) {
+        if (!DMX_CLEAN) return baseUPx(dt);
+        // pieces waiting out their 18 s
+        for (const pc of [...gorePieces]) if (pc.dmxKill && (pc.t >= DMX_MIN_LIFE || pc.map !== currentMap)) { DMX.force = true; try { dropPiece(pc, true); } finally { DMX.force = false; } }
+        // falling free: start (or restart, after being thrown) the rigid body
+        for (const pc of gorePieces) {
+          if (pc.hold) { if (pc.dmx) pc.dmx.on = false; continue; }
+          if (pc.falling && !pc.landed) { pc.g.updateMatrixWorld(true); dmxStart(pc); }
+          if (pc.dmx && pc.dmx.on) { pc.landed = true; pc.dripT = 0; }
+        }
+        DMX.mute++;                                                       // (no drip trail or landing splat from the old code)
+        let out;
+        try { out = baseUPx(dt); } finally { DMX.mute--; }
+        for (const pc of gorePieces) {
+          if (pc.map !== currentMap) continue;
+          // in a fist: keep the exact offset it had when it tore off
+          if (pc.hold && pc.dmxOff && (pc.hold.local !== undefined || pc.hold.id !== undefined) && dmxHandMatrix(pc.hold, _dxM2)) {
+            _dxM2.multiply(pc.dmxOff).decompose(pc.g.position, pc.g.quaternion, _dxS);
+          }
+          if (!pc.hold && pc.dmx && pc.dmx.on) { try { dmxStep(pc, dt); } catch (e) { pc.dmx.on = false; } }
+          if (pc.g.userData.clip) { pc.g.updateMatrixWorld(true); pc.g.userData.clip.plane.copy(pc.g.userData.clip.local).applyMatrix4(pc.g.matrixWorld); }
+        }
+        return out;
+      };
+    }
+
+    // ---------- the open socket on the survivor: a clean cap, no meat, no fountains ----------
+    {
+      const basePWx = placeWound;
+      placeWound = function (w, B, part, on, dt, fresh) {
+        if (!DMX_CLEAN) return basePWx(w, B, part, on, dt, fresh);
+        const u = w.userData;
+        for (const rp of u.ropes || []) rp.grp.visible = false;
+        if (!u.dmxCap) {
+          const mask = w.children[0] ? w.children[0].layers.mask : w.layers.mask;
+          for (const ch of w.children) ch.visible = false;                // (the old meat, lumps and fur)
+          u.dmxCap = dmxCap(part === 'H'); dmxLayersOf(u.dmxCap, mask);
+          u.dmxCap.scale.setScalar((u.r || woundSize(1, part)) * (part === 'H' ? 0.62 : 0.6));
+          w.add(u.dmxCap);
+        }
+        w.visible = on;
+        if (!on) { u.age = 0; return; }
+        if (fresh) u.age = 0;
+        const bone = part === 'H' ? B.head : B[part].u;
+        bone.getWorldPosition(w.position);
+        B.root.getWorldPosition(_wnR);
+        if (part === 'H') _wnN.set(0, 1, 0).applyQuaternion(B.root.getWorldQuaternion(_wnQ));
+        else { _wnN.subVectors(w.position, _wnR); _wnN.y = Math.max(0, _wnN.y) + _wnN.length() * 0.25; }
+        if (_wnN.lengthSq() < 1e-8) _wnN.set(0, 1, 0);
+        _wnN.normalize();
+        w.quaternion.setFromUnitVectors(_wnU, _wnN);
+        w.updateMatrixWorld(true);
+        u.age = (u.age || 0) + dt;
+        if (u.age < 4 && Math.random() < dt * 2) bloodDrop(w.position.x, w.position.y - 0.01, w.position.z, 0, -0.2, 0, 0.006);   // a few last drips
+      };
+      // the old round stumps on other survivors: the caps replace them
+      const baseRGx = updateRemoteGore;
+      updateRemoteGore = function (dt) {
+        const out = baseRGx(dt);
+        if (DMX_CLEAN) for (const r of netPeers().values()) { for (const st of Object.values(r.goreStumps || {})) st.visible = false; if (r.goreDrip) for (const k in r.goreDrip) r.goreDrip[k] = 0; }
+        return out;
+      };
     }
 
     // ---------- XR session hooks ----------
