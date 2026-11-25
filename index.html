@@ -56,7 +56,7 @@
     Four generators are spread round the bigger campground (camp, cabin row, deep woods, lakeside ridge): power all 4 to light the whole camp.<br />
     Lake (east of camp): walk down the sandy beach into the deep water, or out along the dock. You float high with your head and chest out, and only sink very slowly if you stop swimming: pull your hands back through the water to glide the way you're looking (sweep down to rise, up to dive). Find the propeller and spark plug (the propeller glints on the workbench by the dock; the spark plug is in a far cabin) and drop them at the boat's motor; find the jerrycan in another cabin and tilt it over the fuel tank's cap to pour until the gauge reads 100%. Then grab the tiller on the outboard and swing it to steer; Trigger or the thumbstick is the throttle (desktop: arrow keys). Dropped and thrown items bounce, settle and float.<br />
     After PLAY you wait in the waiting room: pick a map on the big screen, watch the MONSTER POV monitor, or spend coins at THE TRADER (shop corner). Click a thumbstick (Tab / Esc on desktop) to open the menu: turning and SURVIVOR / MONSTER (only one player can be the monster).<br />
-    Escape a map (all its generators and objectives done, then the boat) for a sunrise and coins. As the MONSTER in VR, swing the machete hard to hack doors, crates, barricades and trees, and slice branches off; B / Y puts it away, then grip a survivor's arm or head and pull. Survivors: pick up the bats, pipes, hatchets and spiked planks lying around and hit back.<br />
+    Escape a map (all its generators and objectives done, then the boat) for a sunrise and coins. As the MONSTER in VR, swing the machete hard to hack doors, crates, barricades and trees, and slice branches off; hold GRIP to keep hold of it, let go and it drops (grip next to it to pick it up), then grip a survivor's arm or head and pull. Survivors: pick up the bats, pipes, hatchets and spiked planks lying around and hit back.<br />
     Ambient horror music starts when you press PLAY in the lobby (headphones recommended).
   </div>
   <!-- GRIMAPE lobby: the menu itself is 3D (a curved panel in the scene, on desktop and in VR). These are just a hint and a fade. -->
@@ -6293,6 +6293,10 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'FIX', date: '25/11/26', title: 'PLAYTEST FIXES',
+        text: 'Monster arms and hands no longer stretch into spikes, the monster stands tall for others, it reels back when you hit it, slim wrist chains, and the grab and pick-up messages show once.' },
+      { tag: 'FIX', date: '25/11/26', title: 'MONSTER FIXES',
+        text: 'Bigger (1.3x), solid glowing eyes in the mask, no more coat or sleeve spikes, no second machete, your own hood and face out of your view. Hold GRIP to hold the machete, let go to drop it.' },
       { tag: 'UPDATE', date: '25/11/26', title: 'CUT IN HALF',
         text: 'A killing machete blow cuts a survivor in two along the swing: solid meat cross-sections, halves that fall apart and bleed out. Torn-off parts show the meat where they tore, and you can pick up and throw all of it.' },
       { tag: 'UPDATE', date: '25/11/26', title: 'THE NEW MONSTER',
@@ -17042,7 +17046,17 @@
         const b = w.c.band;
         S.cuff.add(b); b.position.set(0, CUFF_Y, 0); b.rotation.set(Math.PI / 2, 0, 0); b.scale.setScalar(CUFF_R / 0.026);
         if (fitWristWear.thin) b.geometry = fitWristWear.thin;            // (the band itself slimmer on the model's wrist)
-        for (const ch of Object.values(w.chains)) { S.cuff.add(ch); ch.position.set(0, CUFF_Y, 0); ch.rotation.set(Math.PI / 2, 0, 0); ch.scale.set(CUFF_R / 0.027 / 0.82, CUFF_R / 0.027, CUFF_R / 0.027); }   // (round on the model's wrist)
+        for (const [k, ch] of Object.entries(w.chains)) {
+          S.cuff.add(ch); ch.position.set(0, CUFF_Y, 0); ch.rotation.set(Math.PI / 2, 0, 0); ch.scale.set(1, 1, 1);
+          // rebuilt at the wrist's real size with the same small links (scaling the old ring up made the links chunky)
+          if (ch.userData.fitR !== CUFF_R) {
+            ch.userData.fitR = CUFF_R;
+            while (ch.children.length) ch.remove(ch.children[0]);
+            const n = Math.max(16, Math.round(22 * CUFF_R / 0.027 / 2) * 2);
+            const nc = linkChain(ringPoints(CUFF_R, n, 1), chainMats[k], 1.15);
+            for (const c of [...nc.children]) ch.add(c);
+          }
+        }   // (round on the model's wrist)
         S.cuff.add(w.c.charmHook);
         w.c.charmHook.scale.setScalar(CHARM_WORLD);
         w.holder.position.y = -0.0185;                                    // the charm's bail sits on the last link
@@ -19865,7 +19879,7 @@
         }
         if (best) {
           best.held = i; best.falling = false; best.tipOk = false; pulse(c, 0.5, 50);
-          if (!best.told) { best.told = true; showToast(best.kind.toUpperCase() + ' PICKED UP', 'Swing it hard at the monster'); }
+          if (!updateWeapons.told) { updateWeapons.told = true; showToast(best.kind.toUpperCase() + ' PICKED UP', 'Swing it hard at the monster'); }
         }
       });
       for (const w of weapons) {
@@ -19918,6 +19932,7 @@
           w.cool = 0.7;
           const dmg = Math.round(w.dmg[0] + Math.random() * (w.dmg[1] - w.dmg[0]) * Math.min(1, speed / 5));
           r67Send({ t: 'mdmg', d: dmg, n: playerName(), m: currentMap }, id);
+          r.monFlinchT = 0.45;                                           // (it reels back on your screen)
           bloodBurst(_wpT, 14, 0.6);
           try { gameAudio.smash(0.8); } catch (e) { }
           if (c) pulse(c, 0.9, 110);
@@ -21007,8 +21022,9 @@
       const baseGrab = netOnGrab;
       netOnGrab = function (id, d) {
         if (d.v !== netSelfId() || d.m !== currentMap || playerRole !== 'survivor') return;
+        const fresh = grabbedT <= 0;                                     // (the message once per grab, not every refresh)
         grabbedT = 1.2;
-        if (performance.now() - grabToastAt > 4000) { grabToastAt = performance.now(); return baseGrab(id, d); }
+        if (fresh && performance.now() - grabToastAt > 4000) { grabToastAt = performance.now(); return baseGrab(id, d); }
       };
     }
     function updateGrabbed(dt) {
@@ -21487,8 +21503,9 @@
     //  model's hands follow), and it's what you see if monster.glb can't be loaded.
     // =====================================================================
     const MONSTER_GLB_URL = './monster.glb';
-    const MON_AI_HEIGHT = 1.25;             // the AI monster's height in metres (cabin doors are 1.32 m, mine tunnels 2 m, a survivor's eyes ~0.4 m)
+    const MON_AI_HEIGHT = 1.25 * 1.3;       // the AI monster's height in metres (1.3x the first size: it towers over the survivors)
     const MON_EYE_FRAC = 0.885;             // its eyes, as a fraction of its height (the mask's eye holes)
+    const MON_REMOTE_MIN_H = 1.1;           // another player's monster stands at least this tall (towering over survivors)
     const MONG = { ready: false, src: null, failed: false };
     // the grip in the right hand (model frame, from the machete the model was made holding): where the fist closes and
     // how the handle runs through it (Z along the handle, -Z the way the blade points, Y the back of the blade)
@@ -21530,6 +21547,8 @@
       });
       console.log('[MonsterGLB] bones (' + names.length + '):', names.join(', '));
       if (!skinned) throw new Error('no skinned mesh in monster.glb');
+      monRepairRestPose(skinned);
+      monRemoveBakedMachete(skinned.geometry);
       sc.updateMatrixWorld(true);
       const bb = new THREE.Box3().setFromObject(skinned);
       const geoBB = (skinned.geometry.computeBoundingBox(), skinned.geometry.boundingBox);
@@ -21540,8 +21559,39 @@
       const centre = hips ? hips.getWorldPosition(new THREE.Vector3()) : box.getCenter(new THREE.Vector3());
       console.log('[MonsterGLB] size', box.getSize(new THREE.Vector3()).toArray().map((v) => v.toFixed(3)).join(' x '), 'centred on', hips ? hips.name : 'its box', centre.toArray().map((v) => v.toFixed(3)).join(', '));
       MONG.src = gltf; MONG.height = height; MONG.minY = box.min.y; MONG.cx = centre.x; MONG.cz = centre.z;
+      // the head, hood and collar left out of a copy for your own eyes (it sees only the rest of the body)
+      MONG.fpGeo = monFirstPersonGeometry(skinned.geometry);
       MONG.ready = true;
       monOnReady();
+    }
+    // a file whose bones all sit at the origin (rest pose missing): put each bone where its inverse bind matrix says
+    function monRepairRestPose(skinned) {
+      const sk = skinned.skeleton; if (!sk) return;
+      if (!sk.bones.every((b) => b.position.lengthSq() < 1e-12)) return;
+      const bindW = sk.boneInverses.map((m) => m.clone().invert());
+      const idx = new Map(sk.bones.map((b, i) => [b, i]));
+      sk.bones.forEach((b, i) => {
+        const pi = idx.get(b.parent);
+        const local = pi !== undefined ? bindW[pi].clone().invert().multiply(bindW[i]) : bindW[i].clone();
+        local.decompose(b.position, b.quaternion, b.scale);
+      });
+      console.log('[MonsterGLB] the bones had no rest pose: rebuilt it from the bind matrices');
+    }
+    // the machete the model was made holding (a second, static one): its triangles are dropped
+    function monRemoveBakedMachete(geo) {
+      const P = geo.attributes.position, I = geo.index; if (!I) return;
+      const c = new THREE.Vector3(-0.8241, 0.0417, 0.4819), d = new THREE.Vector3(0.4185, -0.7883, -0.4511), v = new THREE.Vector3();
+      const blade = (i) => { v.fromBufferAttribute(P, i).sub(c); const t = v.dot(d); const perp = v.addScaledVector(d, -t).length(); return (perp < 0.09 && t < 0.5) || (perp < 0.065 && t < 0.6); };
+      const keep = [];
+      for (let k = 0; k < I.count; k += 3) { const a = I.getX(k), b = I.getX(k + 1), e = I.getX(k + 2); if (!(blade(a) || blade(b) || blade(e))) keep.push(a, b, e); }
+      if (keep.length < I.count) { geo.setIndex(keep); console.log('[MonsterGLB] removed the built-in machete (' + ((I.count - keep.length) / 3) + ' triangles)'); }
+    }
+    function monFirstPersonGeometry(geo) {
+      const P = geo.attributes.position, I = geo.index, out = [];
+      const up = (i) => P.getY(i) > 0.2 && Math.abs(P.getX(i) - MON_MIRROR_X) < 0.3;   // head, hood, collar, upper chest
+      for (let k = 0; k < I.count; k += 3) { const a = I.getX(k), b = I.getX(k + 1), e = I.getX(k + 2); if (!(up(a) && up(b) && up(e)) && !(up(a) || up(b) || up(e))) out.push(a, b, e); }
+      const g = geo.clone(); g.setIndex(out);
+      return g;
     }
     // one copy of the model, normalised: root (moved by the game) -> fit (scale, offset) -> the glTF scene
     function monInstance(opts) {
@@ -21592,9 +21642,29 @@
         eye.position.set(MON_MIRROR_X - hw.x, 0.70 - hw.y, 0.06 - hw.z);       // the mask's eye holes (model units)
         bones.head.add(eye);
       }
+      // behind the mask's eye holes: the dark inside of the head and two glowing crimson eyes (never see-through)
+      if (bones.head) {
+        const inside = new THREE.Mesh(new THREE.SphereGeometry(0.115, 16, 12), new THREE.MeshBasicMaterial({ color: 0x050303 }));
+        inside.position.set(0, -0.01, -0.13); eye.add(inside);
+        for (const sx of [-1, 1]) {
+          const orb = new THREE.Mesh(new THREE.SphereGeometry(0.022, 12, 10), new THREE.MeshBasicMaterial({ color: 0xff1a10, fog: false }));
+          orb.position.set(sx * 0.065, 0, -0.035); eye.add(orb);
+          const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xff1808, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+          glow.scale.setScalar(0.08); glow.position.set(sx * 0.065, 0, -0.01); eye.add(glow);
+        }
+      }
+      // your own copy: the whole body for everyone else's view (POV monitor, desktop), and a copy without the head,
+      // hood and collar for your headset's eyes
+      if (opts && opts.firstPerson && MONG.fpGeo) {
+        const fp = new THREE.SkinnedMesh(MONG.fpGeo, mesh.material);
+        fp.frustumCulled = false; fp.castShadow = false;
+        mesh.add(fp); fp.bind(mesh.skeleton, mesh.bindMatrix);
+        mesh.layers.set(SURVIVOR_BODY_LAYER); fp.layers.set(SURVIVOR_ARMS_LAYER);
+        eye.traverse((o) => o.layers.set(SURVIVOR_BODY_LAYER));
+      }
       root.visible = false;
       scene.add(root);
-      const inst = { root, fit, scene0, mesh, byName, bones, eye, height: 1, walkPhase: 0, speed: 0, prevPos: new THREE.Vector3(), hasPrev: false, aIsRight };
+      const inst = { root, fit, scene0, mesh, byName, bones, eye, height: 1, walkPhase: 0, speed: 0, prevPos: new THREE.Vector3(), hasPrev: false, aIsRight, firstPerson: !!(opts && opts.firstPerson) };
       return inst;
     }
     function find0(byName, re) { for (const [n, b] of Object.entries(byName)) if (re.test(n)) return b; return null; }
@@ -21615,14 +21685,18 @@
       bone.updateMatrixWorld(true);
     }
     // aim a bone so the direction to its child (in rest) points along dirWorld
+    const _aimQI = new THREE.Quaternion();
+    const MON_ARM_MAX = 0.95, MON_FORE_MAX = 1.1, MON_HAND_MAX = 1.2;      // (tighter: the auto-rigged sleeves tear into spikes past these)                        // the most the upper arm / forearm turn from rest (radians)
     const _aimDir = new THREE.Vector3(), _aimC = new THREE.Vector3(), _aimR = new THREE.Vector3(), _aimQ = new THREE.Quaternion(), _aimQp = new THREE.Quaternion();
-    function aimBone(bone, child, dirWorld) {
+    function aimBone(bone, child, dirWorld, maxAngle) {
       _aimDir.copy(dirWorld).normalize();
       _aimC.copy(child.userData.rest.p).normalize();                        // the child direction in the bone's own frame
       bone.parent.getWorldQuaternion(_aimQp);
       const qRestW = _aimQp.multiply(bone.userData.rest.q);                 // the bone's world rotation at rest
       _aimR.copy(_aimC).applyQuaternion(qRestW);                            // ... and the child direction then
       _aimQ.setFromUnitVectors(_aimR, _aimDir);
+      // never twisted further than this from its rest pose (a sleeve pulled too far tears into spikes)
+      if (maxAngle) { const ang = 2 * Math.acos(Math.min(1, Math.abs(_aimQ.w))); if (ang > maxAngle) _aimQ.slerp(_aimQI.identity(), 1 - maxAngle / ang); }
       setBoneWorldQ(bone, _aimQ.multiply(qRestW));
     }
     // two-bone arm IK: the hand bone to a world grip (position + rotation of the fist), the elbow bowed out and down
@@ -21648,37 +21722,38 @@
       const pole = new THREE.Vector3(sideSign * (elbowOut ?? 0.6), -1, -0.35).applyQuaternion(inst.root.quaternion);
       pole.addScaledVector(dir, -pole.dot(dir)).normalize();
       const E = S.clone().addScaledVector(dir, x).addScaledVector(pole, h);
-      aimBone(C.u, C.f, _mgA.subVectors(E, S));
+      aimBone(C.u, C.f, _mgA.subVectors(E, S), MON_ARM_MAX);
       const Ew = C.f.getWorldPosition(new THREE.Vector3());
-      aimBone(C.f, C.h, _mgB.subVectors(S.clone().add(d0), Ew));
-      setBoneWorldQ(C.h, qh);
+      aimBone(C.f, C.h, _mgB.subVectors(S.clone().add(d0), Ew), MON_FORE_MAX);
+      // the hand turned to the grip, but never twisted further than MON_HAND_MAX from how it rests on the forearm
+      C.h.parent.getWorldQuaternion(_mgQ3);
+      const loc = _mgQ3.invert().multiply(qh), restQ = C.h.userData.rest.q;
+      const ang = 2 * Math.acos(Math.min(1, Math.abs(restQ.dot(loc))));
+      if (ang > MON_HAND_MAX) loc.slerp(restQ, 1 - MON_HAND_MAX / ang);
+      C.h.quaternion.copy(loc); C.h.updateMatrixWorld(true);
     }
     function boneRot(b, x, y, z) {                                         // rest rotation, then this (model-frame Euler)
       if (!b) return;
       b.quaternion.copy(b.userData.rest.q).multiply(_mgQ.setFromEuler(new THREE.Euler(x, y, z, 'YXZ')));
     }
-    // legs: a heavy stalking stride (phase 0..2pi), amount 0..1
+    // legless under the long coat: the legs, hips and coat hem stay in their bind pose (bending them pulls the hem into
+    // spikes); walking is a subtle bob and sway of the whole body, and the head looks where it looks
     function monLegs(inst, phase, amt, crouch) {
-      const L = inst.bones.L, R = inst.bones.R;
-      const sw = 0.36 * amt;                                                // (the long coat swings with the thighs: kept moderate)
-      boneRot(L.ul, -Math.sin(phase) * sw - crouch * 0.3, 0, 0);
-      boneRot(R.ul, Math.sin(phase) * sw - crouch * 0.3, 0, 0);
-      boneRot(L.l, Math.max(0, -Math.cos(phase)) * 0.55 * amt + crouch * 0.5, 0, 0);
-      boneRot(R.l, Math.max(0, Math.cos(phase)) * 0.55 * amt + crouch * 0.5, 0, 0);
-      boneRot(L.ft, Math.sin(phase) * 0.2 * amt - crouch * 0.2, 0, 0);
-      boneRot(R.ft, -Math.sin(phase) * 0.2 * amt - crouch * 0.2, 0, 0);
-      const hp = inst.bones.root;
-      if (hp) { hp.position.copy(hp.userData.rest.p); hp.position.y += (-Math.abs(Math.cos(phase)) * 0.025 * amt - crouch * 0.06); }
+      inst.bob = -Math.abs(Math.cos(phase)) * 0.018 * amt - crouch * 0.03;   // (fraction of its height)
+      inst.sway = Math.sin(phase) * 0.035 * amt;
     }
-    // the torso swaying with the stride, leaning into a chase; the head looking where it looks
     function monTorso(inst, phase, amt, lean, headYaw, headPitch) {
       const B = inst.bones;
-      boneRot(B.root, 0, Math.sin(phase) * 0.12 * amt, Math.sin(phase) * 0.04 * amt);
-      boneRot(B.spine, lean * 0.5, -Math.sin(phase) * 0.06 * amt, -Math.sin(phase) * 0.05 * amt);
-      boneRot(B.spine1, lean * 0.3, -Math.sin(phase) * 0.05 * amt, 0);
-      boneRot(B.spine2, lean * 0.2 + Math.sin(phase * 2) * 0.02 * amt, 0, 0);
-      boneRot(B.neck, -lean * 0.4 + headPitch * 0.3, headYaw * 0.35, 0);
-      boneRot(B.head, -lean * 0.4 + headPitch * 0.7, headYaw * 0.65, 0);
+      inst.lean = lean * 0.35;
+      boneRot(B.neck, headPitch * 0.25, headYaw * 0.3, 0);
+      boneRot(B.head, headPitch * 0.6, headYaw * 0.6, 0);
+    }
+    // the bob / sway / lean on the whole body (after it's placed)
+    function monBodyMotion(inst) {
+      inst.root.position.y += (inst.bob || 0) * inst.height;
+      inst.root.rotation.x += inst.lean || 0;
+      inst.root.rotation.z += inst.sway || 0;
+      inst.bob = inst.sway = inst.lean = 0;
     }
     // the machete onto the right hand bone (its grip frame, at a given size in metres)
     // (worldScale: its size in metres-per-machete-unit; null = the size the model was made with)
@@ -21726,11 +21801,11 @@
         monLegs(I, 0, 0, 0.35 * lim);
         boneRot(I.bones.head, 0.4 * lim, Rg.loll * lim, 0.3 * Rg.loll * lim);
         boneRot(I.bones.neck, 0.2 * lim, 0, 0);
-        boneRot(I.bones.spine, -0.15 * lim, 0, 0.1 * lim);
+
         for (const sd of ['L', 'R']) {                                     // the arms flung out, limp on the ground
           const C = I.bones[sd], k = sd === 'R' ? -1 : 1;
-          boneRot(C.u, -0.5 * lim, 0, k * 1.1 * lim);
-          boneRot(C.f, -0.4 * lim, 0, k * 0.3 * lim);
+          boneRot(C.u, -0.35 * lim, 0, k * 0.6 * lim);
+          boneRot(C.f, -0.3 * lim, 0, k * 0.2 * lim);
         }
         I.root.updateMatrixWorld(true);
         return;
@@ -21743,8 +21818,9 @@
       const amt = moving ? THREE.MathUtils.clamp(I.speed / 1.2, 0.35, 1) : 0;
       I.walkPhase += dt * (moving ? 2.2 + I.speed * 2.6 : 0);
       const lean = chasing ? 0.28 : 0.08;
-      monLegs(I, I.walkPhase, amt, chasing ? 0.25 : 0.1);
+      monLegs(I, I.walkPhase, amt, 0);
       monTorso(I, I.walkPhase, amt, lean, THREE.MathUtils.clamp(ai.headYaw || 0, -1.1, 1.1), ai.headPitch || 0);
+      monBodyMotion(I);
       I.root.updateMatrixWorld(true);
       // arms: the machete arm slashes (the old body's wind-up / strike: its hand is the target), otherwise both swing
       const arms = aiParts.arms;
@@ -21756,7 +21832,7 @@
           monArmIK(I, 'R', _mgD, _mgQ2, 0.9);
         } else {
           // hanging and swinging opposite the legs; the machete held low and forward
-          const sw = Math.sin(I.walkPhase + (sd === 'R' ? 0 : Math.PI)) * 0.45 * amt;
+          const sw = Math.sin(I.walkPhase + (sd === 'R' ? 0 : Math.PI)) * 0.3 * amt;
           boneRot(C.u, sw - (sd === 'R' ? 0.25 : 0), 0, 0);
           boneRot(C.f, -0.35 - (sd === 'R' ? 0.5 : 0.15) - Math.max(0, sw) * 0.4, 0, 0);
         }
@@ -21777,12 +21853,12 @@
     let monMe = null, monMeH = 0.6;
     const _mmHead = new THREE.Vector3(), _mmQ = new THREE.Quaternion(), _mmFlip = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
     function floorUnder(map, x, z) { try { return groundY(map === 'waiting' ? 'waiting' : map, x, z) || 0; } catch (e) { return 0; } }
-    function poseMonsterGlb(inst, dt, headPos, headQ, bodyYaw, map, grips) {
+    function poseMonsterGlb(inst, dt, headPos, headQ, bodyYaw, map, grips, minH) {
       // the body stands under the head: feet on the floor, as tall as its eyes are high (it crouches with you)
       let fl = floorUnder(map, headPos.x, headPos.z);
       let hTarget = THREE.MathUtils.clamp((headPos.y - fl) / MON_EYE_FRAC, 0.4, 1.3);
       inst.hMax = Math.max((inst.hMax || hTarget) - dt * 0.02, hTarget);    // its standing height: the tallest you've stood lately
-      const H = Math.min(inst.hMax, 1.3);
+      const H = Math.max(minH || 0, Math.min(inst.hMax, 1.3));            // (others' monsters: never smaller than minH)
       if (headPos.y - fl > H * MON_EYE_FRAC + 0.25) fl = headPos.y - H * MON_EYE_FRAC;   // up off the floor (a boat, a jump): legs dangle under you
       const crouch = THREE.MathUtils.clamp(1 - (headPos.y - fl) / (H * MON_EYE_FRAC), 0, 0.6);
       monSetHeight(inst, H);
@@ -21800,7 +21876,7 @@
       inst.prevPos.copy(headPos); inst.hasPrev = true;
       const moving = inst.speed > 0.15, amt = THREE.MathUtils.clamp(inst.speed / 1.0, 0, 1);
       inst.walkPhase += dt * (moving ? 2 + inst.speed * 3 : 0);
-      monLegs(inst, inst.walkPhase, amt, crouch);
+      monLegs(inst, inst.walkPhase, amt, 0);
       // the head turned with yours (relative to the body)
       let hy = 0, hp = 0;
       if (headQ) {
@@ -21809,8 +21885,10 @@
         hy = Math.atan2(Math.sin(yawHead - bodyYaw), Math.cos(yawHead - bodyYaw));
         hp = -Math.asin(THREE.MathUtils.clamp(_mgD.y, -1, 1));
       }
-      monTorso(inst, inst.walkPhase, amt * 0.6, crouch * 0.5, THREE.MathUtils.clamp(hy, -1.2, 1.2), THREE.MathUtils.clamp(hp, -0.9, 0.9));
+      monTorso(inst, inst.walkPhase, amt * 0.6, 0, THREE.MathUtils.clamp(hy, -1.2, 1.2), THREE.MathUtils.clamp(hp, -0.9, 0.9));
+      monBodyMotion(inst);
       inst.root.updateMatrixWorld(true);
+      void crouch;
       // hands to the grips (controllers), or hanging at the sides
       for (const sd of ['R', 'L']) {
         const g = grips && grips[sd];
@@ -21838,7 +21916,7 @@
       }
       poseMonsterGlb(I, dt, _mmHead, vr ? _mmQ : null, monsterYaw + Math.PI, currentMap, grips);
       // the machete at its usual size in your hand
-      monCarryMachete(I, mMachete, PLAYER_SCALE);
+      if (macheteInHand()) monCarryMachete(I, mMachete, PLAYER_SCALE);
       // fists bloody after tearing someone apart
       for (const [k, sd] of [[0, 'L'], [1, 'R']]) {
         const fb = ownFistBlood[k], C = I.bones[sd];
@@ -21869,8 +21947,8 @@
       renderer.render = function (sc, cam) {
         let hidden = null;
         if (sc === scene) {
-          if (cam === camera && renderer.xr.isPresenting && monMe && monMe.root.visible) hidden = monMe;
-          else if (cam === monsterPovCamera) hidden = povState.src && povState.src.inst;
+          if (cam === camera && monMe && monMe.root.visible) survivorHideBodyFromEyes(renderer.xr.isPresenting);   // (your eyes: the copy without the head)
+          if (cam === monsterPovCamera) hidden = povState.src && povState.src.inst;
         }
         const hb = hidden && hidden.bones.head;
         if (hb) { hb.scale.setScalar(0.001); hb.updateMatrixWorld(true); }
@@ -21921,9 +21999,15 @@
         const grips = {};
         if (s.vr) for (const [k, sd] of [[0, 'L'], [1, 'R']]) { const H = r.hand[k]; if (H && H.ok) grips[sd] = { p: H.p, q: H.q }; }
         _rmHead.copy(r.pos);
-        poseMonsterGlb(I, dt, _rmHead, r.quat, r.yaw + Math.PI, s.m, grips);
-        monCarryMachete(I, r.monGlbMachete, PLAYER_SCALE);
-        r.monGlbMachete.visible = !s.mu;
+        poseMonsterGlb(I, dt, _rmHead, r.quat, r.yaw + Math.PI, s.m, grips, MON_REMOTE_MIN_H);
+        // hit by a survivor's weapon: it reels back for a moment
+        if (r.monFlinchT > 0) {
+          r.monFlinchT = Math.max(0, r.monFlinchT - dt);
+          const k = Math.sin((1 - r.monFlinchT / 0.45) * Math.PI);
+          I.root.rotation.x -= 0.28 * k; boneRot(I.bones.head, -0.5 * k, 0, 0.2 * k);
+          I.root.updateMatrixWorld(true);
+        }
+        remoteMachete(r, I, s);
       }
     }
     {
@@ -21948,7 +22032,7 @@
       }
       if (aiMacheteClone) { aiMacheteClone.visible = true; monCarryMachete(monAI, aiMacheteClone, null); monAI.keep.add(aiMacheteClone); aiMacheteClone.traverse((o) => monAI.keep.add(o)); }
       // you
-      monMe = monInstance(null);
+      monMe = monInstance({ firstPerson: true });
       monMe.keep = new Set();
       mMachete.traverse((o) => monMe.keep.add(o));
       for (const fb of ownFistBlood) fb.traverse((o) => monMe.keep.add(o));
@@ -22280,6 +22364,164 @@
         try { trackBlade(); } catch (e) { }
         const r = baseNet7(dt);
         for (const f of [updateHalves, lateSlices, updateGorePickup]) { try { f(dt); } catch (e) { if (!f.warned) { f.warned = true; console.warn('[r75]', f.name, e); } } }
+        return r;
+      };
+    }
+
+    // =====================================================================
+    //  THE MACHETE IN THE MONSTER'S FIST: hold GRIP to hold it, let go and it drops
+    //  (B / Y no longer does anything for the monster.) You start with it in your right hand; from the first time you
+    //  squeeze GRIP, letting go opens the hand and the machete falls (with your swing) onto the ground. Squeeze GRIP with
+    //  your right hand next to it to pick it back up. While it's out of your hand your free hands grab and rip. It
+    //  comes back to your hand if it's lost for 25 s, or when you change map. Everyone sees it in your hand, or lying
+    //  where it fell (shared over Trystero with your state).
+    // =====================================================================
+    const MCH = { state: 'hand', everGripped: false, vel: new THREE.Vector3(), spin: new THREE.Vector3(), lostT: 0, map: null, gripWas: false, prevHand: new THREE.Vector3(), prevOk: false, landed: false, yaw: 0 };
+    const macheteInHand = () => MCH.state === 'hand';
+    const _mcG = new THREE.Vector3(), _mcQq = new THREE.Quaternion(), _mcM = new THREE.Matrix4(), _mcPi = new THREE.Matrix4(), _mcSs = new THREE.Vector3(), _mcFwd = new THREE.Vector3();
+    function rightHandIndex() {
+      const i = controllers.findIndex((c) => c.userData.inputSource?.handedness === 'right');
+      return i >= 0 ? i : 1;
+    }
+    function macheteToHand() {
+      MCH.state = 'hand'; MCH.landed = false;
+      if (monMe) monCarryMachete(monMe, mMachete, PLAYER_SCALE);
+      else { mArms[0].hand.add(mMachete); mMachete.position.set(0, 0, 0); mMachete.quaternion.identity(); mMachete.scale.set(1, 1, 1); }
+      mMachete.visible = true;
+    }
+    function macheteDrop(vel) {
+      scene.attach(mMachete);                                               // (keeps where it is in the world)
+      MCH.state = 'world'; MCH.landed = false; MCH.lostT = 0; MCH.map = currentMap;
+      MCH.vel.copy(vel).clampLength(0, 7);
+      MCH.spin.set((Math.random() - 0.5) * 6, (Math.random() - 0.5) * 6, (Math.random() - 0.5) * 6);
+      try { gameAudio.clink(0.8); } catch (e) { }
+      netSendState(true);
+    }
+    // replaces the B / Y toggle
+    updateMonsterHands = function () {
+      const vr = renderer.xr.isPresenting;
+      if (playerRole !== 'monster' || titleActive) {
+        if (MCH.state !== 'hand') macheteToHand();
+        MCH.everGripped = false; MCH.gripWas = false; MCH.prevOk = false;
+        monUnarmed = false;
+        return;
+      }
+      const i = rightHandIndex(), c = controllers[i], h = hands[i];
+      const grip = vr && !!c && btn(c, 1), edge = grip && !MCH.gripWas;
+      MCH.gripWas = grip;
+      const hv = new THREE.Vector3();
+      if (h && h.tracked) { if (MCH.prevOk) hv.subVectors(h.last, MCH.prevHand).multiplyScalar(60); MCH.prevHand.copy(h.last); MCH.prevOk = true; } else MCH.prevOk = false;
+      if (MCH.state === 'hand') {
+        if (grip) MCH.everGripped = true;
+        if (vr && MCH.everGripped && !grip && h && h.tracked) {
+          macheteDrop(hv);
+          if (c) pulse(c, 0.4, 40);
+          if (!MCH.toldDrop) { MCH.toldDrop = true; showToast('MACHETE DROPPED', 'Hands free: grip an arm or head and PULL. Grip next to the machete to pick it up'); }
+        }
+      } else {
+        MCH.lostT += 1 / 60;
+        if (edge && h && h.tracked) {
+          mMachete.getWorldPosition(_mcG);
+          if (_mcG.distanceTo(h.last) < 0.4) {                               // picked back up (the grip closes round it)
+            macheteToHand(); MCH.everGripped = true;
+            if (c) pulse(c, 0.6, 60);
+            try { gameAudio.scrape(1); } catch (e) { }
+            netSendState(true);
+          }
+        }
+        if (MCH.state !== 'hand' && (MCH.lostT > 25 || MCH.map !== currentMap)) { macheteToHand(); MCH.everGripped = false; showToast('MACHETE', 'Back in your hand'); netSendState(true); }
+      }
+      monUnarmed = MCH.state !== 'hand';
+      mMachete.visible = true;
+    };
+    // the dropped machete falls, tumbles and lies flat on the ground
+    function updateDroppedMachete(dt) {
+      if (MCH.state !== 'world' || MCH.landed) return;
+      const m = mMachete;
+      MCH.vel.y -= 9.8 * dt;
+      m.position.addScaledVector(MCH.vel, dt);
+      m.rotation.x += MCH.spin.x * dt; m.rotation.y += MCH.spin.y * dt; m.rotation.z += MCH.spin.z * dt;
+      let fl = 0; try { fl = groundY(currentMap, m.position.x, m.position.z) || 0; } catch (e) { }
+      if (m.position.y < fl + 0.03) {
+        m.position.y = fl + 0.03;
+        _mcFwd.set(0, 0, -1).applyQuaternion(m.quaternion);
+        MCH.yaw = Math.atan2(-_mcFwd.x, -_mcFwd.z);
+        m.quaternion.setFromEuler(new THREE.Euler(0, MCH.yaw, Math.PI / 2, 'YXZ'));   // blade flat on the ground
+        MCH.landed = true; MCH.vel.set(0, 0, 0);
+        try { gameAudio.clink(1); } catch (e) { }
+        netSendState(true);
+      }
+    }
+    // the machete exactly in your fist (where the controller is), even where the arm can't quite reach
+    function placeMacheteExactly(machete, p, q, scale) {
+      if (!machete.parent) return;
+      machete.parent.updateMatrixWorld(true);
+      _mcM.compose(p, q, _mcSs.setScalar(scale));
+      _mcPi.copy(machete.parent.matrixWorld).invert().multiply(_mcM).decompose(machete.position, machete.quaternion, machete.scale);
+    }
+    {
+      const baseUMM2 = updateMonsterModel;
+      updateMonsterModel = function (dt) {
+        const r = baseUMM2(dt);
+        try {
+          if (playerRole === 'monster' && MCH.state === 'hand' && monMe && monMe.root.visible && renderer.xr.isPresenting) {
+            mArms[0].hand.getWorldPosition(_mcG); _mcQq.copy(monsterModel.quaternion).multiply(mArms[0].hand.quaternion);
+            placeMacheteExactly(mMachete, _mcG, _mcQq, PLAYER_SCALE);
+          }
+        } catch (e) { }
+        return r;
+      };
+    }
+    // your state tells everyone where the machete is
+    {
+      const baseSE2 = r67StateExtra;
+      r67StateExtra = function (d) {
+        baseSE2(d);
+        if (playerRole === 'monster') {
+          d.mu = MCH.state === 'hand' ? 0 : 1;
+          if (MCH.state === 'world') { const p = mMachete.position; d.mw = [r3(p.x), r3(p.y), r3(p.z), r3(MCH.landed ? MCH.yaw : 0), MCH.landed ? 1 : 0]; }
+        }
+      };
+    }
+    {
+      const baseOS3 = netOnState;
+      netOnState = function (id, d) { const r = baseOS3(id, d); const p = netPeers().get(id); if (p && p.st && d) p.st.mw = Array.isArray(d.mw) ? d.mw : null; return r; };
+    }
+    // another player's machete: in their fist, or lying where they dropped it
+    function remoteMachete(r, I, s) {
+      const M = r.monGlbMachete; if (!M) return;
+      if (s.mu && Array.isArray(s.mw)) {
+        if (M.parent !== scene) scene.attach(M);
+        M.position.set(+s.mw[0] || 0, +s.mw[1] || 0, +s.mw[2] || 0);
+        if (s.mw[4]) M.quaternion.setFromEuler(new THREE.Euler(0, +s.mw[3] || 0, Math.PI / 2, 'YXZ'));
+        M.scale.setScalar(PLAYER_SCALE);
+        M.visible = s.m === currentMap;
+      } else if (!s.mu) {
+        monCarryMachete(I, M, PLAYER_SCALE);
+        const H = r.hand[1];
+        if (s.vr && H && H.ok) placeMacheteExactly(M, H.p, H.q, PLAYER_SCALE);
+        M.visible = true;
+      } else M.visible = false;
+    }
+    {
+      const baseRR5 = removeRemote;
+      removeRemote = function (r) { try { if (r.monGlbMachete && r.monGlbMachete.parent) r.monGlbMachete.parent.remove(r.monGlbMachete); } catch (e) { } return baseRR5(r); };
+    }
+    {
+      const baseNet8 = updateNet;
+      updateNet = function (dt) { const r = baseNet8(dt); try { updateDroppedMachete(dt); } catch (e) { } return r; };
+    }
+    {
+      // held back from a wall: the machete stays exactly on the held-back fist
+      const baseCM2 = clampMachete;
+      clampMachete = function (dt) {
+        const r = baseCM2(dt);
+        try {
+          if (bladeContact && playerRole === 'monster' && MCH.state === 'hand' && monMe && monMe.root.visible) {
+            mArms[0].hand.getWorldPosition(_mcG); _mcQq.copy(monsterModel.quaternion).multiply(mArms[0].hand.quaternion);
+            placeMacheteExactly(mMachete, _mcG, _mcQq, PLAYER_SCALE);
+          }
+        } catch (e) { }
         return r;
       };
     }
