@@ -6293,6 +6293,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'FIX', date: '25/11/26', title: 'SAFE WAITING ROOM',
+        text: 'Nobody can be hit, grabbed, ripped or cut in the waiting room any more, and the monster coat sleeves no longer spike when its arms move.' },
       { tag: 'FIX', date: '25/11/26', title: 'PLAYTEST FIXES',
         text: 'Monster arms and hands no longer stretch into spikes, the monster stands tall for others, it reels back when you hit it, slim wrist chains, and the grab and pick-up messages show once.' },
       { tag: 'FIX', date: '25/11/26', title: 'MONSTER FIXES',
@@ -21686,7 +21688,7 @@
     }
     // aim a bone so the direction to its child (in rest) points along dirWorld
     const _aimQI = new THREE.Quaternion();
-    const MON_ARM_MAX = 0.95, MON_FORE_MAX = 1.1, MON_HAND_MAX = 1.2;      // (tighter: the auto-rigged sleeves tear into spikes past these)                        // the most the upper arm / forearm turn from rest (radians)
+    const MON_ARM_MAX = 0.6, MON_FORE_MAX = 0.7, MON_HAND_MAX = 0.8;        // (tighter: the auto-rigged sleeves tear into spikes past these)                        // the most the upper arm / forearm turn from rest (radians)
     const _aimDir = new THREE.Vector3(), _aimC = new THREE.Vector3(), _aimR = new THREE.Vector3(), _aimQ = new THREE.Quaternion(), _aimQp = new THREE.Quaternion();
     function aimBone(bone, child, dirWorld, maxAngle) {
       _aimDir.copy(dirWorld).normalize();
@@ -22524,6 +22526,20 @@
         } catch (e) { }
         return r;
       };
+    }
+
+    // =====================================================================
+    //  THE WAITING ROOM IS SAFE: no machete hits, grabs, rips or cuts in there (a monster player waiting with you
+    //  could kill you before the match had even started, which reset everyone's tasks)
+    // =====================================================================
+    const inLobby = () => currentMap === 'waiting';
+    {
+      const bMH = updateMacheteHits; updateMacheteHits = function (dt) { if (inLobby()) { netState().tip = null; return; } return bMH(dt); };
+      const bOH = netOnHit; netOnHit = function (id, d) { if (inLobby() || (d && d.m === 'waiting')) return; return bOH(id, d); };
+      const bGG = updateGoreGrabs; updateGoreGrabs = function (dt) { if (inLobby()) { goreHold[0] = goreHold[1] = null; return; } return bGG(dt); };
+      const bRip = netOnRip; netOnRip = function (id, d) { if (inLobby() || (d && d.m === 'waiting')) return; return bRip(id, d); };
+      const bGrab = netOnGrab; netOnGrab = function (id, d) { if (inLobby() || (d && d.m === 'waiting')) return; return bGrab(id, d); };
+      const bSl = netOnSlice; netOnSlice = function (id, d) { if (inLobby() || (d && d.m === 'waiting')) return; return bSl(id, d); };
     }
 
     // ---------- XR session hooks ----------
