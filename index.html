@@ -6293,6 +6293,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'FIX', date: '26/11/26', title: 'MONSTER LOAD CHECK',
+        text: 'The old built-in monster can no longer show through once monster.glb loads, and a status line says MONSTER GLB: LOADED (or the exact error and address if it fails). Trigger and Grip now curl the right survivor fingers.' },
       { tag: 'NEW', date: '26/11/26', title: 'THE NEW MONSTER 2',
         text: 'The new monster model: 2.45 tall, legless under its long coat, huge gloved hands with a clawed thumb. Hold Grip and that hand closes into a fist round the machete; let go and it opens and the machete drops. Its eyes glow red behind the mask, and your own view never shows its head or chest.' },
       { tag: 'NEW', date: '26/11/26', title: 'THE KILL',
@@ -16484,7 +16486,7 @@
       const A = inst.bones[side === 'L' ? 'L' : 'R'], b = A.bind;
       // the fingers: Trigger, Grip and X / A curl their bones towards the palm
       if (curl) {
-        const groups = [A.fingers.trig, A.fingers.grip, A.fingers.thumb];
+        const groups = [A.fingers.grip, A.fingers.trig, A.fingers.thumb];   // (Trigger and Grip: each curls the finger the other used to)
         for (let g = 0; g < 3; g++) for (const bone of groups[g]) bone.quaternion.setFromAxisAngle(bone.userData.curlAxis, Math.min(1, Math.max(0, curl[g] || 0)) * (bone.userData.curlAmt || 0.9));
       }
       inst.mesh.updateWorldMatrix(true, false);
@@ -21547,9 +21549,61 @@
 
     function monLoad() {
       const url = MONSTER_GLB_URL + '?v=' + Date.now();
+      let resolved = url; try { resolved = new URL(url, location.href).href; } catch (e) { }
+      monStatus('MONSTER GLB: LOADING ' + resolved, 'wait');
       new GLTFLoader().load(url, (gltf) => {
-        try { monPrepare(gltf); } catch (e) { MONG.failed = true; console.error('[MonsterGLB] could not set up monster.glb', e); }
-      }, undefined, (err) => { MONG.failed = true; console.warn('[MonsterGLB] monster.glb not loaded (keeping the built-in monster):', err && (err.message || err)); });
+        try { monPrepare(gltf); monStatus('MONSTER GLB: LOADED', 'ok'); }
+        catch (e) { MONG.failed = true; console.error('[MonsterGLB] could not set up monster.glb', e); monStatus('MONSTER GLB FAILED: ' + ((e && e.message) || e) + '  (' + resolved + ')', 'bad'); }
+      }, undefined, (err) => {
+        MONG.failed = true;
+        const msg = (err && (err.message || (err.target && err.target.status ? 'HTTP ' + err.target.status : ''))) || String(err);
+        console.warn('[MonsterGLB] monster.glb not loaded:', msg, resolved);
+        monStatus('MONSTER GLB FAILED: ' + msg + '  (' + resolved + ')', 'bad');
+      });
+    }
+    // ---------- the load status, on screen (never a silent fallback) ----------
+    // desktop: a line in the corner; headset: a small panel under your view for a few seconds (and a toast), shown when
+    // it loads or fails and again every time you pick the MONSTER role
+    const MONS = { text: '', kind: 'wait', el: null, panel: null, showT: 0, role: null };
+    function monStatus(text, kind) {
+      MONS.text = text; MONS.kind = kind;
+      try {
+        if (!MONS.el) {
+          MONS.el = document.createElement('div');
+          MONS.el.style.cssText = 'position:fixed;left:10px;bottom:10px;z-index:99999;font:bold 13px monospace;padding:6px 10px;border-radius:6px;pointer-events:none;max-width:80vw;word-break:break-all;';
+          document.body.appendChild(MONS.el);
+        }
+        MONS.el.textContent = text;
+        MONS.el.style.background = kind === 'ok' ? 'rgba(10,60,20,0.85)' : kind === 'bad' ? 'rgba(110,0,0,0.92)' : 'rgba(40,40,40,0.8)';
+        MONS.el.style.color = kind === 'ok' ? '#8f8' : kind === 'bad' ? '#fff' : '#ddd';
+        MONS.el.style.display = 'block';
+        if (kind === 'ok') setTimeout(() => { if (MONS.kind === 'ok' && playerRole !== 'monster') MONS.el.style.display = 'none'; }, 12000);
+      } catch (e) { }
+      if (kind !== 'wait') monStatusVR();
+    }
+    function monStatusVR() {
+      try {
+        if (!MONS.panel) {
+          const c = document.createElement('canvas'); c.width = 1024; c.height = 128;
+          const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+          const m = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.0525), new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false, fog: false, toneMapped: false }));
+          m.renderOrder = 9999; m.position.set(0, -0.17, -0.55); m.raycast = () => {}; m.visible = false;
+          camera.add(m); MONS.panel = { m, c, tex };
+        }
+        const { c, tex, m } = MONS.panel, g = c.getContext('2d');
+        g.clearRect(0, 0, c.width, c.height);
+        g.fillStyle = MONS.kind === 'ok' ? 'rgba(10,60,20,0.9)' : 'rgba(120,0,0,0.95)'; g.fillRect(0, 0, c.width, c.height);
+        g.fillStyle = MONS.kind === 'ok' ? '#9f9' : '#fff'; g.font = 'bold 34px monospace'; g.textBaseline = 'middle';
+        const t = MONS.text, max = 56;
+        if (t.length <= max) g.fillText(t, 16, 64); else { g.font = 'bold 24px monospace'; g.fillText(t.slice(0, 80), 12, 40); g.fillText(t.slice(80, 160), 12, 88); }
+        tex.needsUpdate = true; m.visible = true; MONS.showT = MONS.kind === 'ok' ? 6 : 15;
+        if (typeof showToast === 'function') showToast(MONS.kind === 'ok' ? 'MONSTER GLB: LOADED' : 'MONSTER GLB FAILED', MONS.kind === 'ok' ? 'The monster uses monster.glb' : MONS.text.replace('MONSTER GLB FAILED: ', '').slice(0, 90));
+      } catch (e) { }
+    }
+    function updateMonStatus(dt) {
+      // every time you become the monster, say again which monster you are
+      if (playerRole !== MONS.role) { MONS.role = playerRole; if (playerRole === 'monster' && MONS.kind !== 'wait') { monStatusVR(); if (MONS.el) MONS.el.style.display = 'block'; } }
+      if (MONS.panel && MONS.panel.m.visible && (MONS.showT -= dt) <= 0) MONS.panel.m.visible = false;
     }
     function monPrepare(gltf) {
       const sc = gltf.scene;
@@ -21976,7 +22030,7 @@
     }
     {
       const baseUMM = updateMonsterModel;
-      updateMonsterModel = function (dt) { const r = baseUMM(dt); if (monMe) { try { updateMonMe(dt); } catch (e) { if (!updateMonsterModel.warned) { updateMonsterModel.warned = true; console.warn('[MonsterGLB] your pose', e); } } } return r; };
+      updateMonsterModel = function (dt) { const r = baseUMM(dt); try { updateMonStatus(dt); } catch (e) { } if (monMe) { try { updateMonMe(dt); } catch (e) { if (!updateMonsterModel.warned) { updateMonsterModel.warned = true; console.warn('[MonsterGLB] your pose', e); } } } return r; };
     }
     {
       // after the blade is held back from a wall, the arm follows the held-back hand
@@ -21995,6 +22049,11 @@
       const baseRender2 = renderer.render.bind(renderer);
       renderer.render = function (sc, cam) {
         let hidden = null;
+        if (sc === scene && MONG.ready) {
+          if (monMe && monsterModel.visible && monMe.keep) hideProcedural(monsterModel, monMe.keep);
+          if (monAI && monAI.root.visible && monAI.keep) hideProcedural(aiRoot, monAI.keep);
+          for (const r of netPeers().values()) if (r.monGlb && r.monGlb.root.visible) { if (r.mon) r.mon.visible = false; if (r.monHands) for (const hd of r.monHands) hd.visible = false; }
+        }
         if (sc === scene) {
           if (cam === camera && monMe && monMe.root.visible) survivorHideBodyFromEyes(renderer.xr.isPresenting);   // (your eyes: the copy without the head)
           if (cam === monsterPovCamera) hidden = povState.src && povState.src.inst;
