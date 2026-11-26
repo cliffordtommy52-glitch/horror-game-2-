@@ -6293,6 +6293,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'FIX', date: '26/11/26', title: 'THE MONSTER STANDS TALL',
+        text: 'As the monster your eyes are 1.8 off the floor again, with long arms down to the ground. Trigger curls the index finger, Grip the outer finger, X or A the thumb, each hand on its own. The dropped machete only comes back when you reach it. Voice chat remembers ON or OFF.' },
       { tag: 'NEW', date: '26/11/26', title: 'SOMETHING AT THE WINDOW',
         text: 'Look out of the boarded window: a misty moonlit forest, and something watching from behind a pine. The flashlight is on B or Y now. Matching monster hands, smoother finger curls, the machete sits in the palm, and you have to reach the dropped machete to grab it. Tidier waiting room lamps.' },
       { tag: 'FIX', date: '26/11/26', title: 'MONSTER HANDS AND SIZE',
@@ -17917,7 +17919,7 @@
       if (!force && now - N.lastSend < 66) return;
       N.lastSend = now;
       const vr = renderer.xr.isPresenting;
-      if (vr) headWorld(_nP); else camera.getWorldPosition(_nP);
+      if (vr) { headWorld(_nP); _nP.y += monViewLiftY(); } else camera.getWorldPosition(_nP);   // (the MONSTER's eyes are raised: 1.8 off the floor)
       camera.getWorldQuaternion(_nQ);
       const d = {
         t: Math.round(now), n: playerName(), r: playerRole === 'monster' ? 'm' : 's', m: titleActive ? 'title' : currentMap, vr: vr ? 1 : 0,
@@ -21544,7 +21546,8 @@
     //  model's hands follow), and it's what you see if monster.glb can't be loaded.
     // =====================================================================
     const MONSTER_GLB_URL = './monster.glb';
-    const MON_AI_HEIGHT = 1.6;              // the AI monster's height (game units): about 1.4x a survivor, clear of the ceilings
+    const MON_EYE_HEIGHT = 1.8;             // the monster's eyes: 1.8 off the floor (yours too, in the MONSTER role)
+    const MON_AI_HEIGHT = MON_EYE_HEIGHT / 0.8475;   // its height (about 2.12): tall and imposing, still under the waiting room beams
     const MON_EYE_FRAC = 0.8475;            // its eyes, as a fraction of its height (the mask's eye holes, measured on the model)
     const MON_REMOTE_MIN_H = MON_AI_HEIGHT; // another player's monster stands this tall too (your own is fitted to your eyes)
     const MONG = { ready: false, src: null, failed: false };
@@ -21552,17 +21555,17 @@
     // how the handle runs through it (Z along the handle, -Z the way the blade points, Y the back of the blade)
     // (measured on the re-rigged model: the handle across the palm at the knuckle line, the guard by the thumb / index
     // web, the blade angled 50 degrees from across-the-fist towards the wrist axis, so it points forward out of the fist)
-    const MON_GRIP_R = { pos: new THREE.Vector3(-0.7815, -0.6016, 0.2189),
-      z: new THREE.Vector3(-0.5019, 0.3311, -0.7990), y: new THREE.Vector3(0.6885, 0.7121, -0.1374) };
-    const MON_GRIP_L0 = { pos: new THREE.Vector3(0.7070, -0.6445, 0.1727),
-      z: new THREE.Vector3(0.3679, 0.3562, -0.8589), y: new THREE.Vector3(-0.7129, 0.7011, -0.0146) };
+    const MON_GRIP_R = { pos: new THREE.Vector3(-0.7723, -0.6063, 0.2512),
+      z: new THREE.Vector3(-0.4031, 0.1952, -0.8941), y: new THREE.Vector3(0.7714, 0.5981, -0.2172) };
+    const MON_GRIP_L0 = { pos: new THREE.Vector3(0.6900, -0.6357, 0.1821),
+      z: new THREE.Vector3(0.3825, 0.3709, -0.8463), y: new THREE.Vector3(-0.7007, 0.7135, -0.0040) };
     const MON_MIRROR_X = -0.0745;          // the model's centre line (its spine)
     const MON_EYE = new THREE.Vector3(-0.0745, 0.552, -0.075);   // between the mask's eye holes (model units)
     // the fingers' curl axes (model frame = every bone's rest frame): the two big fingers, and the thumb stub
     const MON_CURL = {
       // (checked: about these axes every fingertip closes towards the palm and the thumb tip towards the fingers)
-      Left: { finger: new THREE.Vector3(0.7826, -0.3082, -0.5409), thumb: new THREE.Vector3(0.5835, 0.7663, -0.2689) },
-      Right: { finger: new THREE.Vector3(0.8500, 0.3327, 0.4083), thumb: new THREE.Vector3(0.2950, -0.6715, -0.6797) },
+      Left: { index: new THREE.Vector3(0.7826, -0.3082, -0.5409), ring: new THREE.Vector3(0.7826, -0.3082, -0.5409), thumb: new THREE.Vector3(0.6044, 0.7299, -0.3192) },
+      Right: { index: new THREE.Vector3(0.8500, 0.3327, 0.4083), ring: new THREE.Vector3(0.8500, 0.3327, 0.4083), thumb: new THREE.Vector3(0.2063, -0.7047, -0.6788) },
     };
     function gripBasis(z, y) {
       const Z = z.clone().normalize(), Y = y.clone().addScaledVector(Z, -y.dot(Z)).normalize(), X = new THREE.Vector3().crossVectors(Y, Z);
@@ -21773,12 +21776,17 @@
       scene.add(root);
       const inst = { root, fit, scene0, mesh, byName, bones, eye, height: 1, walkPhase: 0, speed: 0, prevPos: new THREE.Vector3(), hasPrev: false, aIsRight, firstPerson: !!(opts && opts.firstPerson) };
       // the finger bones of each hand (the model's R / L), with the axis each one curls about
-      inst.fingers = { R: [], L: [] }; inst.curlS = { R: 0, L: 0 }; inst.curlT = { R: 0, L: 0 };
+      // (Trigger curls the index finger chains, Grip the ring / pinky chains, X / A the thumb; each hand on its own)
+      inst.fingers = { R: [], L: [] };
+      inst.curlS = { R: { trig: 0, grip: 0, thumb: 0 }, L: { trig: 0, grip: 0, thumb: 0 } };
+      inst.curlT = { R: { trig: 0, grip: 0, thumb: 0 }, L: { trig: 0, grip: 0, thumb: 0 } };
       for (const [file, sd] of [['Left', aIsRight ? 'R' : 'L'], ['Right', aIsRight ? 'L' : 'R']]) {
         const ax = MON_CURL[file];
         for (const f of ['Thumb', 'Index', 'Middle', 'Ring', 'Pinky']) for (let k = 1; k <= 3; k++) {
           const b = byName[file + 'Hand' + f + k]; if (!b) continue;
-          inst.fingers[sd].push({ b, axis: (f === 'Thumb' ? ax.thumb : ax.finger).clone().normalize(), ang: f === 'Thumb' ? 0.45 : 0.55 });   // (inward only, one axis, 0..0.55 rad)
+          const grp = f === 'Thumb' ? 'thumb' : (f === 'Index' || f === 'Middle') ? 'trig' : 'grip';
+          const axis = f === 'Thumb' ? ax.thumb : grp === 'trig' ? ax.index : ax.ring;
+          inst.fingers[sd].push({ b, grp, axis: axis.clone().normalize(), ang: f === 'Thumb' ? 0.45 : 0.55 });   // (inward only, one axis, 0..0.55 rad)
         }
       }
       return inst;
@@ -22021,12 +22029,11 @@
     function monCurlFingers(inst, dt) {
       if (!inst.fingers) return;
       for (const sd of ['R', 'L']) {
-        const T = THREE.MathUtils.clamp(inst.curlT[sd] || 0, 0, 1);
-        inst.curlS[sd] += (T - inst.curlS[sd]) * Math.min(1, (dt || 0.016) * 14);
-        const c = inst.curlS[sd];
+        const T = inst.curlT[sd], S = inst.curlS[sd];
+        for (const g of ['trig', 'grip', 'thumb']) S[g] += (THREE.MathUtils.clamp(+T[g] || 0, 0, 1) - S[g]) * Math.min(1, (dt || 0.016) * 14);
         for (const F of inst.fingers[sd]) {
           const r = F.b.userData.rest; if (!r) continue;
-          F.b.quaternion.copy(r.q).multiply(_mcQ.setFromAxisAngle(F.axis, THREE.MathUtils.clamp(F.ang * c, 0, 0.55)));
+          F.b.quaternion.copy(r.q).multiply(_mcQ.setFromAxisAngle(F.axis, THREE.MathUtils.clamp(F.ang * S[F.grp], 0, 0.55)));
         }
       }
     }
@@ -22038,7 +22045,7 @@
       if (!on) return;
       hideProcedural(monsterModel, I.keep);
       const vr = renderer.xr.isPresenting;
-      if (vr) headWorld(_mmHead); else _mmHead.copy(monsterModel.position);
+      if (vr) { headWorld(_mmHead); _mmHead.y += monViewLiftY(); } else _mmHead.copy(monsterModel.position);
       camera.getWorldQuaternion(_mmQ);
       // the grips: exactly where the old hands are (on your controllers, held back when the blade touches a wall)
       const grips = {};
@@ -22049,8 +22056,10 @@
       }
       for (const sd of ['R', 'L']) {
         const c = controllers.find((cc) => cc.userData.inputSource?.handedness === (sd === 'R' ? 'right' : 'left'));
-        const gb = c && c.userData.inputSource && c.userData.inputSource.gamepad && c.userData.inputSource.gamepad.buttons[1];
-        I.curlT[sd] = vr ? (gb ? (gb.value || (gb.pressed ? 1 : 0)) : 0) : (sd === 'R' && macheteInHand() ? 1 : 0);
+        const bs = c && c.userData.inputSource && c.userData.inputSource.gamepad && c.userData.inputSource.gamepad.buttons, T = I.curlT[sd];
+        const val = (b) => (b ? (b.value || (b.pressed ? 1 : 0)) : 0);
+        if (vr) { T.trig = val(bs && bs[0]); T.grip = val(bs && bs[1]); T.thumb = bs && bs[4] && bs[4].pressed ? 1 : 0; }
+        else { const k = sd === 'R' && macheteInHand() ? 1 : 0; T.trig = T.grip = T.thumb = k; }
       }
       poseMonsterGlb(I, dt, _mmHead, vr ? _mmQ : null, monsterYaw + Math.PI, currentMap, grips);
       // the machete at its usual size in your hand
@@ -22142,7 +22151,11 @@
         const grips = {};
         if (s.vr) for (const [k, sd] of [[0, 'L'], [1, 'R']]) { const H = r.hand[k]; if (H && H.ok) grips[sd] = { p: H.p, q: H.q }; }
         _rmHead.copy(r.pos);
-        for (const [k, sd] of [[0, 'L'], [1, 'R']]) { const H = r.hand[k]; I.curlT[sd] = H && H.c ? (+H.c[1] || 0) : (sd === 'R' && !s.mw ? 1 : 0); }
+        for (const [k, sd] of [[0, 'L'], [1, 'R']]) {
+          const H = r.hand[k], T = I.curlT[sd];
+          if (H && H.c) { T.trig = +H.c[0] || 0; T.grip = +H.c[1] || 0; T.thumb = +H.c[2] || 0; }
+          else { const q = sd === 'R' && !s.mw ? 1 : 0; T.trig = T.grip = T.thumb = q; }
+        }
         poseMonsterGlb(I, dt, _rmHead, r.quat, r.yaw + Math.PI, s.m, grips, MON_REMOTE_MIN_H);
         // hit by a survivor's weapon: it reels back for a moment
         if (r.monFlinchT > 0) {
@@ -22198,7 +22211,8 @@
         const I = monAI;
         if (I && I.root.visible && I.fingers) {
           const down = ai.state === 'stunned';
-          I.curlT.R = down ? 0.45 : 1; I.curlT.L = down ? 0.15 : ai.state === 'chase' ? 0.75 : 0.35;
+          const r_ = down ? 0.45 : 1, l_ = down ? 0.15 : ai.state === 'chase' ? 0.75 : 0.35;
+          I.curlT.R.trig = I.curlT.R.grip = I.curlT.R.thumb = r_; I.curlT.L.trig = I.curlT.L.grip = I.curlT.L.thumb = l_;
           monCurlFingers(I, dt); I.root.updateMatrixWorld(true);
         }
         return r;
@@ -22537,7 +22551,7 @@
     //  (B / Y no longer does anything for the monster.) You start with it in your right hand; from the first time you
     //  squeeze GRIP, letting go opens the hand and the machete falls (with your swing) onto the ground. Squeeze GRIP with
     //  your right hand next to it to pick it back up. While it's out of your hand your free hands grab and rip. It
-    //  comes back to your hand if it's lost for 25 s, or when you change map. Everyone sees it in your hand, or lying
+    //  comes back to your hand only when you change map (never from across the room). Everyone sees it in your hand, or lying
     //  where it fell (shared over Trystero with your state).
     // =====================================================================
     const MCH = { state: 'hand', everGripped: false, vel: new THREE.Vector3(), spin: new THREE.Vector3(), lostT: 0, map: null, gripWas: false, prevHand: new THREE.Vector3(), prevOk: false, landed: false, yaw: 0 };
@@ -22598,7 +22612,10 @@
             netSendState(true);
           }
         }
-        if (MCH.state !== 'hand' && (MCH.lostT > 25 || MCH.map !== currentMap)) { macheteToHand(); MCH.everGripped = false; showToast('MACHETE', 'Back in your hand'); netSendState(true); }
+        // no recall from across the room: it stays where it fell until you reach it (only a new map, or a machete
+        // that fell out of the world, brings it back)
+        mMachete.getWorldPosition(_mcG);
+        if (MCH.state !== 'hand' && (MCH.map !== currentMap || _mcG.y < -30)) { macheteToHand(); MCH.everGripped = false; showToast('MACHETE', 'Back in your hand'); netSendState(true); }
       }
       monUnarmed = MCH.state !== 'hand';
       mMachete.visible = true;
@@ -22888,7 +22905,7 @@
         if (axis) axis.copy(_lqD);
         return true;
       }
-      if (att === 'self') { headWorld(out); out.y -= 0.55; if (axis) axis.set(0, 1, 0); return true; }
+      if (att === 'self') { headWorld(out); out.y += monViewLiftY() - 0.55; if (axis) axis.set(0, 1, 0); return true; }
       const r = netPeers().get(att);
       if (!r || !r.st || r.st.r !== 'm' || r.st.m !== currentMap) return false;
       out.copy(r.pos); out.y -= 0.55; if (axis) axis.set(0, 1, 0);
@@ -24369,6 +24386,50 @@
     {
       const baseNetNW = updateNet;                                            // (every frame, so it's hidden on every other map)
       updateNet = function (dt) { const r = baseNetNW(dt); try { updateNightWindow(dt); } catch (e) { if (!updateNet.nwWarned) { updateNet.nwWarned = true; console.warn('[NightWindow]', e); } } return r; };
+    }
+
+    // =====================================================================
+    //  THE MONSTER STANDS TALL, AND VOICE CHAT REMEMBERED
+    //  - In the MONSTER role your eyes are raised to 1.8 off the floor: only your view goes up (a lift between the rig
+    //    and the camera), so your hands, the Gorilla locomotion and all the collisions stay exactly as they were - you
+    //    still knuckle-walk, with the monster's long arms reaching down to the ground. Your monster body stands under
+    //    your raised eyes (about 2.12 tall), and everyone hears your voice from up there.
+    //  - VOICE CHAT ON / OFF is saved on this device (grimape_voice_chat) and the microphone comes back on by itself
+    //    next time if you left it ON.
+    // =====================================================================
+    const monLift = new THREE.Group(); monLift.name = 'monster-eye-lift';
+    playerRig.add(monLift); monLift.add(camera);                              // (the camera keeps its children: flashlight, ears, HUD)
+    let monLiftY = 0;
+    function monViewLiftY() { return monLiftY; }
+    function updateMonLift(dt) {
+      const want = playerRole === 'monster' && renderer.xr.isPresenting && !titleActive ? Math.max(0, MON_EYE_HEIGHT - SPAWN_HEAD_HEIGHT) : 0;
+      monLiftY += (want - monLiftY) * Math.min(1, (dt || 0.016) * 5);
+      if (Math.abs(want - monLiftY) < 1e-3) monLiftY = want;
+      monLift.position.y = monLiftY / (playerRig.scale.y || 1);               // (the rig is scaled in VR)
+    }
+    {
+      const baseNetML = updateNet;
+      updateNet = function (dt) { const r = baseNetML(dt); try { updateMonLift(dt); } catch (e) { } return r; };
+    }
+
+    // ---------- voice chat: saved, and restored ----------
+    const VOICE_KEY = 'grimape_voice_chat';
+    {
+      const baseSetVoice = setVoice;
+      setVoice = async function (on, restoring) {
+        const r = await baseSetVoice(on);
+        if (!restoring) { try { localStorage.setItem(VOICE_KEY, voiceOn() ? 'on' : 'off'); } catch (e) { } }
+        return r;
+      };
+      let want = null; try { want = localStorage.getItem(VOICE_KEY); } catch (e) { }
+      if (want === 'on') {
+        const tryOn = () => { if (!voiceOn()) setVoice(true, true).catch(() => { }); };
+        setTimeout(tryOn, 1200);                                                // straight away if the microphone is already allowed
+        // (some browsers want a tap first: try again on the first click / key / entering VR)
+        const once = () => { tryOn(); window.removeEventListener('pointerdown', once); window.removeEventListener('keydown', once); };
+        window.addEventListener('pointerdown', once); window.addEventListener('keydown', once);
+        renderer.xr.addEventListener('sessionstart', () => setTimeout(tryOn, 300));
+      }
     }
 
     // ---------- XR session hooks ----------
