@@ -6293,6 +6293,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'FIX', date: '26/11/26', title: 'MONSTER LOADS AGAIN',
+        text: 'Fixed the monster.glb load error (Cannot read properties of undefined): the new monster now loads and replaces the old one.' },
       { tag: 'FIX', date: '26/11/26', title: 'MONSTER LOAD CHECK',
         text: 'The old built-in monster can no longer show through once monster.glb loads, and a status line says MONSTER GLB: LOADED (or the exact error and address if it fails). Trigger and Grip now curl the right survivor fingers.' },
       { tag: 'NEW', date: '26/11/26', title: 'THE NEW MONSTER 2',
@@ -21607,6 +21609,9 @@
     }
     function monPrepare(gltf) {
       const sc = gltf.scene;
+      if (!sc) throw new Error('monster.glb has no scene');
+      // (the monster is posed in code: any animation clips the file has are kept but never needed, and none is fine)
+      MONG.clips = (gltf.animations && gltf.animations.length > 0) ? gltf.animations : [];
       let skinned = null;
       const names = [];
       sc.traverse((o) => {
