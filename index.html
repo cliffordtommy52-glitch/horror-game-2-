@@ -6293,6 +6293,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'NEW', date: '26/11/26', title: "JACK O' HARVEST",
+        text: "Hallowcreek has its own monster: a scarecrow brute with a rotting jack-o'-lantern head, ember eyes, patched flannel spilling straw, still lashed to the broken stake he hung from, and a rusty sickle. He knuckle-walks through the fog, his pumpkin glowing. Run out of escapes and he lifts you by the collar to his face before the sickle goes in. Play the MONSTER on Hallowcreek and you are Jack." },
       { tag: 'NEW', date: '26/11/26', title: 'WALKIE-TALKIES',
         text: 'Four radios are hidden round Hallowcreek. Grip one and hold TRIGGER to talk (V on desktop): everyone in town carrying a radio hears you through the static, wherever they are. Let go at your belt to clip it on. Careful: an incoming squawk can give you away.' },
       { tag: 'NEW', date: '26/11/26', title: 'CALL THE POLICE',
@@ -28243,6 +28245,541 @@
     }
     // (for the tests)
     window.__walkie = { WK, wkRadio, wkHome, wkTake, wkRelease, wkTxStart, wkTxEnd, wkState, wkMine, deskKey: wkDeskKey, chains: () => wkRadio.chains.size, objectiveLines: (m) => objectiveLines(m) };
+    // =====================================================================
+    //  r94: HALLOWCREEK part 4: JACK O' HARVEST, the town's own monster (Hallowcreek only)
+    //  - A scarecrow brute: a rotting carved pumpkin for a head (ribbed, mouldy, caved in on one side, a twisted stem)
+    //    with ember eyes and a fire-lit grin, a burlap collar cinched with rope, a patched red flannel shirt with straw
+    //    spilling from the collar, the cuffs, the seams and a tear in the belly, a rope belt, a straw skirt, crude
+    //    leather gloves with twig fingers, the broken stake he was nailed to still lashed up his back (the crossbar
+    //    behind his shoulders, the splintered post where his legs should be) and a RUSTY SICKLE.
+    //  - He's fitted to the monster's skeleton, so every existing animation drives him: the AI, you in the MONSTER
+    //    role (your arms on your controllers, the legless gorilla knuckle-walk), and other players' monsters. The
+    //    machete becomes the sickle with the same grip and hit checks: Grip holds it, letting go drops it.
+    //  - The AI Jack knuckle-walks: hunched forward on the stake, his fists (sickle in the right) planting on the
+    //    ground in turn; his pumpkin glows orange in the fog as he comes.
+    //  - The same 2-escape struggle. Out of escapes: his FINISHER. He grabs you by the collar and lifts you off your
+    //    feet to his face, the grin blazing, holds you there, then drives the sickle in: the sting, a hard jolt, the
+    //    red flash, and YOU WERE ELIMINATED.
+    //  - Everywhere else nothing changes: the camp, the graveyard and the mine keep monster.glb and the machete.
+    // =====================================================================
+    const JACK_MAP = 'hallowcreek';
+    // ---------- textures and materials (shared by every Jack) ----------
+    const jkTex = (() => {
+      const mk = (w, h, draw) => { const c = document.createElement('canvas'); c.width = w; c.height = h; draw(c.getContext('2d'), w, h); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t; };
+      let s = 9;
+      const rnd = () => { s = (s * 16807) % 2147483647; return (s - 1) / 2147483646; };
+      // the pumpkin's skin: ribs, rot, mould; the carved face centred at u = 0.25 (its front)
+      const face = (g, fill, rim) => {
+        const cx = 128;
+        const tri = (x, y, w, h, flip) => { g.beginPath(); g.moveTo(x - w / 2, y + h / 2); g.lineTo(x + w / 2, y + h / 2); g.lineTo(x + (flip ? -w * 0.1 : w * 0.1), y - h / 2); g.closePath(); };
+        const shapes = [() => tri(cx - 30, 101, 36, 30, false), () => tri(cx + 30, 101, 36, 30, true), () => tri(cx, 128, 16, 16, false),
+          () => { g.beginPath(); g.moveTo(cx - 64, 146); for (let k = 0; k <= 8; k++) { const x = cx - 64 + k * 16; g.lineTo(x, k % 2 ? 160 : 150); } g.lineTo(cx + 64, 146);
+                  g.quadraticCurveTo(cx + 40, 186, cx, 184); g.quadraticCurveTo(cx - 40, 186, cx - 64, 146); g.closePath(); }];
+        for (const sh of shapes) { sh(); if (rim) { g.lineWidth = 5; g.strokeStyle = rim; g.stroke(); } g.fillStyle = fill; g.fill(); }
+        // two crooked teeth left in the grin
+        if (!rim) return;
+        g.fillStyle = '#c8822c'; g.fillRect(cx - 18, 162, 9, 13); g.fillRect(cx + 14, 160, 9, 12);
+      };
+      const skin = mk(512, 256, (g, W, H) => {
+        const grd = g.createLinearGradient(0, 0, 0, H); grd.addColorStop(0, '#8a4a12'); grd.addColorStop(0.35, '#c46a1c'); grd.addColorStop(0.75, '#b05a16'); grd.addColorStop(1, '#5a3010');
+        g.fillStyle = grd; g.fillRect(0, 0, W, H);
+        for (let k = 0; k <= 10; k++) { const x = k * W / 10; const rg = g.createLinearGradient(x - 18, 0, x + 18, 0); rg.addColorStop(0, 'rgba(60,24,4,0)'); rg.addColorStop(0.5, 'rgba(60,24,4,0.75)'); rg.addColorStop(1, 'rgba(60,24,4,0)'); g.fillStyle = rg; g.fillRect(x - 18, 0, 36, H); }
+        for (let k = 0; k < 26; k++) {                                     // rot: soft brown / green-black blotches (none on the face)
+          const x = rnd() * W, y = 40 + rnd() * (H - 50); if (Math.abs(x - 128) < 80 && y < 195) continue;
+          const r = 8 + rnd() * 26; const rg = g.createRadialGradient(x, y, 0, x, y, r); const c = rnd() < 0.5 ? '40,30,10' : '30,40,14';
+          rg.addColorStop(0, `rgba(${c},0.9)`); rg.addColorStop(1, `rgba(${c},0)`); g.fillStyle = rg; g.beginPath(); g.ellipse(x, y, r, r * 0.7, rnd() * 3, 0, Math.PI * 2); g.fill();
+        }
+        for (let k = 0; k < 220; k++) { const x = rnd() * W, y = rnd() * H; if (Math.abs(x - 128) < 70 && y > 80 && y < 190) continue; g.fillStyle = `rgba(220,220,200,${0.2 + rnd() * 0.4})`; g.fillRect(x, y, 1 + rnd() * 2, 1 + rnd() * 2); }   // mould
+        g.strokeStyle = 'rgba(30,12,2,0.8)'; g.lineWidth = 2; g.beginPath(); g.moveTo(300, 120); g.lineTo(318, 150); g.lineTo(310, 176); g.lineTo(326, 210); g.stroke();   // a split
+        face(g, '#160804', '#e8b070');
+      });
+      const glow = mk(512, 256, (g, W, H) => {
+        g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
+        face(g, '#ff9a30', null);
+        const rg = g.createRadialGradient(128, 140, 4, 128, 140, 80); rg.addColorStop(0, 'rgba(255,230,140,0.9)'); rg.addColorStop(1, 'rgba(255,120,20,0)');
+        g.globalCompositeOperation = 'source-atop'; g.fillStyle = rg; g.fillRect(0, 0, W, H); g.globalCompositeOperation = 'source-over';
+      });
+      // patched red / black flannel
+      const flannel = mk(256, 256, (g, W, H) => {
+        g.fillStyle = '#6a1410'; g.fillRect(0, 0, W, H);
+        for (let k = 0; k < 8; k++) { g.fillStyle = 'rgba(10,6,6,0.55)'; g.fillRect(k * 32 + 10, 0, 12, H); g.fillRect(0, k * 32 + 10, W, 12); }
+        for (let k = 0; k < 8; k++) { g.fillStyle = 'rgba(200,170,120,0.22)'; g.fillRect(k * 32 + 2, 0, 2, H); g.fillRect(0, k * 32 + 2, W, 2); }
+        for (const [x, y, w, h, c] of [[30, 150, 60, 54, '#7a6440'], [150, 40, 50, 44, '#2a3a5a'], [170, 170, 56, 48, '#5a5a2a']]) {   // patches, crudely stitched
+          g.fillStyle = c; g.fillRect(x, y, w, h);
+          for (let k = 0; k < 40; k++) { g.fillStyle = 'rgba(0,0,0,0.25)'; g.fillRect(x + rnd() * w, y + rnd() * h, 2, 2); }
+          g.strokeStyle = '#d8c8a0'; g.lineWidth = 2; g.setLineDash([5, 4]); g.strokeRect(x + 3, y + 3, w - 6, h - 6); g.setLineDash([]);
+        }
+        for (let k = 0; k < 60; k++) { g.fillStyle = `rgba(20,10,4,${rnd() * 0.35})`; g.beginPath(); g.arc(rnd() * W, rnd() * H, 3 + rnd() * 12, 0, Math.PI * 2); g.fill(); }   // grime
+      });
+      const burlap = mk(128, 128, (g, W, H) => {
+        g.fillStyle = '#7a6440'; g.fillRect(0, 0, W, H);
+        for (let y = 0; y < H; y += 3) { g.fillStyle = 'rgba(40,28,12,0.35)'; g.fillRect(0, y, W, 1); }
+        for (let x = 0; x < W; x += 3) { g.fillStyle = 'rgba(160,140,90,0.25)'; g.fillRect(x, 0, 1, H); }
+        for (let k = 0; k < 30; k++) { g.fillStyle = `rgba(20,12,4,${rnd() * 0.4})`; g.beginPath(); g.arc(rnd() * W, rnd() * H, 2 + rnd() * 8, 0, Math.PI * 2); g.fill(); }
+      });
+      const rust = mk(256, 64, (g, W, H) => {
+        g.fillStyle = '#3a3634'; g.fillRect(0, 0, W, H);
+        for (let k = 0; k < 160; k++) { const x = rnd() * W, y = rnd() * H, r = 2 + rnd() * 10; g.fillStyle = `rgba(${120 + rnd() * 60 | 0},${50 + rnd() * 30 | 0},${16 + rnd() * 10 | 0},${0.4 + rnd() * 0.5})`; g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill(); }
+        g.fillStyle = 'rgba(200,200,190,0.5)'; g.fillRect(0, 0, W, 4);                                       // a worn bright edge
+        for (let k = 0; k < 20; k++) { g.fillStyle = 'rgba(70,10,6,0.6)'; g.beginPath(); g.arc(rnd() * W, rnd() * H, 2 + rnd() * 5, 0, Math.PI * 2); g.fill(); }   // old blood
+      });
+      for (const t of [flannel, burlap]) { t.wrapS = t.wrapT = THREE.RepeatWrapping; }
+      return { skin, glow, flannel, burlap, rust };
+    })();
+    const jkM = {
+      pumpkin: new THREE.MeshStandardMaterial({ map: jkTex.skin, emissiveMap: jkTex.glow, emissive: 0xff6a1a, emissiveIntensity: 1.4, roughness: 0.82 }),
+      stem: new THREE.MeshStandardMaterial({ color: 0x3a3a1a, roughness: 0.95 }),
+      flannel: new THREE.MeshStandardMaterial({ map: jkTex.flannel, roughness: 0.95 }),
+      burlap: new THREE.MeshStandardMaterial({ map: jkTex.burlap, roughness: 1 }),
+      straw: new THREE.MeshStandardMaterial({ color: 0xc8a048, roughness: 0.9 }),
+      strawDk: new THREE.MeshStandardMaterial({ color: 0x8a6a28, roughness: 0.95 }),
+      rope: new THREE.MeshStandardMaterial({ color: 0x9a8458, roughness: 0.95 }),
+      leather: new THREE.MeshStandardMaterial({ color: 0x2e2218, roughness: 0.8 }),
+      twig: new THREE.MeshStandardMaterial({ color: 0x4a3a28, roughness: 1 }),
+      wood: new THREE.MeshStandardMaterial({ map: barkTex, color: 0x6a5642, roughness: 1 }),
+      core: new THREE.MeshBasicMaterial({ color: 0xffb050, fog: false }),
+      rust: new THREE.MeshStandardMaterial({ map: jkTex.rust, roughness: 0.75, metalness: 0.55 }),
+      handle: new THREE.MeshStandardMaterial({ color: 0x4a3420, roughness: 0.9 }),
+    };
+    // ---------- geometry helpers (in the model's own frame, at rest) ----------
+    const _jA = new THREE.Vector3(), _jB = new THREE.Vector3(), _jQ = new THREE.Quaternion(), _jM = new THREE.Matrix4(), _jS = new THREE.Vector3(1, 1, 1), _jUp = new THREE.Vector3(0, 1, 0);
+    function jkSeg(A, B, r0, r1, seg = 10, sz = 1) {                          // a tapered tube from A to B (r0 at A)
+      const len = Math.max(1e-4, A.distanceTo(B));
+      const g = new THREE.CylinderGeometry(r1, r0, len, seg, 2);
+      g.scale(1, 1, sz);
+      _jQ.setFromUnitVectors(_jUp, _jA.subVectors(B, A).normalize());
+      _jM.compose(_jB.addVectors(A, B).multiplyScalar(0.5), _jQ, _jS);
+      return g.applyMatrix4(_jM);
+    }
+    function jkMerge(list) {
+      const parts = list.filter(Boolean).map((g) => { const n = g.index ? g.toNonIndexed() : g; for (const k of Object.keys(n.attributes)) if (k !== 'position' && k !== 'normal' && k !== 'uv') n.deleteAttribute(k); if (!n.attributes.uv) n.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(n.attributes.position.count * 2), 2)); return n; });
+      return parts.length ? mergeGeometries(parts, false) : null;
+    }
+    // a tuft of straw: thin stalks from a point, fanned round a direction
+    function jkStraw(P, dir, n, len, spread, w, rnd) {
+      const out = [], d = dir.clone().normalize(), t1 = new THREE.Vector3().crossVectors(d, Math.abs(d.y) > 0.9 ? new THREE.Vector3(1, 0, 0) : _jUp).normalize(), t2 = new THREE.Vector3().crossVectors(d, t1);
+      for (let k = 0; k < n; k++) {
+        const a = rnd() * Math.PI * 2, sp = spread * Math.sqrt(rnd()), l = len * (0.55 + rnd() * 0.6);
+        const v = d.clone().addScaledVector(t1, Math.cos(a) * sp).addScaledVector(t2, Math.sin(a) * sp).normalize();
+        const A = P.clone().addScaledVector(t1, (rnd() - 0.5) * w * 3).addScaledVector(t2, (rnd() - 0.5) * w * 3);
+        out.push(jkSeg(A, A.clone().addScaledVector(v, l), w * 0.5, w * 0.25, 3));
+      }
+      return out;
+    }
+    // the pumpkin: a ribbed, squashed sphere, sagging and caved in on one side; the face at its front (+z)
+    function jkPumpkinGeo(R) {
+      const g = new THREE.SphereGeometry(R, 40, 24), p = g.attributes.position;
+      for (let i = 0; i < p.count; i++) {
+        let x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+        const ph = Math.atan2(z, -x), rib = 1 - 0.08 * Math.pow(1 - Math.abs(Math.sin(5 * ph)), 5);
+        let s = rib;
+        if (x > 0.3 * R && y < 0.15 * R) s *= 1 - 0.13 * Math.min(1, (x - 0.3 * R) / (0.5 * R)) * Math.min(1, (0.15 * R - y) / (0.5 * R));   // the rotten, caved-in side
+        x *= s; z *= s; y *= 0.8;
+        if (y < -0.55 * R) y = -0.55 * R + (y + 0.55 * R) * 0.35;                                  // it sits flattened on its collar
+        y -= 0.04 * R * (1 + Math.cos(ph * 1.7)) * Math.max(0, -y / R);                            // and sags
+        p.setXYZ(i, x, y, z);
+      }
+      g.computeVertexNormals();
+      return g;
+    }
+    function jkPumpkinPoint(R, u, th, out) {                                  // a point on that surface (u as in the texture, th from the top)
+      const ph = u * Math.PI * 2, rib = 1 - 0.08 * Math.pow(1 - Math.abs(Math.sin(5 * ph)), 5);
+      return out.set(-R * Math.cos(ph) * Math.sin(th) * rib, R * Math.cos(th) * 0.8, R * Math.sin(ph) * Math.sin(th) * rib);
+    }
+    // ---------- dressing a monster skeleton as Jack ----------
+    function jkBuild(inst, fp) {
+      monResetPose(inst); inst.root.updateMatrixWorld(true);
+      const B = inst.bones, S0 = inst.scene0, H = MONG.height || 1;
+      let seed = 3; const rnd = () => { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2146483646; };
+      const P = (b) => (b && b.userData.restW ? b.userData.restW.clone() : null);
+      const hips = P(B.root) || new THREE.Vector3(MON_MIRROR_X, H * 0.5, 0), neck = P(B.neck) || P(B.head) || hips.clone().add(new THREE.Vector3(0, H * 0.3, 0));
+      const head = P(B.head) || neck.clone().add(new THREE.Vector3(0, H * 0.05, 0));
+      const spine1 = P(B.spine1) || hips.clone().lerp(neck, 0.5), spine2 = P(B.spine2) || hips.clone().lerp(neck, 0.75);
+      const uR = P(B.R.u), uL = P(B.L.u), fR = P(B.R.f), fL = P(B.L.f), hR = P(B.R.h), hL = P(B.L.h);
+      const halfW = uR && uL ? Math.abs(uR.x - uL.x) / 2 : H * 0.12, ground = MONG.minY != null ? MONG.minY : hips.y - H * 0.5;
+      const parts = [], bodyLayer = [];
+      const put = (geo, mat, bone, upper) => {
+        if (!geo || !bone) return null;
+        const m = new THREE.Mesh(geo, mat); m.frustumCulled = false; m.castShadow = false; m.receiveShadow = false;
+        S0.add(m); m.updateMatrixWorld(true); bone.attach(m);
+        if (fp && upper) { m.layers.set(SURVIVOR_BODY_LAYER); bodyLayer.push(m); }
+        parts.push(m); return m;
+      };
+      const putSprite = (pos, color, size, bone, upper) => {
+        const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+        sp.position.copy(pos); sp.scale.setScalar(size); S0.add(sp); sp.updateMatrixWorld(true); bone.attach(sp);
+        if (fp && upper) sp.layers.set(SURVIVOR_BODY_LAYER);
+        parts.push(sp); return sp;
+      };
+      const chest = B.spine2 || B.spine1 || B.spine || B.root, belly = B.spine || B.root;
+      // --- the pumpkin head, its carved eyes on the model's eyes ---
+      const R = H * 0.105;
+      const eyeTh = 0.4 * Math.PI, eyeU = 0.055;
+      const ec = jkPumpkinPoint(R, 0.25, eyeTh, new THREE.Vector3());
+      let pc = new THREE.Vector3(MON_EYE.x, MON_EYE.y, MON_EYE.z).sub(new THREE.Vector3(0, ec.y, ec.z * 0.92));   // the pumpkin's centre
+      if (pc.distanceTo(head) > H * 0.25) pc = head.clone().add(new THREE.Vector3(0, R * 0.35, R * 0.25));   // (a rig the eye wasn't measured on: on the head bone)
+      if (B.head) {
+        const pg = jkPumpkinGeo(R); pg.translate(pc.x, pc.y, pc.z);
+        const pm = put(pg, jkM.pumpkin, B.head, true);
+        // the stem: a twisted, curling stalk
+        const stem = [];
+        let a = pc.clone().add(new THREE.Vector3(0, R * 0.72, 0)), dir = new THREE.Vector3(0.15, 1, -0.1).normalize();
+        for (let k = 0; k < 4; k++) { const b = a.clone().addScaledVector(dir, R * 0.13); stem.push(jkSeg(a, b, R * (0.13 - k * 0.025), R * (0.11 - k * 0.025), 7)); a = b; dir.add(new THREE.Vector3(0.25, -0.12, 0.05)).normalize(); }
+        put(jkMerge(stem), jkM.stem, B.head, true);
+        // the ember eyes: hot cores behind the holes, and their glow
+        const ePts = [];
+        for (const s of [-1, 1]) {
+          const e = jkPumpkinPoint(R, 0.25 + s * eyeU, eyeTh, new THREE.Vector3()).add(pc);
+          const core = new THREE.SphereGeometry(R * 0.09, 10, 8); core.translate(e.x, e.y, e.z - R * 0.12);
+          ePts.push(core);
+          putSprite(e.clone().add(new THREE.Vector3(0, 0, R * 0.05)), 0xff5010, R * 1.1, B.head, true);
+        }
+        put(jkMerge(ePts), jkM.core, B.head, true);
+        putSprite(jkPumpkinPoint(R, 0.25, 0.62 * Math.PI, new THREE.Vector3()).add(pc).add(new THREE.Vector3(0, 0, R * 0.05)), 0xff7a20, R * 1.5, B.head, true);   // the grin's firelight
+        void pm;
+      }
+      // --- the burlap collar sack and the rope cinching it, straw bursting out ---
+      const neckC = new THREE.Vector3(pc.x, pc.y - R * 0.55, pc.z * 0.6 + neck.z * 0.4);
+      const nb = B.neck || B.head || chest;
+      put(jkSeg(neckC.clone().add(new THREE.Vector3(0, -H * 0.05, 0)), neckC.clone().add(new THREE.Vector3(0, R * 0.25, 0)), R * 0.62, R * 0.72, 12, 0.85), jkM.burlap, nb, true);
+      { const tg = new THREE.TorusGeometry(R * 0.6, R * 0.06, 6, 18).rotateX(Math.PI / 2); tg.translate(neckC.x, neckC.y - H * 0.012, neckC.z); put(tg, jkM.rope, nb, true); }
+      put(jkMerge(Array.from({ length: 14 }, (_, k) => { const a = (k / 14) * Math.PI * 2; return jkStraw(neckC.clone().add(new THREE.Vector3(Math.cos(a) * R * 0.6, -H * 0.02, Math.sin(a) * R * 0.55)), new THREE.Vector3(Math.cos(a), 0.6, Math.sin(a)), 3, H * 0.06, 0.4, H * 0.006, rnd); }).flat()), jkM.straw, nb, true);
+      // --- the torso: patched flannel, hunched; the lower half on the spine, the upper on the chest ---
+      const topY = neck.y - H * 0.02, botY = hips.y - H * 0.06, cz = (hips.z + neck.z) / 2;
+      const midY = spine1.y;
+      put(jkSeg(new THREE.Vector3(hips.x, botY, hips.z), new THREE.Vector3(spine1.x, midY + H * 0.01, spine1.z), halfW * 0.82, halfW * 0.86, 14, 0.62), jkM.flannel, belly, false);
+      put(jkSeg(new THREE.Vector3(spine1.x, midY - H * 0.01, spine1.z), new THREE.Vector3(neck.x, topY, neck.z - H * 0.01), halfW * 0.9, halfW * 0.72, 14, 0.66), jkM.flannel, chest, true);
+      for (const u of [uR, uL]) if (u) { const g = new THREE.SphereGeometry(H * 0.055, 12, 8); g.scale(1.1, 0.8, 1); g.translate(u.x * 0.85 + hips.x * 0.15, u.y + H * 0.005, u.z); put(g, jkM.flannel, chest, true); }   // shoulders
+      // a hump of straw across the back, and a tear in the belly with straw pouring out
+      put(jkMerge([...jkStraw(new THREE.Vector3(hips.x + halfW * 0.25, (botY + midY) / 2 + H * 0.02, cz + halfW * 0.52), new THREE.Vector3(0.3, -0.6, 1), 18, H * 0.08, 0.55, H * 0.006, rnd),
+                   ...jkStraw(new THREE.Vector3(hips.x - halfW * 0.5, midY + H * 0.05, cz - halfW * 0.5), new THREE.Vector3(-0.6, 0.2, -1), 8, H * 0.05, 0.5, H * 0.005, rnd)]), jkM.straw, belly, false);
+      { const tg = new THREE.TorusGeometry(halfW * 0.8, H * 0.012, 6, 22).rotateX(Math.PI / 2); tg.scale(1, 1, 0.64); tg.translate(hips.x, hips.y - H * 0.02, hips.z); put(tg, jkM.rope, B.root, false); }   // the rope belt
+      { const k = jkSeg(new THREE.Vector3(hips.x + halfW * 0.35, hips.y - H * 0.02, hips.z + halfW * 0.5), new THREE.Vector3(hips.x + halfW * 0.4, hips.y - H * 0.1, hips.z + halfW * 0.55), H * 0.008, H * 0.006, 5); put(k, jkM.rope, B.root, false); }   // its knot's tail
+      // --- the straw skirt where the legs would be, and torn shirt-tails ---
+      put(jkMerge(Array.from({ length: 22 }, (_, k) => { const a = (k / 22) * Math.PI * 2; return jkStraw(new THREE.Vector3(hips.x + Math.cos(a) * halfW * 0.7, botY + H * 0.02, hips.z + Math.sin(a) * halfW * 0.45), new THREE.Vector3(Math.cos(a) * 0.35, -1, Math.sin(a) * 0.3), 4, H * 0.16, 0.25, H * 0.007, rnd); }).flat()), jkM.straw, B.root, false);
+      put(jkMerge(Array.from({ length: 10 }, (_, k) => { const a = (k / 10) * Math.PI * 2 + 0.3; return jkStraw(new THREE.Vector3(hips.x + Math.cos(a) * halfW * 0.6, botY + H * 0.02, hips.z + Math.sin(a) * halfW * 0.4), new THREE.Vector3(Math.cos(a) * 0.2, -1, Math.sin(a) * 0.2), 3, H * 0.2, 0.15, H * 0.006, rnd); }).flat()), jkM.strawDk, B.root, false);
+      for (let k = 0; k < 5; k++) {                                        // ragged shirt-tails
+        const a = -0.9 + k * 0.45 + (rnd() - 0.5) * 0.2, w = H * (0.05 + rnd() * 0.03), l = H * (0.08 + rnd() * 0.06);
+        const g = new THREE.PlaneGeometry(w, l, 1, 2); const pp = g.attributes.position; for (let i = 0; i < pp.count; i++) if (pp.getY(i) < 0) pp.setX(i, pp.getX(i) * (0.4 + rnd() * 0.5));
+        g.translate(0, -l / 2, 0); g.rotateX(0.15); g.rotateY(a); g.translate(hips.x + Math.sin(a) * halfW * 0.8, botY + H * 0.01, hips.z + Math.cos(a) * halfW * 0.52);
+        const m = put(g, jkM.flannel, B.root, false); if (m) m.material = jkM.flannelDS || (jkM.flannelDS = Object.assign(jkM.flannel.clone(), { side: THREE.DoubleSide }));
+      }
+      // --- the stake he was nailed to: the post down to the ground (a splintered end) and the crossbar behind his shoulders ---
+      {
+        const top = new THREE.Vector3(hips.x, topY - H * 0.02, Math.min(hips.z, neck.z) - halfW * 0.55), bot = new THREE.Vector3(hips.x, ground + H * 0.01, hips.z - halfW * 0.25);
+        const r = H * 0.024;
+        const post = [jkSeg(new THREE.Vector3(hips.x, hips.y, hips.z - halfW * 0.3), bot, r, r * 0.9, 8)];
+        for (let k = 0; k < 5; k++) { const a = k * 1.25; post.push(jkSeg(bot.clone().add(new THREE.Vector3(Math.cos(a) * r * 0.5, 0, Math.sin(a) * r * 0.5)), bot.clone().add(new THREE.Vector3(Math.cos(a) * r * 0.6, -H * (0.02 + rnd() * 0.03), Math.sin(a) * r * 0.6)), r * 0.45, r * 0.05, 4)); }   // splinters
+        put(jkMerge(post), jkM.wood, B.root, false);
+        const back = [jkSeg(new THREE.Vector3(hips.x, hips.y + H * 0.02, top.z), top.clone().add(new THREE.Vector3(0, H * 0.05, 0)), r, r * 0.95, 8)];
+        const cy = (uR ? uR.y : topY) - H * 0.01;
+        back.push(jkSeg(new THREE.Vector3(hips.x - halfW * 1.35, cy, top.z - r), new THREE.Vector3(hips.x + halfW * 1.35, cy, top.z - r), r * 0.85, r * 0.85, 8));
+        put(jkMerge(back), jkM.wood, chest, true);
+        const lash = [];
+        for (const s of [-1, 0, 1]) { const tg = new THREE.TorusGeometry(r * 1.4, r * 0.3, 4, 10).rotateY(Math.PI / 2); tg.translate(hips.x + s * r * 0.5, cy, top.z - r); lash.push(tg); }
+        put(jkMerge(lash), jkM.rope, chest, true);
+        // a rusty nail through each shoulder
+        for (const u of [uR, uL]) if (u) put(jkSeg(new THREE.Vector3(u.x * 0.8 + hips.x * 0.2, cy, top.z - r * 2), new THREE.Vector3(u.x * 0.8 + hips.x * 0.2, cy, u.z + H * 0.03), H * 0.004, H * 0.003, 4), jkM.rust, chest, true);
+      }
+      // --- the arms: flannel sleeves, rolled burlap cuffs spilling straw, leather gloves with twig fingers ---
+      for (const [C, u, f, h, sd] of [[B.R, uR, fR, hR, 'R'], [B.L, uL, fL, hL, 'L']]) {
+        if (!C || !u || !f || !h) continue;
+        put(jkSeg(u, f, H * 0.05, H * 0.043, 10), jkM.flannel, C.u, false);
+        put(jkSeg(f, h.clone().lerp(f, 0.12), H * 0.043, H * 0.04, 10), jkM.flannel, C.f, false);
+        const cuffA = h.clone().lerp(f, 0.22), cuffB = h.clone().lerp(f, 0.05);
+        put(jkSeg(cuffA, cuffB, H * 0.048, H * 0.05, 10), jkM.burlap, C.f, false);
+        put(jkMerge(jkStraw(cuffB, _jB.subVectors(h, f).normalize().clone(), 10, H * 0.05, 0.9, H * 0.005, rnd)), jkM.straw, C.f, false);
+        put(jkMerge(jkStraw(u.clone().lerp(f, 0.5), new THREE.Vector3(sd === 'R' ? -1 : 1, 0.2, -0.3), 5, H * 0.035, 0.5, H * 0.004, rnd)), jkM.straw, C.u, false);   // out of a split seam
+        // the glove: from the wrist to where the fist closes (the grip, as the hand is scaled)
+        // (the fist closes at the measured grip, well beyond the wrist on this model's long gorilla hands; never absurdly far)
+        const G = MON_GRIP[sd].pos, hs = C.h.scale.x || 1;
+        const gv = _jA.subVectors(G, h).multiplyScalar(hs);
+        if (gv.length() > H * 0.45) gv.setLength(H * 0.45);
+        if (gv.length() < H * 0.03) gv.copy(_jB.subVectors(h, f).setLength(H * 0.08));
+        const gp = h.clone().add(gv);
+        const palm = new THREE.SphereGeometry(H * 0.05, 12, 8); palm.scale(1, 0.85, 1.2);
+        _jQ.setFromUnitVectors(new THREE.Vector3(0, 0, 1), _jA.subVectors(gp, h).normalize());
+        palm.applyMatrix4(_jM.compose(gp.clone(), _jQ, _jS));
+        const fingers = [palm, jkSeg(h, gp, H * 0.038, H * 0.046, 9)];                    // the long leather gauntlet, wrist to fist
+        for (let k = 1; k <= 3; k++) { const tg = new THREE.TorusGeometry(H * 0.043, H * 0.006, 4, 12); _jQ.setFromUnitVectors(new THREE.Vector3(0, 0, 1), _jB.subVectors(gp, h).normalize()); tg.applyMatrix4(_jM.compose(h.clone().lerp(gp, k * 0.22), _jQ, _jS)); fingers.push(tg); }   // twine wrapped round it
+        const fwd = _jA.subVectors(gp, h).normalize().clone(), side = new THREE.Vector3().crossVectors(fwd, _jUp).normalize();
+        for (let k = 0; k < 4; k++) {                                       // gnarled twig fingers, crooked, curling round the grip
+          const base = gp.clone().addScaledVector(side, (k - 1.5) * H * 0.018).addScaledVector(fwd, H * 0.01);
+          const mid = base.clone().addScaledVector(fwd, H * 0.035).add(new THREE.Vector3(0, -H * 0.02, 0));
+          const tip = mid.clone().addScaledVector(fwd, H * 0.01).add(new THREE.Vector3(0, -H * 0.035, 0)).addScaledVector(side, (rnd() - 0.5) * H * 0.01);
+          fingers.push(jkSeg(base, mid, H * 0.009, H * 0.007, 5), jkSeg(mid, tip, H * 0.007, H * 0.003, 5));
+        }
+        put(jkMerge(fingers), jkM.leather, C.h, false);
+        const thumbA = h.clone().lerp(gp, 0.9).addScaledVector(side, (sd === 'R' ? 1 : -1) * H * 0.035), thumbB = thumbA.clone().addScaledVector(fwd, H * 0.03).add(new THREE.Vector3(0, -H * 0.01, 0));
+        put(jkSeg(thumbA, thumbB, H * 0.01, H * 0.004, 5), jkM.twig, C.h, false);
+      }
+      inst.root.updateMatrixWorld(true);
+      // the monster.glb body and its eyes: hidden while he's Jack
+      const orig = [];
+      if (inst.mesh) orig.push(inst.mesh);
+      if (inst.eye) for (const c of inst.eye.children) orig.push(c);
+      S0.traverse((o) => { if (o.isSkinnedMesh && o !== inst.mesh && !orig.includes(o) && !(inst.mesh && inst.mesh.children.includes(o))) orig.push(o); });
+      inst.jack = { parts, orig, on: null, bodyLayer };
+      return inst.jack;
+    }
+    function jkSet(inst, on) {
+      if (!inst) return;
+      if (on && !inst.jack) { try { jkBuild(inst, inst.firstPerson); } catch (e) { console.warn('[Jack] build', e); inst.jack = { parts: [], orig: [], on: null, failed: true }; } }
+      const J = inst.jack; if (!J || J.failed) return;
+      for (const o of J.orig) o.visible = !on;                              // (every frame: nothing else gets to show the old body here)
+      if (J.on === on) return;
+      J.on = on;
+      for (const m of J.parts) m.visible = on;
+    }
+    // ---------- the rusty sickle: the machete reskinned (same grip, same hit checks) ----------
+    const jkSickleGeo = (() => {
+      // in the machete's frame: the handle along Z (pommel at +Z), the blade out along -Z, its edge down (-Y)
+      const parts = [];
+      const h = new THREE.CylinderGeometry(0.017, 0.02, 0.15, 10).rotateX(Math.PI / 2); h.translate(0, 0, 0.0); parts.push(h);
+      const knob = new THREE.SphereGeometry(0.021, 10, 8); knob.translate(0, 0, 0.078); parts.push(knob);
+      const handle = jkMerge(parts);
+      const fer = new THREE.CylinderGeometry(0.021, 0.021, 0.022, 10).rotateX(Math.PI / 2); fer.translate(0, 0, -0.07);
+      // the crescent: (s = out along the blade, w = up), round a centre ahead of and below the handle
+      const cs = 0.24, cw = -0.15, Ro = Math.hypot(cs - 0.07, cw), a0 = Math.atan2(-cw, 0.07 - cs), a1 = -0.75, N = 28;
+      const sh = new THREE.Shape();
+      for (let k = 0; k <= N; k++) { const a = a0 + (a1 - a0) * (k / N), r = Ro; const x = cs + Math.cos(a) * r, y = cw + Math.sin(a) * r; if (k === 0) sh.moveTo(x, y); else sh.lineTo(x, y); }
+      for (let k = N; k >= 0; k--) { const f = k / N, a = a0 + (a1 - a0) * f, r = Ro - 0.045 * Math.pow(1 - f, 0.8) - 0.002; sh.lineTo(cs + 0.012 + Math.cos(a) * r, cw - 0.012 + Math.sin(a) * r); }
+      const blade = new THREE.ExtrudeGeometry(sh, { depth: 0.004, bevelEnabled: true, bevelThickness: 0.0012, bevelSize: 0.0018, bevelSegments: 1, curveSegments: 4 });
+      const p = blade.attributes.position, uv = blade.attributes.uv;
+      for (let i = 0; i < p.count; i++) uv.setXY(i, p.getX(i) / 0.5, (p.getY(i) + 0.32) / 0.42);
+      blade.rotateY(Math.PI / 2); blade.translate(-0.002, 0, 0);
+      const tang = new THREE.BoxGeometry(0.008, 0.016, 0.03); tang.translate(0, 0, -0.08);
+      return { handle, metal: jkMerge([fer, tang]), blade };
+    })();
+    function jkSickleFor(machete) {
+      if (!machete) return null;
+      if (machete.userData.jkSickle) return machete.userData.jkSickle;
+      const orig = []; machete.traverse((o) => { if ((o.isMesh || o.isSprite) && o !== machete) orig.push(o); });
+      const g = new THREE.Group(); g.name = 'jackSickle';
+      for (const [geo, mat] of [[jkSickleGeo.handle, jkM.handle], [jkSickleGeo.metal, jkM.rust], [jkSickleGeo.blade, jkM.rust]]) { const m = new THREE.Mesh(geo, mat); m.castShadow = true; m.frustumCulled = false; g.add(m); }
+      g.visible = false; machete.add(g);
+      const S = { g, orig, on: null };
+      machete.userData.jkSickle = S;
+      return S;
+    }
+    function jkSickleSet(machete, on) {
+      const S = on ? jkSickleFor(machete) : machete && machete.userData.jkSickle; if (!S) return;
+      for (const o of S.orig) if (o.visible === on) o.visible = !on;
+      if (S.on === on) return; S.on = on; S.g.visible = on;
+      S.g.traverse((o) => { if (o.layers && S.orig[0]) o.layers.mask = S.orig[0].layers.mask; });
+    }
+    // ---------- which monsters are Jack ----------
+    const jkLight = { x: 0, y: 1, z: 0, color: 0xff7a24, intensity: 1.6, distance: 6, weight: 1.6, fire: true };
+    let jkLit = false;
+    function jkUpdate(dt) {
+      if (!MONG.ready) return;
+      const t = performance.now() * 0.001;
+      jkM.pumpkin.emissiveIntensity = (jkFin.glare || 1) * (1.15 + 0.25 * Math.sin(t * 11) * Math.sin(t * 3.3) + 0.15 * Math.random());
+      // the AI
+      const aiJack = !!(monAI && ai.map === JACK_MAP);
+      jkSet(monAI, aiJack);
+      if (typeof aiMacheteClone !== 'undefined' && aiMacheteClone) jkSickleSet(aiMacheteClone, aiJack);
+      // you as the monster (and your machete wherever it lies)
+      const meJack = !!(monMe && currentMap === JACK_MAP);
+      jkSet(monMe, meJack);
+      jkSickleSet(mMachete, currentMap === JACK_MAP);
+      // other players' monsters on Hallowcreek
+      for (const r of netPeers().values()) {
+        if (!r.monGlb) continue;
+        const on = !!(r.st && r.st.m === JACK_MAP);
+        jkSet(r.monGlb, on);
+        if (r.monGlbMachete) jkSickleSet(r.monGlbMachete, on);
+      }
+      // his pumpkin lights the fog round him
+      const want = aiJack && monAI.root.visible && currentMap === JACK_MAP && !titleActive;
+      if (want && !jkLit) { lightSources.push(jkLight); jkLit = true; }
+      if (!want && jkLit) { const i = lightSources.indexOf(jkLight); if (i >= 0) lightSources.splice(i, 1); jkLit = false; }
+      if (jkLit) {
+        const e = monAI.eye; if (e) e.getWorldPosition(_jA); else _jA.set(ai.pos.x, ai.pos.y + 0.8, ai.pos.z);
+        jkLight.x = _jA.x; jkLight.y = _jA.y + 0.05; jkLight.z = _jA.z;
+        for (const slot of lightPool) if (slot.src === jkLight) slot.light.position.set(jkLight.x, jkLight.y, jkLight.z);
+      }
+    }
+
+    // =====================================================================
+    //  THE AI JACK: the legless knuckle-walk, and the finisher pose
+    // =====================================================================
+    const JK_DROP = 0.26, JK_LEAN = 0.38;
+    const _jkS = new THREE.Vector3(), _jkT = new THREE.Vector3(), _jkF = new THREE.Vector3(), _jkQ = new THREE.Quaternion(), _jkE = new THREE.Euler(), _jkH = new THREE.Vector3();
+    function jkArm(I, sd, target, qx) {
+      _jkQ.copy(I.root.quaternion).multiply(new THREE.Quaternion().setFromEuler(_jkE.set(qx, 0, 0)));
+      monArmIK(I, sd, target, _jkQ, 0.9);
+    }
+    {
+      const baseAMA = animateMonAI;
+      animateMonAI = function (dt, moving) {
+        const r = baseAMA(dt, moving);
+        const I = monAI;
+        if (!I || !I.root.visible || ai.map !== JACK_MAP || (I.jack && I.jack.failed)) return r;
+        try {
+          const Hw = MON_AI_HEIGHT, g0 = groundY(ai.map, ai.pos.x, ai.pos.z);
+          if (caught && caught.jack) { jkFinisherPose(I, dt, g0); return r; }
+          if (ai.state === 'stunned' && ai.rag) return r;                        // (shot: the collapse as it is)
+          // hunched low on his stake, leaning into it
+          const chasing = ai.state === 'chase';
+          I.root.position.y = Math.max(g0, ai.pos.y) - JK_DROP * Hw;
+          I.root.rotation.set(JK_LEAN + (chasing ? 0.12 : 0) + Math.sin(I.walkPhase * 2) * 0.03, ai.heading, Math.sin(I.walkPhase) * 0.05, 'YXZ');
+          I.root.updateMatrixWorld(true);
+          _jkF.set(Math.sin(ai.heading), 0, Math.cos(ai.heading));
+          const amt = moving ? THREE.MathUtils.clamp(I.speed / 1.2, 0.35, 1) : 0;
+          for (const sd of ['R', 'L']) {
+            const C = I.bones[sd]; if (!C || !C.u) continue;
+            if (sd === 'R' && ai.slash) {                                      // the sickle's slash: as before, from the hunched body
+              aiParts.arms[0].hand.getWorldPosition(_jkT);
+              _jkQ.copy(aiRoot.quaternion).multiply(aiParts.arms[0].hand.quaternion);
+              monArmIK(I, 'R', _jkT, _jkQ, 0.9);
+              continue;
+            }
+            // knuckles down: each fist plants ahead in turn and swings through
+            C.u.getWorldPosition(_jkS);
+            const ph = I.walkPhase + (sd === 'R' ? 0 : Math.PI), sideS = sd === 'R' ? -1 : 1;
+            const fo = (0.2 + 0.14 * Math.sin(ph) * amt) * Hw, lift = Math.max(0, Math.cos(ph)) * 0.09 * Hw * amt;
+            _jkT.set(_jkS.x + _jkF.x * fo + _jkF.z * sideS * 0.04 * Hw, g0 + 0.035 * Hw + lift, _jkS.z + _jkF.z * fo - _jkF.x * sideS * 0.04 * Hw);
+            jkArm(I, sd, _jkT, sd === 'R' ? -1.0 : -0.6);
+          }
+          I.root.updateMatrixWorld(true);
+        } catch (e) { if (!animateMonAI.jkW) { animateMonAI.jkW = true; console.warn('[Jack] pose', e); } }
+        return r;
+      };
+    }
+
+    // =====================================================================
+    //  THE FINISHER: lifted by the collar, the sickle, YOU WERE ELIMINATED
+    // =====================================================================
+    const JK_T = { lift0: 0.2, lift1: 0.95, stab: 1.8, overlay: 2.65 };
+    const jkFin = { glare: 1 };
+    {
+      const baseBC = beginCatch;
+      beginCatch = function () {
+        const had = !!caught;
+        const r = baseBC();
+        if (!had && caught && caught.quick && !caught.pvp && ai.map === JACK_MAP && currentMap === JACK_MAP && monAI && monAI.jack && !monAI.jack.failed) {
+          caught.jack = { stabbed: false, rig0: playerRig.position.clone(), shake: 0, growled: false };
+          redFlash.material.opacity = 0.6;
+          try { flashEl.style.transition = 'none'; flashEl.style.opacity = 0.5; } catch (e) { }
+          ai.state = 'catch'; ai.slash = null;
+          showToast('JACK O\' HARVEST HAS YOU', '');
+        }
+        return r;
+      };
+    }
+    function jkFinisherPose(I, dt, g0) {
+      const C = caught, J = C.jack, Hw = MON_AI_HEIGHT;
+      headWorld(_jkH);
+      // he straightens up, turned square on to you
+      ai.heading = Math.atan2(_jkH.x - ai.pos.x, _jkH.z - ai.pos.z);
+      const rise = THREE.MathUtils.smoothstep(C.t, 0, JK_T.lift1);
+      I.root.position.set(ai.pos.x, Math.max(g0, ai.pos.y) - JK_DROP * Hw * (1 - rise), ai.pos.z);
+      I.root.rotation.set(JK_LEAN * (1 - rise) - 0.08 * rise, ai.heading, 0, 'YXZ');
+      I.root.updateMatrixWorld(true);
+      // left fist: your collar
+      _jkT.copy(_jkH).add(new THREE.Vector3(0, -0.13, 0)).addScaledVector(_jkF.set(ai.pos.x - _jkH.x, 0, ai.pos.z - _jkH.z).normalize(), 0.06);
+      jkArm(I, 'L', _jkT, -0.2);
+      // right: the sickle raised high and back... then driven in
+      const C2 = I.bones.R; if (C2 && C2.u) C2.u.getWorldPosition(_jkS);
+      const back = _jkF.set(Math.sin(ai.heading), 0, Math.cos(ai.heading));
+      const raised = _jkS.clone().add(new THREE.Vector3(0, 0.22 * Hw, 0)).addScaledVector(back, -0.12 * Hw);
+      const chestP = _jkH.clone().add(new THREE.Vector3(0, -0.2, 0));
+      const k = THREE.MathUtils.smoothstep(C.t, JK_T.stab - 0.12, JK_T.stab);
+      const tremble = C.t < JK_T.stab - 0.12 ? (Math.random() - 0.5) * 0.01 : 0;
+      _jkT.copy(raised).lerp(chestP, k); _jkT.x += tremble; _jkT.y += tremble;
+      jkArm(I, 'R', _jkT, -0.4 - 1.0 * k);
+      I.root.updateMatrixWorld(true);
+    }
+    {
+      const baseUC = updateCatch;
+      updateCatch = function (dt) {
+        const C = caught;
+        if (!C || !C.jack) return baseUC(dt);
+        const J = C.jack, vr = renderer.xr.isPresenting;
+        C.t += dt;
+        const t = C.t;
+        // lifted by the collar: your view is hauled up to his face
+        if (monAI && monAI.eye && t >= JK_T.lift0) {
+          monAI.eye.getWorldPosition(_jkT);
+          _jkF.set(Math.sin(ai.heading), 0, Math.cos(ai.heading));
+          _jkT.addScaledVector(_jkF, 0.24); _jkT.y -= 0.02;
+          if (J.stabbed) _jkT.y -= Math.min(0.12, (t - JK_T.stab) * 0.25);           // you sag on the blade
+          const sway = Math.sin(t * 3.1) * 0.012;
+          _jkT.x += _jkF.z * sway; _jkT.z -= _jkF.x * sway;
+          // (the camera rides in the rig on the desktop too: the rig is what's hauled up)
+          if (vr) headWorld(_jkH); else camera.getWorldPosition(_jkH);
+          const k = Math.min(1, dt * (t < JK_T.lift1 ? 5 : 8));
+          playerRig.position.addScaledVector(_jkS.subVectors(_jkT, _jkH), k);
+          if (J.shake > 0) { J.shake = Math.max(0, J.shake - dt); playerRig.position.x += (Math.random() - 0.5) * 0.03 * J.shake; playerRig.position.y += (Math.random() - 0.5) * 0.03 * J.shake; }
+          if (!vr && monAI.eye) { monAI.eye.getWorldPosition(_jkH); camera.lookAt(_jkH); }      // desktop: you're made to look him in the eyes
+        }
+        // the hold: his grin blazes, the breathing, your heart
+        if (t < JK_T.stab) {
+          jkFin.glare = 1 + 1.4 * THREE.MathUtils.smoothstep(t, JK_T.lift0, JK_T.stab);
+          redFlash.material.opacity = Math.max(0.25, redFlash.material.opacity - dt * 0.8);
+          if (!J.growled && t > JK_T.lift1 - 0.2) { J.growled = true; try { gameAudio.growl(); } catch (e) { } try { chaseAudio.heartbeat?.(1); } catch (e) { } }
+          if (vr && Math.random() < dt * 10) for (const c of controllers) pulse(c, 0.15 + 0.25 * (t / JK_T.stab), 25);
+        } else if (!J.stabbed) {
+          // the sickle
+          J.stabbed = true; J.shake = 0.5; jkFin.glare = 2.8;
+          try { chaseAudio.sting(); } catch (e) { }
+          try { gameAudio.smash(1.5); } catch (e) { }
+          try { gameAudio.thud?.(0); } catch (e) { }
+          try { gameAudio.hack(0.2, 1.2); } catch (e) { }
+          for (const c of controllers) pulse(c, 1, 450);
+          redFlash.visible = true; redFlash.material.opacity = 1;
+          try { flashEl.style.transition = 'none'; flashEl.style.opacity = 1; requestAnimationFrame(() => { flashEl.style.transition = 'opacity 1.4s ease'; flashEl.style.opacity = 0.55; }); } catch (e) { }
+        } else {
+          jkFin.glare = Math.max(1, jkFin.glare - dt * 1.5);
+          redFlash.material.opacity = Math.max(0.6, redFlash.material.opacity - dt * 0.6);
+          if (t > JK_T.stab + 0.25) { travelFade.visible = true; travelFadeMat.opacity = Math.min(0.65, (t - JK_T.stab - 0.25) * 1.1); }
+        }
+        // YOU WERE ELIMINATED
+        if (t > JK_T.overlay && !C.overlay) {
+          C.overlay = true; jkFin.glare = 1;
+          jkTitles(true);
+          if (vr) { redrawPanel(caughtPanel); caughtGroup.visible = true; placeCaughtPanel(true); }
+          else caughtEl.classList.add('show');
+        }
+        if (caughtGroup.visible) placeCaughtPanel(false);
+      };
+    }
+    // the caught screen's words on Hallowcreek: YOU WERE ELIMINATED (by the AI's sickle, or by a player's)
+    const jkTitleSaved = { t: null, s: null };
+    function jkTitles(on) {
+      const t = caughtEl.querySelector('.c-title'), s = caughtEl.querySelector('.c-sub'); if (!t || !s) return;
+      if (on) {
+        if (jkTitleSaved.t === null) { jkTitleSaved.t = t.textContent; jkTitleSaved.s = s.textContent; }
+        t.textContent = 'YOU WERE ELIMINATED';
+        if (!(caught && caught.pvp)) s.textContent = "Jack o' Harvest got you.";
+      } else if (jkTitleSaved.t !== null) { t.textContent = jkTitleSaved.t; if (!(caught && caught.pvp)) s.textContent = jkTitleSaved.s; jkTitleSaved.t = null; }
+    }
+    {
+      const baseDraw = caughtPanel.draw;
+      caughtPanel.draw = function (g, p) {
+        if (!(caught && caught.map === JACK_MAP)) return baseDraw.call(this, g, p);
+        const fill = g.fillText;
+        g.fillText = function (text, x, y, maxW) {
+          if (text === 'YOU WERE CAUGHT') return fill.call(this, 'YOU WERE ELIMINATED', x, y, p.cw - 70);
+          if (text === 'The monster got you.') return fill.call(this, "Jack o' Harvest got you.", x, y, maxW);
+          return maxW === undefined ? fill.call(this, text, x, y) : fill.call(this, text, x, y, maxW);
+        };
+        try { return baseDraw.call(this, g, p); } finally { g.fillText = fill; }
+      };
+      const baseCC = clearCaught;
+      clearCaught = function () { jkTitles(false); jkFin.glare = 1; return baseCC(); };
+      // a player's monster eliminating you on Hallowcreek: the same words
+      const baseNet = updateNet;
+      updateNet = function (dt) {
+        const r = baseNet(dt);
+        try { if (caught && caught.map === JACK_MAP && caught.overlay && jkTitleSaved.t === null) jkTitles(true); } catch (e) { }
+        try { jkUpdate(dt); } catch (e) { if (!updateNet.jkW) { updateNet.jkW = true; console.warn('[Jack] update', e); } }
+        return r;
+      };
+    }
+    // (for the tests)
+    window.__jack = { jkBuild, jkSet, jkSickleFor, jkSickleSet, jkFin, JK_T, jkTitles, inst: () => ({ ai: !!monAI, me: !!monMe, aiJack: !!(monAI && monAI.jack), aiParts: monAI && monAI.jack ? monAI.jack.parts.length : 0, aiOn: monAI && monAI.jack ? monAI.jack.on : null }), caught: () => caught && { t: caught.t, jack: !!caught.jack, overlay: caught.overlay, map: caught.map } };
 
     // ---------- XR session hooks ----------
     renderer.xr.addEventListener('sessionstart', () => {
