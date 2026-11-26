@@ -6293,6 +6293,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'NEW', date: '26/11/26', title: 'THE NEW MONSTER 2',
+        text: 'The new monster model: 2.45 tall, legless under its long coat, huge gloved hands with a clawed thumb. Hold Grip and that hand closes into a fist round the machete; let go and it opens and the machete drops. Its eyes glow red behind the mask, and your own view never shows its head or chest.' },
       { tag: 'NEW', date: '26/11/26', title: 'THE KILL',
         text: 'Grab and pull: the limb shakes and rumbles, then snaps off at 35 cm and stays in your fist to wave or throw. Every rip, sever or killing blow drains your view to grey with the blood still red and flashes a white outline round the victim, with a deep crunch, a hit-stop and a hard buzz. Hits leave blood on bodies, and blood bursts out and splatters the floor.' },
       { tag: 'FIX', date: '25/11/26', title: 'NO MORE RUBBER LIMBS',
@@ -21513,25 +21515,34 @@
     //  model's hands follow), and it's what you see if monster.glb can't be loaded.
     // =====================================================================
     const MONSTER_GLB_URL = './monster.glb';
-    const MON_AI_HEIGHT = 1.25 * 1.3;       // the AI monster's height in metres (1.3x the first size: it towers over the survivors)
-    const MON_EYE_FRAC = 0.885;             // its eyes, as a fraction of its height (the mask's eye holes)
-    const MON_REMOTE_MIN_H = 1.1;           // another player's monster stands at least this tall (towering over survivors)
+    const MON_AI_HEIGHT = 2.45;             // the AI monster's height (game units): an imposing 2.4-2.5
+    const MON_EYE_FRAC = 0.8475;            // its eyes, as a fraction of its height (the mask's eye holes, measured on the model)
+    const MON_REMOTE_MIN_H = MON_AI_HEIGHT; // another player's monster stands this tall too (your own is fitted to your eyes)
     const MONG = { ready: false, src: null, failed: false };
     // the grip in the right hand (model frame, from the machete the model was made holding): where the fist closes and
     // how the handle runs through it (Z along the handle, -Z the way the blade points, Y the back of the blade)
-    const MON_GRIP_R = { pos: new THREE.Vector3(-0.548, -0.442, 0.150),
-      z: new THREE.Vector3(0.418, -0.788, -0.451), y: new THREE.Vector3(0.375, 0.602, -0.705) };
-    const MON_MIRROR_X = 0.163;            // the model's centre line (its spine)
+    // (measured on the re-rigged model: the hollow of each closed fist, the handle along the fingers' curl axis, the
+    // blade out of the thumb side)
+    const MON_GRIP_R = { pos: new THREE.Vector3(-0.9140, -0.5322, 0.3552),
+      z: new THREE.Vector3(-0.8500, -0.3327, -0.4083), y: new THREE.Vector3(0.0581, 0.7114, -0.7004) };
+    const MON_GRIP_L0 = { pos: new THREE.Vector3(0.7093, -0.6618, 0.2307),
+      z: new THREE.Vector3(0.7826, -0.3082, -0.5409), y: new THREE.Vector3(-0.1764, 0.7235, -0.6674) };
+    const MON_MIRROR_X = -0.0745;          // the model's centre line (its spine)
+    const MON_EYE = new THREE.Vector3(-0.0745, 0.552, -0.075);   // between the mask's eye holes (model units)
+    // the fingers' curl axes (model frame = every bone's rest frame): the two big fingers, and the thumb stub
+    const MON_CURL = {
+      Left: { finger: new THREE.Vector3(0.7826, -0.3082, -0.5409), thumb: new THREE.Vector3(0.5983, -0.0391, -0.8003) },
+      Right: { finger: new THREE.Vector3(-0.8500, -0.3327, -0.4083), thumb: new THREE.Vector3(-0.8820, -0.4598, -0.1034) },
+    };
     function gripBasis(z, y) {
       const Z = z.clone().normalize(), Y = y.clone().addScaledVector(Z, -y.dot(Z)).normalize(), X = new THREE.Vector3().crossVectors(Y, Z);
       return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(X, Y, Z));
     }
     const MON_GRIP = {
       R: { pos: MON_GRIP_R.pos.clone(), q: gripBasis(MON_GRIP_R.z, MON_GRIP_R.y) },
-      L: { pos: new THREE.Vector3(2 * MON_MIRROR_X - MON_GRIP_R.pos.x, MON_GRIP_R.pos.y, MON_GRIP_R.pos.z),
-        q: gripBasis(new THREE.Vector3(-MON_GRIP_R.z.x, MON_GRIP_R.z.y, MON_GRIP_R.z.z), new THREE.Vector3(-MON_GRIP_R.y.x, MON_GRIP_R.y.y, MON_GRIP_R.y.z)) },
+      L: { pos: MON_GRIP_L0.pos.clone(), q: gripBasis(MON_GRIP_L0.z, MON_GRIP_L0.y) },     // (the hands aren't mirror images: measured too)
     };
-    const MACHETE_PER_MODEL_UNIT = 1.25;    // machete units per model unit (the size of the blade it was made with)
+    const MACHETE_PER_MODEL_UNIT = 0.9;     // machete units per model unit (on the AI: about a metre of blade in its huge fist)
     const aiMacheteClone = (() => { const i = mArms[0].hand.children.indexOf(mMachete); return i >= 0 ? aiParts.arms[0].hand.children[i] : null; })();
 
     function monLoad() {
@@ -21558,7 +21569,7 @@
       console.log('[MonsterGLB] bones (' + names.length + '):', names.join(', '));
       if (!skinned) throw new Error('no skinned mesh in monster.glb');
       monRepairRestPose(skinned);
-      monRemoveBakedMachete(skinned.geometry);
+      if (!names.some((n) => /HandIndex1$/i.test(n))) monRemoveBakedMachete(skinned.geometry);   // (only the old model had one built in)
       sc.updateMatrixWorld(true);
       const bb = new THREE.Box3().setFromObject(skinned);
       const geoBB = (skinned.geometry.computeBoundingBox(), skinned.geometry.boundingBox);
@@ -21649,18 +21660,18 @@
       if (bones.head) {
         const hw = bones.head.getWorldPosition(new THREE.Vector3());             // (model units: the fit is applied above the scene)
         scene0.worldToLocal(hw);
-        eye.position.set(MON_MIRROR_X - hw.x, 0.70 - hw.y, 0.06 - hw.z);       // the mask's eye holes (model units)
+        eye.position.set(MON_EYE.x - hw.x, MON_EYE.y - hw.y, MON_EYE.z - hw.z);  // the mask's eye holes (model units)
         bones.head.add(eye);
       }
       // behind the mask's eye holes: the dark inside of the head and two glowing crimson eyes (never see-through)
       if (bones.head) {
-        const inside = new THREE.Mesh(new THREE.SphereGeometry(0.115, 16, 12), new THREE.MeshBasicMaterial({ color: 0x050303 }));
-        inside.position.set(0, -0.01, -0.13); eye.add(inside);
+        const inside = new THREE.Mesh(new THREE.SphereGeometry(0.135, 16, 12), new THREE.MeshBasicMaterial({ color: 0x050303 }));
+        inside.position.set(0, -0.005, -0.145); eye.add(inside);
         for (const sx of [-1, 1]) {
-          const orb = new THREE.Mesh(new THREE.SphereGeometry(0.022, 12, 10), new THREE.MeshBasicMaterial({ color: 0xff1a10, fog: false }));
-          orb.position.set(sx * 0.065, 0, -0.035); eye.add(orb);
+          const orb = new THREE.Mesh(new THREE.SphereGeometry(0.026, 12, 10), new THREE.MeshBasicMaterial({ color: 0xff1a10, fog: false }));
+          orb.position.set(sx * 0.0865, 0, -0.035); eye.add(orb);
           const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xff1808, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
-          glow.scale.setScalar(0.08); glow.position.set(sx * 0.065, 0, -0.01); eye.add(glow);
+          glow.scale.setScalar(0.095); glow.position.set(sx * 0.0865, 0, -0.01); eye.add(glow);
         }
       }
       // your own copy: the whole body for everyone else's view (POV monitor, desktop), and a copy without the head,
@@ -21675,6 +21686,15 @@
       root.visible = false;
       scene.add(root);
       const inst = { root, fit, scene0, mesh, byName, bones, eye, height: 1, walkPhase: 0, speed: 0, prevPos: new THREE.Vector3(), hasPrev: false, aIsRight, firstPerson: !!(opts && opts.firstPerson) };
+      // the finger bones of each hand (the model's R / L), with the axis each one curls about
+      inst.fingers = { R: [], L: [] }; inst.curlS = { R: 0, L: 0 }; inst.curlT = { R: 0, L: 0 };
+      for (const [file, sd] of [['Left', aIsRight ? 'R' : 'L'], ['Right', aIsRight ? 'L' : 'R']]) {
+        const ax = MON_CURL[file];
+        for (const f of ['Thumb', 'Index', 'Middle', 'Ring', 'Pinky']) for (let k = 1; k <= 3; k++) {
+          const b = byName[file + 'Hand' + f + k]; if (!b) continue;
+          inst.fingers[sd].push({ b, axis: (f === 'Thumb' ? ax.thumb : ax.finger).clone().normalize(), ang: f === 'Thumb' ? [0.42, 0.5, 0.42][k - 1] : [0.95, 1.15, 0.95][k - 1] });
+        }
+      }
       return inst;
     }
     function find0(byName, re) { for (const [n, b] of Object.entries(byName)) if (re.test(n)) return b; return null; }
@@ -21905,7 +21925,22 @@
         if (g) monArmIK(inst, sd, g.p, g.q, 0.6);
         else { const C = inst.bones[sd]; boneRot(C.u, sd === 'R' ? -0.2 : 0, 0, 0); boneRot(C.f, -0.5, 0, 0); }
       }
+      monCurlFingers(inst, dt);
       inst.root.updateMatrixWorld(true);
+    }
+    // the fingers: closing (Grip held: tight round the machete's handle) or opening, smoothly
+    const _mcQ = new THREE.Quaternion();
+    function monCurlFingers(inst, dt) {
+      if (!inst.fingers) return;
+      for (const sd of ['R', 'L']) {
+        const T = THREE.MathUtils.clamp(inst.curlT[sd] || 0, 0, 1);
+        inst.curlS[sd] += (T - inst.curlS[sd]) * Math.min(1, (dt || 0.016) * 14);
+        const c = inst.curlS[sd];
+        for (const F of inst.fingers[sd]) {
+          const r = F.b.userData.rest; if (!r) continue;
+          F.b.quaternion.copy(r.q).multiply(_mcQ.setFromAxisAngle(F.axis, F.ang * c));
+        }
+      }
     }
     const _gripR = { p: new THREE.Vector3(), q: new THREE.Quaternion() }, _gripL = { p: new THREE.Vector3(), q: new THREE.Quaternion() };
     function updateMonMe(dt) {
@@ -21923,6 +21958,10 @@
         const src = controllers.find((c) => c.userData.inputSource?.handedness === (sd === 'R' ? 'right' : 'left'));
         const h = src ? hands[controllers.indexOf(src)] : null;
         if (vr && h && h.tracked && !h.goreHid) { arm.hand.getWorldPosition(G.p); G.q.copy(monsterModel.quaternion).multiply(arm.hand.quaternion); grips[sd] = G; }
+      }
+      for (const sd of ['R', 'L']) {
+        const c = controllers.find((cc) => cc.userData.inputSource?.handedness === (sd === 'R' ? 'right' : 'left'));
+        I.curlT[sd] = vr ? (c && btn(c, 1) ? 1 : 0) : (sd === 'R' && macheteInHand() ? 1 : 0);
       }
       poseMonsterGlb(I, dt, _mmHead, vr ? _mmQ : null, monsterYaw + Math.PI, currentMap, grips);
       // the machete at its usual size in your hand
@@ -22009,6 +22048,7 @@
         const grips = {};
         if (s.vr) for (const [k, sd] of [[0, 'L'], [1, 'R']]) { const H = r.hand[k]; if (H && H.ok) grips[sd] = { p: H.p, q: H.q }; }
         _rmHead.copy(r.pos);
+        for (const [k, sd] of [[0, 'L'], [1, 'R']]) { const H = r.hand[k]; I.curlT[sd] = H && H.c ? (+H.c[1] || 0) : (sd === 'R' && !s.mw ? 1 : 0); }
         poseMonsterGlb(I, dt, _rmHead, r.quat, r.yaw + Math.PI, s.m, grips, MON_REMOTE_MIN_H);
         // hit by a survivor's weapon: it reels back for a moment
         if (r.monFlinchT > 0) {
@@ -22050,6 +22090,21 @@
       console.log('[MonsterGLB] ready: AI, your monster and other players\' monsters now use monster.glb' + (monAI.aIsRight ? ' (its "Left" bones are on its right side: swapped)' : ''));
     }
     monLoad();
+    // the AI monster's hands: the machete hand closed tight round the handle, the other half-clenched (tighter in a
+    // chase); limp when it's down
+    {
+      const baseAMA = animateMonAI;
+      animateMonAI = function (dt, moving) {
+        const r = baseAMA(dt, moving);
+        const I = monAI;
+        if (I && I.root.visible && I.fingers) {
+          const down = ai.state === 'stunned';
+          I.curlT.R = down ? 0.45 : 1; I.curlT.L = down ? 0.15 : ai.state === 'chase' ? 0.75 : 0.35;
+          monCurlFingers(I, dt); I.root.updateMatrixWorld(true);
+        }
+        return r;
+      };
+    }
 
     // =====================================================================
     //  CUT IN HALF (from the playtest videos)
