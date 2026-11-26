@@ -6293,6 +6293,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'FIX', date: '26/11/26', title: 'HALLOWCREEK MONSTER FIXES',
+        text: "Jack o' Harvest now hunts Hallowcreek whenever nobody is playing the MONSTER: he patrols the streets, yards and the ground floor of every house, shoves through doors, and goes after the nearest or noisiest survivor. Playing the MONSTER on Hallowcreek, you're now his size (about 1.4x a survivor) instead of towering over the doorways." },
       { tag: 'NEW', date: '26/11/26', title: "JACK O' HARVEST",
         text: "Hallowcreek has its own monster: a scarecrow brute with a rotting jack-o'-lantern head, ember eyes, patched flannel spilling straw, still lashed to the broken stake he hung from, and a rusty sickle. He knuckle-walks through the fog, his pumpkin glowing. Run out of escapes and he lifts you by the collar to his face before the sickle goes in. Play the MONSTER on Hallowcreek and you are Jack." },
       { tag: 'NEW', date: '26/11/26', title: 'WALKIE-TALKIES',
@@ -14106,7 +14108,7 @@
       if (map === 'camp') return inLakeArea(x, z, pad);
       return extraLakes.some((l) => l.map === map && x > l.x0 - pad && x < l.x1 + pad && z > l.z0 - pad && z < l.z1 + pad);
     }
-    const groundY = (map, x, z) => (map === 'camp' ? floorAt(x, z) : map === 'mine' ? mineFloorAt(x, z) : 0);   // (the mine's stairs and decks)
+    const groundY = (map, x, z) => (map === 'camp' ? floorAt(x, z) : map === 'mine' ? mineFloorAt(x, z) : map === 'hallowcreek' ? hcNavGround(x, z) : 0);   // (Hallowcreek: its floors, from hcNavGround)   // (the mine's stairs and decks)
     function buildNav(map) {
       const D = NAV_DEF[map];
       // the solid things in this map at body height, bucketed in 2 m cells
@@ -28263,6 +28265,7 @@
     //  - Everywhere else nothing changes: the camp, the graveyard and the mine keep monster.glb and the machete.
     // =====================================================================
     const JACK_MAP = 'hallowcreek';
+    const JK_HEIGHT = 0.96;                 // Jack, AI and player alike: about 1.43x a survivor (about 1.6 m as it looks in the headset)
     // ---------- textures and materials (shared by every Jack) ----------
     const jkTex = (() => {
       const mk = (w, h, draw) => { const c = document.createElement('canvas'); c.width = w; c.height = h; draw(c.getContext('2d'), w, h); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t; };
@@ -28617,7 +28620,8 @@
         const I = monAI;
         if (!I || !I.root.visible || ai.map !== JACK_MAP || (I.jack && I.jack.failed)) return r;
         try {
-          const Hw = MON_AI_HEIGHT, g0 = groundY(ai.map, ai.pos.x, ai.pos.z);
+          monSetHeight(I, JK_HEIGHT);
+          const Hw = JK_HEIGHT, g0 = groundY(ai.map, ai.pos.x, ai.pos.z);
           if (caught && caught.jack) { jkFinisherPose(I, dt, g0); return r; }
           if (ai.state === 'stunned' && ai.rag) return r;                        // (shot: the collapse as it is)
           // hunched low on his stake, leaning into it
@@ -28669,7 +28673,7 @@
       };
     }
     function jkFinisherPose(I, dt, g0) {
-      const C = caught, J = C.jack, Hw = MON_AI_HEIGHT;
+      const C = caught, J = C.jack, Hw = JK_HEIGHT;
       headWorld(_jkH);
       // he straightens up, turned square on to you
       ai.heading = Math.atan2(_jkH.x - ai.pos.x, _jkH.z - ai.pos.z);
@@ -28780,6 +28784,153 @@
     }
     // (for the tests)
     window.__jack = { jkBuild, jkSet, jkSickleFor, jkSickleSet, jkFin, JK_T, jkTitles, inst: () => ({ ai: !!monAI, me: !!monMe, aiJack: !!(monAI && monAI.jack), aiParts: monAI && monAI.jack ? monAI.jack.parts.length : 0, aiOn: monAI && monAI.jack ? monAI.jack.on : null }), caught: () => caught && { t: caught.t, jack: !!caught.jack, overlay: caught.overlay, map: caught.map } };
+    // =====================================================================
+    //  r95: HALLOWCREEK fixes
+    //  1. The AI monster now hunts Hallowcreek. It never spawned there: the AI only hunts maps with a walking grid,
+    //     and the town had none. Now it has one (0.5 m, over the whole town: streets, sidewalks, yards, alleys, the
+    //     park, and the ground floor of every house, its doorways opened up so it can shove through the doors), and
+    //     the town's floors (road, curbs, porches and steps, the 0.45 m house floors) to walk on. So when a match
+    //     starts on Hallowcreek with no human MONSTER, Jack o' Harvest spawns on the far side of town, patrols the
+    //     streets and houses, goes after the nearest / loudest survivor, and finishes with the lift-and-stab.
+    //     (He doesn't climb stairs: upstairs is somewhere to hide.)
+    //  2. Hallowcreek's monster, the AI and you in the MONSTER role, is JK_HEIGHT tall (0.96: about 1.43x a
+    //     survivor, about 1.6 m as it looks in the headset): your eyes are lifted to his eyes (0.81) instead of
+    //     1.8 there, your body is that tall, and everyone else sees you that tall. Every other map is unchanged.
+    // =====================================================================
+    const HC_NAV_STEP = 0.5, HC_GROUND_STEP = 0.25, HC_GROUND_TOP = 0.65;
+    const HC_MON_EYE = JK_HEIGHT * MON_EYE_FRAC;
+    // ---------- the town's floors: the highest floor-like top (road 0, curb 0.15, porch / house floor 0.45...) ----------
+    // (hoisted: groundY asks for it; its grid is kept on the function itself, so it's safe to ask at any time)
+    function hcNavGround(x, z) {
+      let G = hcNavGround.grid;
+      if (!G) { try { G = hcNavGround.grid = mapLoad.withColliders('hallowcreek', hcBuildGround); } catch (e) { hcNavGround.grid = G = { failed: true }; console.warn('[Hallowcreek] floors', e); } }
+      if (G.failed) return 0;
+      const i = Math.round((x - G.x0) / HC_GROUND_STEP), j = Math.round((z - G.z0) / HC_GROUND_STEP);
+      if (i < 0 || j < 0 || i >= G.nx || j >= G.nz) return 0;
+      return G.h[i * G.nz + j];
+    }
+    function hcBuildGround() {
+      const x0 = HALLOW.x0 - 2, x1 = HALLOW.x1 + 2, z0 = HALLOW.z0 - 2, z1 = HALLOW.z1 + 2;
+      const nx = Math.floor((x1 - x0) / HC_GROUND_STEP) + 1, nz = Math.floor((z1 - z0) / HC_GROUND_STEP) + 1, h = new Float32Array(nx * nz);
+      // floor-like boxes only (their tops at most HC_GROUND_TOP: nothing you'd stand on top of furniture), bucketed
+      const B = 2, bnx = Math.ceil((x1 - x0) / B) + 1, bnz = Math.ceil((z1 - z0) / B) + 1, bk = Array.from({ length: bnx * bnz }, () => []);
+      for (const c of colliders) {
+        const b = c.box;
+        if (b.max.y > HC_GROUND_TOP + 0.001 || b.max.y < -500 || b.max.y - b.min.y > 6) continue;
+        if (b.max.x < x0 || b.min.x > x1 || b.max.z < z0 || b.min.z > z1) continue;
+        const i0 = Math.max(0, Math.floor((b.min.x - x0) / B)), i1 = Math.min(bnx - 1, Math.floor((b.max.x - x0) / B));
+        const j0 = Math.max(0, Math.floor((b.min.z - z0) / B)), j1 = Math.min(bnz - 1, Math.floor((b.max.z - z0) / B));
+        for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) bk[i * bnz + j].push(b);
+      }
+      for (let i = 0; i < nx; i++) for (let j = 0; j < nz; j++) {
+        const x = x0 + i * HC_GROUND_STEP, z = z0 + j * HC_GROUND_STEP;
+        let best = 0;
+        for (const b of bk[Math.floor((x - x0) / B) * bnz + Math.floor((z - z0) / B)]) if (b.max.y > best && x >= b.min.x && x <= b.max.x && z >= b.min.z && z <= b.max.z) best = b.max.y;
+        h[i * nz + j] = best;
+      }
+      return { x0, z0, nx, nz, h };
+    }
+    // ---------- the walking grid ----------
+    NAV_DEF.hallowcreek = { x0: HALLOW.x0 - 1, x1: HALLOW.x1 + 1, z0: HALLOW.z0 - 1, z1: HALLOW.z1 + 1, step: HC_NAV_STEP };
+    {
+      const baseBN = buildNav;
+      buildNav = function (map) {
+        if (map !== 'hallowcreek') return baseBN(map);
+        hcNavGround(0, 0);                                                    // (the floors first)
+        try { mapLoad.withColliders('hallowcreek', hcRegisterStepUps); } catch (e) { console.warn('[Hallowcreek] step-ups', e); }
+        const nav = baseBN(map);
+        try { mapLoad.withColliders('hallowcreek', () => hcCarveDoorways(nav)); } catch (e) { console.warn('[Hallowcreek] doorways', e); }
+        return nav;
+      };
+    }
+    // step-ups: the town's low boxes standing on the ground (curbs, sidewalks, porches and their steps, house and shed
+    // slabs, the gazebo deck) are walked up onto, not walked round: the same footprint rule the mine's stairs use
+    // (furniture stands on the floors, not the ground, so it still blocks)
+    function hcRegisterStepUps() {
+      let n = 0;
+      for (const c of colliders) {
+        const b = c.box;
+        if (b.min.y > 0.05 || b.max.y > 0.66 || b.max.y <= 0.05 || b.max.y < -500) continue;
+        if (b.max.x < HALLOW.x0 - 3 || b.min.x > HALLOW.x1 + 3 || b.max.z < HALLOW.z0 - 3 || b.min.z > HALLOW.z1 + 3) continue;
+        if (aiRampCols.has(c)) continue;
+        aiRampCols.set(c, { x0: b.min.x - 0.6, x1: b.max.x + 0.6, z0: b.min.z - 0.6, z1: b.max.z + 0.6 });
+        n++;
+      }
+      hcRegisterStepUps.count = n;
+      return n;
+    }
+    // the doorways: a 0.86 m gap is wider than the monster (0.54) but narrower than the grid's clearance check, so the
+    // cells right in each gap are opened if they clear the jambs by a thinner margin (it slides through them as it walks)
+    function hcCarveDoorways(nav) {
+      const D = nav.D;
+      let opened = 0;
+      for (const d of doors) {
+        const b = d.closedBox; if (!b) continue;
+        const cx = (b.min.x + b.max.x) / 2, cz = (b.min.z + b.max.z) / 2;
+        if (cx < D.x0 || cx > D.x1 || cz < D.z0 || cz > D.z1) continue;
+        const wx = b.max.x - b.min.x, wz = b.max.z - b.min.z, alongX = wx >= wz, half = (alongX ? wx : wz) / 2;
+        for (let a = -half + 0.1; a <= half - 0.1 + 1e-6; a += HC_NAV_STEP / 2) for (let n = -0.75; n <= 0.75 + 1e-6; n += HC_NAV_STEP / 2) {
+          const x = alongX ? cx + a : cx + n, z = alongX ? cz + n : cz + a;
+          const i = Math.round((x - D.x0) / D.step), j = Math.round((z - D.z0) / D.step);
+          if (i < 0 || j < 0 || i >= nav.nx || j >= nav.nz) continue;
+          const k = i * nav.nz + j; if (nav.free[k]) continue;
+          const px = D.x0 + i * D.step, pz = D.z0 + j * D.step;
+          if (Math.abs(alongX ? px - cx : pz - cz) > half - 0.12) continue;       // (only cells actually in line with the gap)
+          if (circleFree(nav, px, pz, 0.14, nav.ys[k], true)) { nav.free[k] = 1; opened++; }
+        }
+      }
+      nav.hcDoorCells = opened;
+      return opened;
+    }
+    try { buildNav('hallowcreek'); } catch (e) { console.warn('[Hallowcreek] walking grid', e); }
+    // a fresh arrival on Hallowcreek: the AI starts from the far side of town (not from wherever it was)
+    {
+      const baseArr = arrive;
+      arrive = function (id) {
+        const r = baseArr(id);
+        try { if (id === 'hallowcreek' && ai.active && ai.map !== 'hallowcreek' && !caught) despawnAI(); } catch (e) { }
+        return r;
+      };
+    }
+
+    // =====================================================================
+    //  2. YOUR SIZE AS HALLOWCREEK'S MONSTER
+    // =====================================================================
+    const hcMonHere = () => currentMap === 'hallowcreek';
+    // your eyes: lifted to his eyes there (the same lift as before, to a different height)
+    updateMonLift = function (dt) {
+      if (monLift.parent !== playerRig) { playerRig.add(monLift); monLift.position.set(0, 0, 0); monLift.rotation.set(0, 0, 0); monLift.scale.set(1, 1, 1); }
+      if (camera.parent !== monLift) monLift.add(camera);
+      const eye = hcMonHere() ? HC_MON_EYE : MON_EYE_HEIGHT;
+      const want = playerRole === 'monster' && renderer.xr.isPresenting && !titleActive ? Math.max(0, eye - SPAWN_HEAD_HEIGHT) : 0;
+      monLiftY += (want - monLiftY) * Math.min(1, (dt || 0.016) * 5);
+      if (Math.abs(want - monLiftY) < 1e-3) monLiftY = want;
+      monLift.position.y = monLiftY / (playerRig.scale.y || 1);
+    };
+    // your body, and everyone else's monster on Hallowcreek: never taller than Jack (and its "tallest lately" memory
+    // forgets the other maps' height straight away)
+    {
+      const basePMG = poseMonsterGlb;
+      poseMonsterGlb = function (inst, dt, headPos, headQ, bodyYaw, map, grips, minH) {
+        if (map !== 'hallowcreek') { inst.hcSized = false; return basePMG(inst, dt, headPos, headQ, bodyYaw, map, grips, minH); }
+        if (!inst.hcSized || (inst.hMax || 0) > JK_HEIGHT) { inst.hMax = Math.min(inst.hMax || JK_HEIGHT, JK_HEIGHT); inst.hcSized = true; }
+        const r = basePMG(inst, dt, headPos, headQ, bodyYaw, map, grips, Math.min(minH || 0, JK_HEIGHT));
+        if (inst.height > JK_HEIGHT + 1e-3) {                                  // (belt and braces: scaled to Jack's height under the same head)
+          const top = inst.root.position.y + inst.height * MON_EYE_FRAC;
+          monSetHeight(inst, JK_HEIGHT);
+          inst.root.position.y = Math.max(floorUnder(map, headPos.x, headPos.z), top - JK_HEIGHT * MON_EYE_FRAC);
+          inst.root.updateMatrixWorld(true);
+        }
+        return r;
+      };
+    }
+    // (for the tests)
+    window.__hcfix = { nav: () => { const n = NAV.hallowcreek; if (!n) return null; let f = 0; for (let k = 0; k < n.free.length; k++) f += n.free[k]; return { nx: n.nx, nz: n.nz, free: f, doorCells: n.hcDoorCells, step: n.D.step }; },
+      ground: (x, z) => hcNavGround(x, z), stepUps: () => hcRegisterStepUps.count, groundOK: () => !!(hcNavGround.grid && !hcNavGround.grid.failed), eye: HC_MON_EYE, height: JK_HEIGHT,
+      ai: () => ({ active: ai.active, map: ai.map, state: ai.state, x: ai.pos.x, z: ai.pos.z, y: ai.pos.y }), lift: () => monLiftY,
+      reach: (ax, az, bx, bz) => { const n = NAV.hallowcreek; const p = findPath(n, nearestFree(n, ax, az), nearestFree(n, bx, bz)); if (!p || !p.length) return null; const e = p[p.length - 1]; return { len: p.length, end: [e.x, e.z], dist: Math.hypot(e.x - bx, e.z - bz) }; },
+      dist: (ax, az) => { const n = NAV.hallowcreek; const d = walkDistances(n, nearestFree(n, ax, az)); let reach = 0; for (let k = 0; k < d.length; k++) if (d[k] >= 0) reach++; return reach; },
+      nodeFree: (x, z) => { const n = NAV.hallowcreek; return n.free[Math.round((x - n.D.x0) / n.D.step) * n.nz + Math.round((z - n.D.z0) / n.D.step)]; } };
 
     // ---------- XR session hooks ----------
     renderer.xr.addEventListener('sessionstart', () => {
