@@ -6293,6 +6293,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'NEW MAP', date: '26/11/26', title: 'HALLOWCREEK',
+        text: 'A fourth map: Maple Lane on Halloween night. Misty street, maples, picket fences, streetlamps, jack-o-lanterns, skeletons, cobwebs, hay and string lights. Walk into five houses with stairs, bedrooms, closets and doors. Hidden: a locked closet with the shotgun and its key, a fire poker and a flashlight.' },
       { tag: 'FIX', date: '26/11/26', title: 'THE MONSTER STANDS TALL',
         text: 'As the monster your eyes are 1.8 off the floor again, with long arms down to the ground. Trigger curls the index finger, Grip the outer finger, X or A the thumb, each hand on its own. The dropped machete only comes back when you reach it. Voice chat remembers ON or OFF.' },
       { tag: 'NEW', date: '26/11/26', title: 'SOMETHING AT THE WINDOW',
@@ -9148,6 +9150,1109 @@
       finial.position.set(GZ.x, top + 1.08 + 0.1, GZ.z); finial.rotation.y = Math.PI / 4;
       scene.add(finial);
     }
+    // =====================================================================
+    //  HALLOWCREEK (map 4): a foggy autumn suburb on Halloween night
+    //  Maple Lane runs east-west through low violet mist: cracked asphalt, sidewalks and curbs, picket fences and
+    //  tall back-yard privacy fences, burning-orange maples shedding leaves over everything, sodium streetlamps,
+    //  porches with rockers, rails and porch lights. Five houses you can walk into (Nos. 11, 13, 15, 12 and 14): living
+    //  rooms with fireplaces or an old TV, kitchens with counters, cabinets, stoves and fridges, dining rooms, laundry
+    //  rooms, halls with real staircases up to the bedrooms, bathrooms and closets, every interior door a hinged door
+    //  you push or pull (the same door physics as the camp cabins). Halloween everywhere: jack-o'-lanterns (carved
+    //  ones glow and flicker), skeletons on porch chairs and hanging from the maples, cobwebs, hay bales, wooden grave
+    //  markers and orange / purple string lights. Two boarded-up houses and dark rooftops past the fences in the fog.
+    //  Built far south of the camp (fog hides it from the other maps) and loaded / unloaded like them. Its repeats are
+    //  InstancedMesh batches split into street blocks; houses and blocks are culling chunks (see X37).
+    // =====================================================================
+    const HALLOW = { x: 0, z: 150, roadHW: 3, curb: 0.15, walk: 1.8, yard: 5, W: 9, D: 8, FL: 0.45, ST: 2.6, SLAB: 0.22, UP: 2.5, T: 0.15,
+      x0: -46.5, x1: 46.5, zb0: 124, zb1: 176 };
+    HALLOW.F1 = HALLOW.FL + HALLOW.ST + HALLOW.SLAB;               // the upstairs floor (top)
+    HALLOW.zN = HALLOW.z - HALLOW.roadHW - HALLOW.curb - HALLOW.walk - HALLOW.yard;   // the north houses' front walls (they face +z)
+    HALLOW.zS = HALLOW.z + HALLOW.roadHW + HALLOW.curb + HALLOW.walk + HALLOW.yard;   // the south houses' front walls (they face -z)
+    HALLOW.fenceN = HALLOW.z - HALLOW.roadHW - HALLOW.curb - HALLOW.walk - 0.3;
+    HALLOW.fenceS = HALLOW.z + HALLOW.roadHW + HALLOW.curb + HALLOW.walk + 0.3;
+    const HC_CHUNKS = [];                        // culling chunks: { obj, c, r, doors }
+    const HC_ROOMS = [];                         // every house's footprint (the minimap and "searched" checks)
+    const HC_SPOTS = {};                         // named spots for the hidden items (X37)
+    const HC_LAMPS = [];                         // streetlamp / porch-light glows (flicker in X37)
+    const HC_FLICK = [];                         // jack-o'-lantern faces and their glows
+    const _hcR = mulberry32(31031), hr = (a, b) => a + _hcR() * (b - a);   // its own seed: no other map's layout moves
+    // ---------- textures ----------
+    const hcSidingTex = canvasTexture(256, (g, s) => {             // pale lap siding (tinted per house), grooves and weathering
+      const rows = 8, ph = s / rows;
+      for (let r = 0; r < rows; r++) {
+        const v = hr(-8, 8) | 0, grd = g.createLinearGradient(0, r * ph, 0, (r + 1) * ph);
+        grd.addColorStop(0, `rgb(${236 + v},${234 + v},${228 + v})`); grd.addColorStop(1, `rgb(${178 + v},${176 + v},${170 + v})`);
+        g.fillStyle = grd; g.fillRect(0, r * ph, s, ph);
+        g.fillStyle = 'rgba(40,36,30,0.75)'; g.fillRect(0, (r + 1) * ph - 3, s, 3);
+        for (let k = 0; k < 6; k++) { g.fillStyle = `rgba(90,84,74,${hr(0.08, 0.2).toFixed(2)})`; g.fillRect(hr(0, s), r * ph + hr(0, ph - 6), hr(8, 50), 2); }
+      }
+      for (let k = 0; k < 18; k++) { const x = hr(0, s); g.fillStyle = `rgba(60,52,40,${hr(0.08, 0.2).toFixed(2)})`; g.fillRect(x, 0, hr(2, 6), s); }   // rain streaks
+    });
+    const hcPaperTex = [['#5a4b3c', '#6c5a46', '#3e3226'], ['#3f4a3a', '#50604c', '#2c3628'], ['#5a3a3c', '#6e4a48', '#3c2628']].map(([a, b, c]) =>
+      canvasTexture(256, (g, s) => {                                  // faded striped wallpaper with little sprigs, stained
+        g.fillStyle = a; g.fillRect(0, 0, s, s);
+        for (let k = 0; k < 8; k++) { g.fillStyle = b; g.fillRect(k * s / 8 + 4, 0, s / 16, s); g.fillStyle = c; g.fillRect(k * s / 8 + 4 + s / 16, 0, 2, s); }
+        for (let k = 0; k < 40; k++) { const x = (k % 8) * s / 8 + s / 32, y = Math.floor(k / 8) * s / 5 + 18; g.fillStyle = 'rgba(200,180,140,0.25)'; g.beginPath(); g.arc(x, y, 4, 0, Math.PI * 2); g.fill(); g.fillRect(x - 1, y, 2, 10); }
+        for (let k = 0; k < 10; k++) { const x = hr(0, s), y = hr(0, s), r = hr(15, 50), grd = g.createRadialGradient(x, y, 0, x, y, r); grd.addColorStop(0, 'rgba(20,14,8,0.35)'); grd.addColorStop(1, 'rgba(20,14,8,0)'); g.fillStyle = grd; g.fillRect(x - r, y - r, 2 * r, 2 * r); }
+      }));
+    const hcTileTex = canvasTexture(128, (g, s) => {                 // black and cream checker tiles (kitchens, bathrooms)
+      for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) { g.fillStyle = (i + j) % 2 ? '#1c1a18' : '#cfc6b0'; g.fillRect(i * s / 4, j * s / 4, s / 4, s / 4); }
+      for (let k = 0; k < 300; k++) { g.fillStyle = `rgba(60,50,40,${hr(0.05, 0.2).toFixed(2)})`; g.fillRect(hr(0, s), hr(0, s), 2, 2); }
+    });
+    const hcFloorTex = woodTex.clone(); hcFloorTex.needsUpdate = true; hcFloorTex.repeat.set(1, 1); hcFloorTex.wrapS = hcFloorTex.wrapT = THREE.RepeatWrapping;
+    const hcRoofTex = shingleTex.clone(); hcRoofTex.needsUpdate = true; hcRoofTex.repeat.set(1, 1); hcRoofTex.wrapS = hcRoofTex.wrapT = THREE.RepeatWrapping;
+    const hcBrickTex = canvasTexture(256, (g, s) => {
+      g.fillStyle = '#2a1a14'; g.fillRect(0, 0, s, s);
+      const rows = 10, rh = s / rows;
+      for (let r = 0; r < rows; r++) for (let c = -1; c < 5; c++) {
+        const v = hr(-14, 14) | 0, x = c * s / 4 + (r % 2) * s / 8;
+        g.fillStyle = `rgb(${110 + v},${52 + v / 2},${38 + v / 2})`; g.fillRect(x + 2, r * rh + 2, s / 4 - 4, rh - 4);
+      }
+    });
+    const hcLawnTex = canvasTexture(512, (g, s) => {                // dry autumn lawn: olive and straw, dark patches, leaf litter
+      g.fillStyle = '#2a2a18'; g.fillRect(0, 0, s, s);
+      for (let k = 0; k < 60; k++) { const x = hr(0, s), y = hr(0, s), r = hr(20, 80), grd = g.createRadialGradient(x, y, 0, x, y, r); const c = _hcR() < 0.5 ? '58,52,26' : '20,22,12'; grd.addColorStop(0, `rgba(${c},0.6)`); grd.addColorStop(1, `rgba(${c},0)`); g.fillStyle = grd; g.fillRect(x - r, y - r, 2 * r, 2 * r); }
+      for (let k = 0; k < 9000; k++) { const v = hr(30, 80) | 0; g.fillStyle = `rgba(${v},${v - 4},${v / 3 | 0},0.55)`; g.fillRect(hr(0, s), hr(0, s), 1, hr(2, 5)); }
+      for (let k = 0; k < 500; k++) { const c = ['#8a3a12', '#a85a14', '#6a2a10', '#9a7020'][k % 4]; g.fillStyle = c; g.beginPath(); g.ellipse(hr(0, s), hr(0, s), hr(2, 5), hr(1.5, 3), hr(0, 3), 0, Math.PI * 2); g.fill(); }
+    });
+    hcLawnTex.repeat.set(24, 18);
+    const hcAsphaltTex = canvasTexture(512, (g, s) => {
+      g.fillStyle = '#1e1e20'; g.fillRect(0, 0, s, s);
+      for (let k = 0; k < 16000; k++) { const v = hr(20, 70) | 0; g.fillStyle = `rgba(${v},${v},${v + 2},0.5)`; g.fillRect(hr(0, s), hr(0, s), hr(1, 2.5), hr(1, 2.5)); }
+      g.strokeStyle = 'rgba(8,8,8,0.8)'; g.lineWidth = 2;                    // cracks and tar seams
+      for (let k = 0; k < 12; k++) { let x = hr(0, s), y = hr(0, s); g.beginPath(); g.moveTo(x, y); for (let j = 0; j < 6; j++) { x += hr(-30, 30); y += hr(-30, 30); g.lineTo(x, y); } g.stroke(); }
+      for (let k = 0; k < 8; k++) { const x = hr(0, s), y = hr(0, s), r = hr(20, 60), grd = g.createRadialGradient(x, y, 0, x, y, r); grd.addColorStop(0, 'rgba(70,74,82,0.25)'); grd.addColorStop(1, 'rgba(70,74,82,0)'); g.fillStyle = grd; g.fillRect(x - r, y - r, 2 * r, 2 * r); }   // damp sheen
+    });
+    hcAsphaltTex.repeat.set(24, 1.5);
+    const hcConcreteTex = canvasTexture(256, (g, s) => {
+      g.fillStyle = '#6a6862'; g.fillRect(0, 0, s, s);
+      for (let k = 0; k < 5000; k++) { const v = hr(70, 130) | 0; g.fillStyle = `rgba(${v},${v - 2},${v - 6},0.4)`; g.fillRect(hr(0, s), hr(0, s), 2, 2); }
+      g.fillStyle = 'rgba(20,20,18,0.8)'; g.fillRect(0, 0, s, 3); g.fillRect(0, 0, 3, s);     // expansion joints
+      g.strokeStyle = 'rgba(30,28,24,0.7)'; g.lineWidth = 1.5; g.beginPath(); g.moveTo(hr(20, 80), 3); g.lineTo(hr(60, 140), hr(80, 160)); g.lineTo(hr(120, 230), s); g.stroke();
+      for (let k = 0; k < 6; k++) { g.fillStyle = 'rgba(40,60,20,0.5)'; g.fillRect(hr(0, s), 0, 2, s); }
+    });
+    const hcWebTex = canvasTexture(256, (g, s) => {                 // a corner cobweb: radial threads and sagging spirals from the corner
+      g.clearRect(0, 0, s, s); g.strokeStyle = 'rgba(235,235,230,0.85)'; g.lineWidth = 1.2;
+      const N = 9;
+      for (let k = 0; k <= N; k++) { const a = (k / N) * Math.PI / 2; g.beginPath(); g.moveTo(0, 0); g.lineTo(Math.cos(a) * s, Math.sin(a) * s); g.stroke(); }
+      for (let r = 18; r < s * 0.95; r += hr(14, 24)) {
+        g.beginPath();
+        for (let k = 0; k <= N; k++) {
+          const a = (k / N) * Math.PI / 2, a0 = ((k - 1) / N) * Math.PI / 2, x = Math.cos(a) * r, y = Math.sin(a) * r;
+          if (!k) g.moveTo(x, y); else { const am = (a + a0) / 2, rs = r * 0.9; g.quadraticCurveTo(Math.cos(am) * rs, Math.sin(am) * rs, x, y); }
+        }
+        g.stroke();
+      }
+    }, 1);
+    hcWebTex.wrapS = hcWebTex.wrapT = THREE.ClampToEdgeWrapping;
+    const hcFaceTex = canvasTexture(128, (g, s) => {                // a carved jack-o'-lantern face (glowing parts only)
+      g.clearRect(0, 0, s, s);
+      const grd = g.createRadialGradient(s / 2, s / 2, 4, s / 2, s / 2, s / 2); grd.addColorStop(0, '#fff2a0'); grd.addColorStop(0.5, '#ffb030'); grd.addColorStop(1, '#ff6a00');
+      g.fillStyle = grd;
+      g.beginPath(); g.moveTo(28, 52); g.lineTo(52, 52); g.lineTo(40, 30); g.closePath(); g.fill();          // eyes
+      g.beginPath(); g.moveTo(76, 52); g.lineTo(100, 52); g.lineTo(88, 30); g.closePath(); g.fill();
+      g.beginPath(); g.moveTo(58, 66); g.lineTo(70, 66); g.lineTo(64, 56); g.closePath(); g.fill();          // nose
+      g.beginPath(); g.moveTo(22, 76); g.lineTo(40, 82); g.lineTo(46, 76); g.lineTo(56, 84); g.lineTo(64, 78); g.lineTo(72, 84); g.lineTo(82, 76); g.lineTo(88, 82); g.lineTo(106, 76);
+      g.quadraticCurveTo(64, 120, 22, 76); g.closePath(); g.fill();                                            // the jagged grin
+    }, 1);
+    hcFaceTex.wrapS = hcFaceTex.wrapT = THREE.ClampToEdgeWrapping;
+    const hcLeafTex = canvasTexture(64, (g, s) => {                 // a maple leaf (alpha), tinted per leaf
+      g.clearRect(0, 0, s, s); g.fillStyle = '#ffffff';
+      g.beginPath();
+      const pts = [[32, 2], [38, 16], [50, 10], [46, 24], [62, 26], [50, 36], [56, 46], [38, 42], [34, 56], [30, 56], [26, 42], [8, 46], [14, 36], [2, 26], [18, 24], [14, 10], [26, 16]];
+      pts.forEach(([x, y], k) => (k ? g.lineTo(x, y) : g.moveTo(x, y))); g.closePath(); g.fill();
+      g.fillRect(31, 54, 2, 10);
+      g.strokeStyle = 'rgba(120,120,120,0.6)'; g.lineWidth = 1; g.beginPath(); g.moveTo(32, 58); g.lineTo(32, 8); g.moveTo(32, 40); g.lineTo(12, 28); g.moveTo(32, 40); g.lineTo(52, 28); g.stroke();
+    }, 1);
+    hcLeafTex.wrapS = hcLeafTex.wrapT = THREE.ClampToEdgeWrapping;
+    const hcStrawTex = canvasTexture(128, (g, s) => {
+      g.fillStyle = '#8a7238'; g.fillRect(0, 0, s, s);
+      for (let k = 0; k < 900; k++) { const v = hr(-40, 50) | 0; g.strokeStyle = `rgba(${170 + v},${140 + v},${70 + v / 2},0.7)`; g.lineWidth = 1; const x = hr(0, s), y = hr(0, s); g.beginPath(); g.moveTo(x, y); g.lineTo(x + hr(-6, 6), y + hr(4, 14)); g.stroke(); }
+      g.fillStyle = 'rgba(60,40,20,0.8)'; g.fillRect(0, s * 0.3, s, 3); g.fillRect(0, s * 0.7, s, 3);      // the twine
+    });
+    const hcRipTex = canvasTexture(128, (g, s) => {                 // a weathered board with R.I.P. daubed on it
+      g.fillStyle = '#4a3c2c'; g.fillRect(0, 0, s, s);
+      for (let k = 0; k < 30; k++) { g.strokeStyle = `rgba(20,14,8,${hr(0.2, 0.5).toFixed(2)})`; const x = hr(0, s); g.beginPath(); g.moveTo(x, 0); g.lineTo(x + hr(-4, 4), s); g.stroke(); }
+      g.fillStyle = '#d8d2c0'; g.font = 'bold 36px Georgia, serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('R.I.P.', s / 2, s * 0.42);
+      g.font = 'bold 16px Georgia, serif'; g.fillText(['1893', 'BOO', '1931', '???'][(_hcR() * 4) | 0], s / 2, s * 0.68);
+      g.fillStyle = 'rgba(120,0,0,0.5)'; g.fillRect(s * 0.3, s * 0.5, 3, 18);
+    }, 1);
+    const hcCurtainTex = canvasTexture(128, (g, s) => {             // warm light through thin curtains (lit windows)
+      const grd = g.createLinearGradient(0, 0, 0, s); grd.addColorStop(0, '#6a3010'); grd.addColorStop(0.5, '#d08030'); grd.addColorStop(1, '#5a2a10');
+      g.fillStyle = grd; g.fillRect(0, 0, s, s);
+      for (let k = 0; k < 10; k++) { g.fillStyle = `rgba(40,16,4,${hr(0.2, 0.45).toFixed(2)})`; g.fillRect(k * s / 10, 0, s / 30, s); }
+    }, 1);
+    const hcSignTex = canvasTexture(512, (g, s) => {                // the welcome sign at the east end
+      g.fillStyle = '#20301e'; g.fillRect(0, 0, s, s / 2);
+      g.strokeStyle = '#d8ccaa'; g.lineWidth = 10; g.strokeRect(14, 14, s - 28, s / 2 - 28);
+      g.fillStyle = '#e8dcb8'; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.font = 'bold 34px Georgia, serif'; g.fillText('WELCOME TO', s / 2, 64);
+      g.font = 'bold 76px Georgia, serif'; g.fillText('HALLOWCREEK', s / 2, 136);
+      g.font = 'italic 26px Georgia, serif'; g.fillText('est. 1887  ·  a quiet place to live', s / 2, 200);
+      g.fillStyle = 'rgba(120,10,6,0.85)'; g.font = 'bold 30px Georgia, serif'; g.save(); g.translate(s * 0.78, 98); g.rotate(-0.2); g.fillText('LEAVE', 0, 0); g.restore();
+      for (let k = 0; k < 6; k++) { g.fillStyle = 'rgba(120,10,6,0.6)'; g.fillRect(s * 0.74 + k * 6, 114, 2, hr(10, 40)); }
+    }, 1);
+    hcSignTex.repeat.set(1, 2);
+    const hcClosedTex = canvasTexture(256, (g, s) => {
+      g.fillStyle = '#e8e2d0'; g.fillRect(0, 0, s, s);
+      for (let k = -2; k < 8; k++) { g.fillStyle = '#c84a10'; g.beginPath(); g.moveTo(k * 40, 0); g.lineTo(k * 40 + 20, 0); g.lineTo(k * 40 + 20 + 64, s); g.lineTo(k * 40 + 64, s); g.closePath(); g.fill(); }
+    }, 1);
+    const hcNumTex = (n) => canvasTexture(64, (g, s) => {             // brass house numbers on a dark plaque
+      g.fillStyle = '#1a1612'; g.fillRect(0, 0, s, s); g.fillStyle = '#d4b060'; g.font = 'bold 34px Georgia, serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(String(n), s / 2, s / 2 + 2);
+    }, 1);
+    const hcTvTex = (() => {                                         // the old TV's static (redrawn by X37 while you're near)
+      const c = document.createElement('canvas'); c.width = 64; c.height = 48;
+      const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.userData.canvas = c; return t;
+    })();
+    // ---------- materials ----------
+    const hcM = {
+      trim: new THREE.MeshStandardMaterial({ color: 0xd2c9b4, roughness: 0.8 }),
+      trimDark: new THREE.MeshStandardMaterial({ color: 0x2e241c, roughness: 0.85 }),
+      ceil: new THREE.MeshStandardMaterial({ color: 0x9a9284, roughness: 1 }),
+      floor: new THREE.MeshStandardMaterial({ map: hcFloorTex, color: 0x9a7a58, roughness: 0.82 }),
+      tile: new THREE.MeshStandardMaterial({ map: hcTileTex, roughness: 0.45 }),
+      brick: new THREE.MeshStandardMaterial({ map: hcBrickTex, roughness: 0.95 }),
+      glass: new THREE.MeshStandardMaterial({ color: 0x1c242c, transparent: true, opacity: 0.42, roughness: 0.08, metalness: 0.4, depthWrite: false, side: THREE.DoubleSide }),
+      curtain: new THREE.MeshBasicMaterial({ map: hcCurtainTex, color: 0xffd0a0 }),
+      board: new THREE.MeshStandardMaterial({ map: oldBoardsTex, color: 0x9a8a78, roughness: 0.95 }),
+      fence: new THREE.MeshStandardMaterial({ color: 0xbab2a2, roughness: 0.9 }),
+      privacy: new THREE.MeshStandardMaterial({ map: oldBoardsTex, color: 0x7a6a58, roughness: 0.95 }),
+      concrete: new THREE.MeshStandardMaterial({ map: hcConcreteTex, roughness: 0.95 }),
+      gravel: new THREE.MeshStandardMaterial({ color: 0x3e3a34, map: mineDirtTex, roughness: 1 }),
+      fabricG: new THREE.MeshStandardMaterial({ color: 0x3b4a30, roughness: 1 }),
+      fabricR: new THREE.MeshStandardMaterial({ color: 0x5a1e1c, roughness: 1 }),
+      fabricB: new THREE.MeshStandardMaterial({ color: 0x2c3448, roughness: 1 }),
+      fabricY: new THREE.MeshStandardMaterial({ color: 0x8a7440, roughness: 1 }),
+      sheet: new THREE.MeshStandardMaterial({ color: 0xc8c0ae, roughness: 1 }),
+      rug: new THREE.MeshStandardMaterial({ color: 0x4a2a22, roughness: 1 }),
+      furn: new THREE.MeshStandardMaterial({ map: woodTex, color: 0x7a5636, roughness: 0.75 }),
+      furnDark: new THREE.MeshStandardMaterial({ map: woodTex, color: 0x4a3424, roughness: 0.78 }),
+      cream: new THREE.MeshStandardMaterial({ color: 0xe2d6b8, roughness: 0.45 }),
+      chrome: new THREE.MeshStandardMaterial({ color: 0xa8aeb2, roughness: 0.25, metalness: 0.9 }),
+      black: new THREE.MeshStandardMaterial({ color: 0x141414, roughness: 0.6 }),
+      porcelain: new THREE.MeshStandardMaterial({ color: 0xe8e6de, roughness: 0.25 }),
+      counter: new THREE.MeshStandardMaterial({ color: 0x6e8a7a, roughness: 0.4 }),
+      shade: new THREE.MeshStandardMaterial({ color: 0xf0d8a8, emissive: 0xffa850, emissiveIntensity: 0.9, roughness: 0.9, side: THREE.DoubleSide }),
+      bulb: new THREE.MeshBasicMaterial({ color: 0xffd090 }),
+      ember: new THREE.MeshBasicMaterial({ color: 0xff6a20 }),
+      tv: new THREE.MeshBasicMaterial({ map: hcTvTex, color: 0xa8c0ff }),
+      iron: ironMat,
+      brass: new THREE.MeshStandardMaterial({ color: 0xb8903a, roughness: 0.35, metalness: 0.9 }),
+      lampGlass: new THREE.MeshBasicMaterial({ color: 0xffc070 }),
+      web: new THREE.MeshBasicMaterial({ map: hcWebTex, transparent: true, opacity: 0.5, depthWrite: false, side: THREE.DoubleSide }),
+      lawn: new THREE.MeshStandardMaterial({ map: hcLawnTex, roughness: 1 }),
+      asphalt: new THREE.MeshStandardMaterial({ map: hcAsphaltTex, roughness: 0.92 }),
+      paint: new THREE.MeshBasicMaterial({ color: 0x8a7a3a }),
+      pumpkin: new THREE.MeshStandardMaterial({ color: 0xd8641a, roughness: 0.55, emissive: 0x200800 }),
+      stem: new THREE.MeshStandardMaterial({ color: 0x4a4422, roughness: 0.9 }),
+      face: new THREE.MeshBasicMaterial({ map: hcFaceTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, color: 0xffffff, toneMapped: false }),
+      hay: new THREE.MeshStandardMaterial({ map: hcStrawTex, roughness: 1 }),
+      rip: new THREE.MeshStandardMaterial({ map: hcRipTex, roughness: 0.95 }),
+      leaf: new THREE.MeshStandardMaterial({ map: hcLeafTex, alphaTest: 0.5, side: THREE.DoubleSide, roughness: 0.9 }),
+      canopy: new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95, flatShading: true }),
+      bone: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7 }),
+      bulbs: new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false }),
+      wire: new THREE.LineBasicMaterial({ color: 0x141210 }),
+      sign: new THREE.MeshStandardMaterial({ map: hcSignTex, roughness: 0.8 }),
+      closed: new THREE.MeshStandardMaterial({ map: hcClosedTex, roughness: 0.7 }),
+      silhouette: new THREE.MeshBasicMaterial({ color: 0x0c0a10 }),
+      farWin: new THREE.MeshBasicMaterial({ color: 0xc87a30 }),
+      paper: hcPaperTex.map((t) => new THREE.MeshStandardMaterial({ map: t, roughness: 0.95 })),
+    };
+    // ---------- geometry helpers ----------
+    // a box whose texture tiles by size (tile metres per repeat) on every face, instead of stretching
+    function hcTiledBox(w, h, d, tile = 1) {
+      const g = new THREE.BoxGeometry(w, h, d), uv = g.attributes.uv;
+      for (let f = 0; f < 6; f++) {
+        const su = f < 2 ? d : w, sv = f < 2 ? h : f < 4 ? d : h;
+        for (let k = 0; k < 4; k++) { const i = f * 4 + k; uv.setXY(i, uv.getX(i) * su / tile, uv.getY(i) * sv / tile); }
+      }
+      return g;
+    }
+    // an axis-aligned world box into a batch (visible), and its collider if solid
+    function hcBox(B, mat, xa, xb, ya, yb, za, zb, solid = true, tile = 1) {
+      const w = xb - xa, h = yb - ya, d = zb - za;
+      if (w <= 0.002 || h <= 0.002 || d <= 0.002) return;
+      const g = hcTiledBox(w, h, d, tile);
+      B.add(g, mat, (xa + xb) / 2, (ya + yb) / 2, (za + zb) / 2);
+      g.dispose();
+      if (solid) addBoxCollider((xa + xb) / 2, ya, (za + zb) / 2, w, h, d);
+    }
+    // a wall run from a0 to a1 (y0..y1) with openings cut out: holes = [{ c, w, b, t }]; returns the solid pieces
+    function hcPieces(a0, a1, y0, y1, holes) {
+      const out = [], hs = [...holes].sort((p, q) => p.c - q.c);
+      const piece = (s0, s1, b, t) => { if (s1 - s0 > 0.005 && t - b > 0.005) out.push([s0, s1, b, t]); };
+      let s = a0;
+      for (const h of hs) { const h0 = h.c - h.w / 2, h1 = h.c + h.w / 2; piece(s, h0, y0, y1); piece(h0, h1, y0, h.b); piece(h0, h1, h.t, y1); s = h1; }
+      piece(s, a1, y0, y1);
+      return out;
+    }
+    // smooth collision ramp (stacked thin slices, each running to the top end) for stairs: x0..x1, z0..z1 in the
+    // world, rising along dir ('+z', '-z', '+x', '-x') from y0 to y1
+    function hcRamp(x0, x1, z0, z1, y0, y1, dir, slices = 26) {
+      for (let i = 0; i < slices; i++) {
+        const f = i / slices, top = y0 + (y1 - y0) * (i + 0.5) / slices;
+        let a = x0, b = x1, c = z0, d = z1;
+        if (dir === '+z') c = z0 + (z1 - z0) * f; else if (dir === '-z') d = z1 - (z1 - z0) * f;
+        else if (dir === '+x') a = x0 + (x1 - x0) * f; else b = x1 - (x1 - x0) * f;
+        addBoxCollider((a + b) / 2, y0, (c + d) / 2, b - a, Math.max(0.01, top - y0), d - c);
+      }
+    }
+    // a culling chunk (X37 hides it while it's well behind you)
+    function hcChunk(obj, doors = []) {
+      const box = new THREE.Box3().setFromObject(obj);
+      const c = new THREE.Vector3((box.min.x + box.max.x) / 2, (box.min.y + box.max.y) / 2, (box.min.z + box.max.z) / 2);
+      HC_CHUNKS.push({ obj, c, r: Math.hypot(box.max.x - box.min.x, box.max.y - box.min.y, box.max.z - box.min.z) / 2, doors });
+    }
+    // per street block (x quarters) instance lists, turned into InstancedMeshes at the end
+    const HC_BLOCKS = [-46.5, -23, 0, 23, 46.5];
+    const hcInst = new Map();                       // key -> { geo, mat, lists: [[matrix, color]...] per block, opts }
+    const _hiM = new THREE.Matrix4(), _hiQ = new THREE.Quaternion(), _hiE = new THREE.Euler(), _hiP = new THREE.Vector3(), _hiS = new THREE.Vector3();
+    function hcPut(key, geo, mat, x, y, z, rx, ry, rz, sx, sy, sz, color, opts = {}) {
+      if (!hcInst.has(key)) hcInst.set(key, { geo, mat, opts, lists: HC_BLOCKS.slice(1).map(() => []) });
+      const E = hcInst.get(key);
+      let b = 0; while (b < HC_BLOCKS.length - 2 && x > HC_BLOCKS[b + 1]) b++;
+      _hiM.compose(_hiP.set(x, y, z), _hiQ.setFromEuler(_hiE.set(rx, ry, rz, opts.order || 'XYZ')), _hiS.set(sx, sy, sz));
+      E.lists[b].push([_hiM.clone(), color === undefined ? null : new THREE.Color(color)]);
+    }
+    // vertex-coloured merged parts (skeletons): [geo, color, matrix] -> one geometry with a 'color' attribute
+    function hcMergeColored(parts) {
+      const geos = parts.map(([geo, col, m]) => {
+        const g = (geo.index ? geo.toNonIndexed() : geo.clone()).applyMatrix4(m);
+        for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal') g.deleteAttribute(k);
+        const c = new THREE.Color(col), n = g.attributes.position.count, a = new Float32Array(n * 3);
+        for (let i = 0; i < n; i++) { a[i * 3] = c.r; a[i * 3 + 1] = c.g; a[i * 3 + 2] = c.b; }
+        g.setAttribute('color', new THREE.BufferAttribute(a, 3));
+        return g;
+      });
+      const out = mergeGeometries(geos, false); geos.forEach((g) => g.dispose());
+      return out;
+    }
+    const hcMat4 = (x, y, z, rx = 0, ry = 0, rz = 0, sx = 1, sy = 1, sz = 1) => new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), new THREE.Quaternion().setFromEuler(new THREE.Euler(rx, ry, rz)), new THREE.Vector3(sx, sy, sz));
+    // a hinged house door (the shared door physics from makeDoor), restyled as a painted panel door with brass knobs.
+    // axis 'x': in a wall along x (opening centred at x = c, the wall at z = at); axis 'z': in a wall along z at x = at.
+    const HC_DW = 0.86, HC_DH = 1.95;
+    function hcDoor(axis, at, c, y, paint, opts = {}) {
+      const w = opts.w || HC_DW, h = opts.h || HC_DH;
+      const spec = axis === 'x' ? { x: c - w / 2, y, z: at, yaw: 0 } : { x: at, y, z: c + w / 2, yaw: Math.PI / 2 };
+      const d = makeDoor(Object.assign(spec, { w, h, t: 0.045, slot: 0.1 }));
+      for (const m of d.meshes) { m.removeFromParent(); m.geometry.dispose(); }
+      const B = makeBatch(), paintMat = paint;
+      B.add(UNIT_BOX, paintMat, w / 2, h / 2, 0, 0, 0, 0, w, h, 0.045);
+      for (const s of [-1, 1]) {
+        for (const [px, py, pw, ph] of [[w * 0.28, h * 0.74, w * 0.3, h * 0.3], [w * 0.72, h * 0.74, w * 0.3, h * 0.3], [w * 0.28, h * 0.3, w * 0.3, h * 0.42], [w * 0.72, h * 0.3, w * 0.3, h * 0.42]])
+          B.add(UNIT_BOX, paintMat, px, py, s * 0.026, 0, 0, 0, pw, ph, 0.012);                         // raised panels
+        B.add(new THREE.SphereGeometry(0.03, 10, 8), hcM.brass, w - 0.1, h * 0.45 - 0.03, s * 0.055);     // knob
+        B.add(UNIT_BOX, hcM.brass, w - 0.1, h * 0.45 - 0.03, s * 0.026, 0, 0, 0, 0.05, 0.14, 0.008);      // escutcheon
+      }
+      if (opts.number) {                                                                                    // brass house number on the front door
+        const m = new THREE.Mesh(new THREE.PlaneGeometry(0.16, 0.16), new THREE.MeshStandardMaterial({ map: hcNumTex(opts.number), roughness: 0.6 }));
+        m.position.set(w / 2, h * 0.86, (opts.numberSide || 1) * 0.034); if ((opts.numberSide || 1) < 0) m.rotation.y = Math.PI;
+        d.pivot.add(m);
+      }
+      d.meshes = B.build(d.pivot, { castShadow: false });
+      d.hc = true;
+      return d;
+    }
+    // =====================================================================
+    //  THE STREET
+    // =====================================================================
+    const hcStreet = new THREE.Group(); scene.add(hcStreet);
+    const hcSB = makeBatch();
+    {
+      const Z = HALLOW.z, rw = HALLOW.roadHW;
+      // the ground (a solid slab under everything) and the lawns
+      addBoxCollider(HALLOW.x, -10, Z, 140, 10, 112);
+      const lawn = new THREE.Mesh(new THREE.PlaneGeometry(130, 96).rotateX(-Math.PI / 2), hcM.lawn);
+      lawn.position.set(HALLOW.x, 0, Z); lawn.receiveShadow = true; scene.add(lawn);
+      // the road: asphalt, faded centre dashes, the storm drains
+      const road = new THREE.Mesh(new THREE.PlaneGeometry(104, rw * 2).rotateX(-Math.PI / 2), hcM.asphalt);
+      road.position.set(HALLOW.x, 0.012, Z); road.receiveShadow = true; scene.add(road);
+      for (let x = -50; x < 50; x += 3.2) hcPut('dash', new THREE.PlaneGeometry(1.6, 0.12).rotateX(-Math.PI / 2), hcM.paint, x, 0.016, Z, 0, 0, 0, 1, 1, 1);
+      // sidewalks with their curbs (raised, solid), both sides, the whole length
+      for (const s of [-1, 1]) {
+        const za = s < 0 ? Z - rw - HALLOW.curb - HALLOW.walk : Z + rw, zb = s < 0 ? Z - rw : Z + rw + HALLOW.curb + HALLOW.walk;
+        hcBox(hcSB, hcM.concrete, -52, 52, 0, 0.12, za, zb, true, 1.5);
+        for (let x = -44; x < 46; x += 13.5) hcBox(hcSB, hcM.iron, x - 0.4, x + 0.4, 0.121, 0.13, s < 0 ? Z - rw - 0.02 - 0.3 : Z + rw + 0.02, s < 0 ? Z - rw - 0.02 : Z + rw + 0.32, false);   // drains
+      }
+      // the bounds: tall privacy fences along the back yards, dense trees past the ends, invisible walls
+      for (const zf of [HALLOW.zb0, HALLOW.zb1]) {
+        hcBox(hcSB, hcM.privacy, -46.5, 46.5, 0, 1.9, zf - 0.04, zf + 0.04, true, 1.9);
+        for (let x = -46; x <= 46; x += 2.4) hcBox(hcSB, hcM.trimDark, x - 0.06, x + 0.06, 0, 2.0, zf - 0.07, zf + 0.07, false);
+        hcBox(hcSB, hcM.trimDark, -46.5, 46.5, 1.62, 1.72, zf + (zf < Z ? 0.04 : -0.1), zf + (zf < Z ? 0.1 : -0.04), false);
+      }
+      addBoxCollider(HALLOW.x1 + 0.5, -1, Z, 1, 40, 70); addBoxCollider(HALLOW.x0 - 0.5, -1, Z, 1, 40, 70);
+      addBoxCollider(HALLOW.x, -1, HALLOW.zb0 - 1.5, 100, 40, 1); addBoxCollider(HALLOW.x, -1, HALLOW.zb1 + 1.5, 100, 40, 1);
+      // the east end (where you arrive): the welcome sign, hay bales and pumpkins round its posts
+      {
+        const sx = 41.5, sz = Z - rw - 0.9;
+        for (const dx of [-1.05, 1.05]) hcBox(hcSB, hcM.furnDark, sx + dx - 0.07, sx + dx + 0.07, 0, 2.3, sz - 0.07, sz + 0.07, true);
+        const sign = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 1.2), hcM.sign); sign.position.set(sx, 1.55, sz + 0.075); scene.add(sign);
+        const back = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 1.2), hcM.furnDark); back.position.set(sx, 1.55, sz - 0.075); back.rotation.y = Math.PI; scene.add(back);
+        hcBox(hcSB, hcM.furnDark, sx - 1.25, sx + 1.25, 0.9, 2.2, sz - 0.06, sz + 0.06, true);
+        HC_SPOTS.sign = new THREE.Vector3(sx, 0, sz);
+      }
+      // the west end: the road closed with sawhorse barricades and a sign, woods behind
+      {
+        const bx = -43.5;
+        for (const dz of [-2, 0, 2]) {
+          for (const dx of [-0.35, 0.35]) for (const s of [-1, 1]) hcSB.add(UNIT_BOX, hcM.furnDark, bx + dx, 0.45, Z + dz + s * 0.55, 0, 0, s * 0.25, 0.06, 0.95, 0.06);
+          hcSB.add(hcTiledBox(0.08, 0.26, 1.5, 1), hcM.closed, bx, 0.82, Z + dz);
+          addBoxCollider(bx, 0, Z + dz, 0.8, 1.0, 1.5);
+        }
+      }
+      hcSB.build(hcStreet, { castShadow: false });
+    }
+    // ---------- streetlamps: iron posts, a curved arm and a lantern, sodium-orange light in the mist ----------
+    const HC_LAMP_SPOTS = [[-40, -1], [-16, -1], [8, -1], [32, -1], [-28, 1], [-4, 1], [20, 1], [44, 1]];
+    {
+      const LB = makeBatch(), Z = HALLOW.z, rw = HALLOW.roadHW;
+      for (const [x, s] of HC_LAMP_SPOTS) {
+        const z = Z + s * (rw + 0.45), H = 3.4, armZ = z - s * 0.8;
+        LB.add(new THREE.CylinderGeometry(0.06, 0.09, H, 8), hcM.iron, x, H / 2, z);
+        LB.add(new THREE.CylinderGeometry(0.13, 0.16, 0.3, 8), hcM.iron, x, 0.15, z);
+        LB.add(UNIT_BOX, hcM.iron, x, H, z - s * 0.45, 0, 0, 0, 0.05, 0.05, 0.9);
+        LB.add(new THREE.ConeGeometry(0.26, 0.2, 4), hcM.iron, x, H - 0.08, armZ, 0, Math.PI / 4, 0);
+        LB.add(new THREE.CylinderGeometry(0.12, 0.17, 0.32, 4, 1, true), hcM.lampGlass, x, H - 0.33, armZ, 0, Math.PI / 4, 0);
+        addBoxCollider(x, 0, z, 0.2, H, 0.2);
+        const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xffa040, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false }));
+        glow.position.set(x, H - 0.33, armZ); glow.scale.set(2.2, 2.2, 1); scene.add(glow);
+        const pool = new THREE.Mesh(new THREE.CircleGeometry(2.6, 20).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ map: glowTex, color: 0x6a3a14, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false }));
+        pool.position.set(x, 0.03, armZ); scene.add(pool);
+        lightSources.push({ x, y: H - 0.5, z: armZ, color: 0xffa860, intensity: 7, distance: 10, weight: 1.5 });
+        HC_LAMPS.push({ glow, pool, base: 0.55, x, z: armZ, k: hr(0, 9), dying: x === 8 });   // (one by No. 15 is on its way out)
+      }
+      const lamps = new THREE.Group(); scene.add(lamps);
+      LB.build(lamps, { castShadow: false });
+    }
+    // ---------- maples ----------
+    const HC_TREES = [];
+    {
+      const trunkGeo = new THREE.CylinderGeometry(0.17, 0.3, 1, 7).translate(0, 0.5, 0), blobGeo = new THREE.IcosahedronGeometry(1, 1), limbGeo = new THREE.CylinderGeometry(0.05, 0.11, 1, 5).translate(0, 0.5, 0);
+      const COLS = [0xc8441a, 0xd8701e, 0xa82a14, 0xe0a030, 0x8a2a10, 0xd05a18];
+      const tree = (x, z, s = 1, bare = false) => {
+        const H = (3.4 + hr(0, 1.2)) * s;
+        hcPut('trunk', trunkGeo, barkMat, x, 0, z, hr(-0.04, 0.04), hr(0, 6), hr(-0.04, 0.04), s, H, s);
+        for (let k = 0; k < 4; k++) {                                       // the main limbs
+          const a = k * 1.6 + hr(-0.4, 0.4), tilt = 0.6 + hr(0, 0.3);
+          hcPut('limb', limbGeo, barkMat, x, H * 0.72, z, Math.cos(a) * tilt, 0, Math.sin(a) * tilt, s, 1.8 * s, s, undefined);
+        }
+        addBoxCollider(x, 0, z, 0.5 * s, H * 0.8, 0.5 * s);
+        HC_TREES.push({ x, z, s, H });
+        if (bare) return;
+        const n = 9 + ((hr(0, 4)) | 0);
+        for (let k = 0; k < n; k++) {
+          const a = hr(0, Math.PI * 2), r = hr(0.3, 1.6) * s, y = H + hr(-0.3, 1.8) * s, b = hr(0.9, 1.5) * s;
+          hcPut('canopy', blobGeo, hcM.canopy, x + Math.cos(a) * r, y, z + Math.sin(a) * r, hr(0, 3), hr(0, 3), 0, b, b * 0.8, b, COLS[(hr(0, COLS.length)) | 0]);
+        }
+      };
+      // front yards (by the lots), the empty lots, the back yards
+      for (const [x, z, s] of [[-36.5, 142, 1.1], [-33.5, 142.8, 1.05], [-15.3, 142.6, 1], [1.8, 142.6, 1.05], [20.5, 142.5, 1], [27, 141, 1.25], [36, 142.5, 0.95],
+        [-30.5, 158, 1.1], [-11.8, 157.8, 1], [6.5, 158.2, 1.05], [27, 159, 1.3], [37.5, 158, 1.0], [-41, 158.5, 1.15],
+        [-27, 129, 1.1], [-8, 128, 1], [11, 128.5, 1.1], [30, 130, 1.2], [-21, 172, 1.05], [3, 171.5, 1], [24, 172, 1.2], [40, 170, 1.0]]) tree(x, z, s);
+      for (const [x, z] of [[-43, 133], [42, 132], [-44, 166], [15, 169.5]]) tree(x, z, 1.25, true);          // dead, leafless ones
+    }
+    // ---------- fences: white pickets along every front yard (gaps for the walks and driveways), rails, posts ----------
+    {
+      const pk = mergeGeometries([new THREE.BoxGeometry(0.075, 0.78, 0.024).translate(0, 0.39, 0), new THREE.ConeGeometry(0.053, 0.11, 4).rotateY(Math.PI / 4).scale(1, 1, 0.45).translate(0, 0.835, 0)], false);
+      const FB = makeBatch();
+      const run = (x0, x1, z) => {
+        if (x1 - x0 < 0.3) return;
+        for (let x = x0 + 0.07; x <= x1 - 0.05; x += 0.15) hcPut('picket', pk, hcM.fence, x, 0, z, hr(-0.03, 0.03), 0, hr(-0.04, 0.04), 1, hr(0.95, 1.05), 1);
+        for (const y of [0.2, 0.62]) hcBox(FB, hcM.fence, x0, x1, y, y + 0.06, z - 0.035, z - 0.012, false);
+        for (const x of [x0, x1]) hcBox(FB, hcM.fence, x - 0.05, x + 0.05, 0, 0.92, z - 0.05, z + 0.05, false);
+        addBoxCollider((x0 + x1) / 2, 0, z, x1 - x0, 0.9, 0.08);
+      };
+      // gaps: [x0, x1] per side (front walks and driveways), filled in as the houses are placed below
+      HALLOW.fenceGaps = { N: [], S: [] };
+      HALLOW.fenceRun = run;
+      HALLOW.fenceBatch = FB;
+    }
+    // ---------- the five houses and the two boarded-up ones ----------
+    const HC_HOUSES = [
+      { no: 11, side: 'N', x0: -31, floors: 2, siding: 0x7d939c, door: 0x6a1a16, roof: 0x3a3230, paper: 0, fire: true, label: 'No. 11' },
+      { no: 13, side: 'N', x0: -13, floors: 2, siding: 0xb09a6c, door: 0x22302a, roof: 0x2e2a2c, paper: 1, fire: true, label: 'No. 13' },
+      { no: 15, side: 'N', x0: 5, floors: 1, siding: 0x8a9a7c, door: 0x5a2a3c, roof: 0x34302a, paper: 2, label: 'No. 15' },
+      { no: 12, side: 'S', x0: -27, floors: 2, siding: 0x8a5a54, door: 0x1e2430, roof: 0x2a2626, paper: 2, tv: true, label: 'No. 12' },
+      { no: 14, side: 'S', x0: -9, floors: 1, siding: 0xa4a49a, door: 0x2a4a3a, roof: 0x30302e, paper: 0, label: 'No. 14' },
+    ];
+    const HC_DEAD = [{ side: 'N', x0: -45, siding: 0x4a4a46 }, { side: 'S', x0: 9, siding: 0x5a5048 }];
+    function hcHouse(H) {
+      const { FL, ST, SLAB, UP, T, W, D } = HALLOW, N = H.side === 'N', sg = N ? -1 : 1, zf = N ? HALLOW.zN : HALLOW.zS;
+      const F1 = HALLOW.F1, two = H.floors === 2, EAVE = two ? F1 + UP + 0.1 : FL + ST + 0.1, PITCH = 0.62, RISE = (D / 2) * Math.tan(PITCH);
+      const X = (lx) => H.x0 + lx, Zw = (lz) => zf + sg * lz;
+      const group = new THREE.Group(); scene.add(group);
+      const B = makeBatch(), doors = [];
+      const siding = new THREE.MeshStandardMaterial({ map: hcSidingTex, color: H.siding, roughness: 0.85 });
+      const paper = hcM.paper[H.paper % hcM.paper.length], doorPaint = new THREE.MeshStandardMaterial({ color: 0xd4ccb8, roughness: 0.6 });
+      const frontPaint = new THREE.MeshStandardMaterial({ color: H.door, roughness: 0.5 });
+      const roofM = new THREE.MeshStandardMaterial({ map: hcRoofTex, color: H.roof, roughness: 0.95 });
+      // local box: lx along the front, lz back from the front wall (any order), y absolute
+      const L = (mat, lx0, lx1, y0, y1, lz0, lz1, solid = true, tile = 1) => {
+        const za = Zw(lz0), zb = Zw(lz1);
+        hcBox(B, mat, X(Math.min(lx0, lx1)), X(Math.max(lx0, lx1)), y0, y1, Math.min(za, zb), Math.max(za, zb), solid, tile);
+      };
+      // walls along x (at lz) and along z (at lx), with openings; inner = the wallpaper lining on one side
+      const wallX = (mat, lz, a0, a1, y0, y1, holes = [], th = T, solid = true, tile = 1.2) => { for (const [s0, s1, b, t] of hcPieces(a0, a1, y0, y1, holes)) L(mat, s0, s1, b, t, lz - th / 2, lz + th / 2, solid, tile); };
+      const wallZ = (mat, lx, a0, a1, y0, y1, holes = [], th = T, solid = true, tile = 1.2) => { for (const [s0, s1, b, t] of hcPieces(a0, a1, y0, y1, holes)) L(mat, lx - th / 2, lx + th / 2, b, t, s0, s1, solid, tile); };
+      const lp = (lx, y, lz) => new THREE.Vector3(X(lx), y, Zw(lz));          // a local point in the world
+      const door = (axis, at, c, y, paint = doorPaint, o = {}) => { const d = hcDoor(axis, axis === 'x' ? Zw(at) : X(at), axis === 'x' ? X(c) : (N ? Zw(c) : Zw(c)), y, paint, o); doors.push(d); return d; };
+      // (for a door in a wall along z, the opening's world centre is Zw(c); hcDoor puts the hinge at its high-z end)
+      const DOOR = (c) => ({ c, w: 0.94, b: FL, t: FL + 2.0 }), DOOR1 = (c) => ({ c, w: 0.94, b: F1, t: F1 + 2.0 });
+      const WIN = (c, w = 1.2, up = false) => ({ c, w, b: (up ? F1 : FL) + 0.85, t: (up ? F1 : FL) + 2.0 });
+      // ---------- foundation, floor slab, porch ----------
+      L(hcM.brick, 0, W, 0, FL, 0, D, true, 1.2);                                       // the brick foundation (its top is the floor)
+      L(hcM.floor, 0.15, W - 0.15, FL, FL + 0.004, 0.15, D - 0.15, false, 1.5);           // floorboards
+      const doorX = 4.5;
+      // the porch: deck, three steps, posts, a rail with balusters, its own roof; a porch light by the door
+      const P0 = 0.9, P1 = W - 0.9, PD = 2.2;
+      L(hcM.furn, P0, P1, 0, FL, -PD, 0, true, 1.5);
+      for (let k = 0; k < 3; k++) L(hcM.furn, doorX - 0.7, doorX + 0.7, 0, FL * (k + 1) / 3, -PD - 0.3 * (3 - k), -PD - 0.3 * (2 - k), false, 1);
+      { const za = Zw(-PD - 0.9), zb = Zw(-PD); hcRamp(X(doorX - 0.7), X(doorX + 0.7), Math.min(za, zb), Math.max(za, zb), 0, FL, N ? '-z' : '+z', 10); }
+      const PR = two ? FL + 2.6 : FL + 2.2;                                              // porch roof height (under the eaves on a bungalow)
+      const postsX = [P0 + 0.1, doorX - 0.85, doorX + 0.85, P1 - 0.1];
+      for (const px of postsX) { L(hcM.trim, px - 0.08, px + 0.08, FL, PR, -PD + 0.02, -PD + 0.18, true); }
+      L(hcM.trim, P0 - 0.1, P1 + 0.1, PR, PR + 0.18, -PD - 0.15, 0, true);
+      L(roofM, P0 - 0.15, P1 + 0.15, PR + 0.18, PR + 0.24, -PD - 0.2, 0.05, false, 1);
+      for (const [a, b] of [[P0 + 0.1, doorX - 0.85], [doorX + 0.85, P1 - 0.1]]) {          // rails and balusters
+        L(hcM.trim, a, b, FL + 0.78, FL + 0.84, -PD + 0.05, -PD + 0.15, true);
+        L(hcM.trim, a, b, FL + 0.08, FL + 0.12, -PD + 0.07, -PD + 0.13, false);
+        for (let x = a + 0.12; x < b - 0.05; x += 0.14) L(hcM.trim, x - 0.018, x + 0.018, FL + 0.12, FL + 0.78, -PD + 0.08, -PD + 0.12, false);
+      }
+      for (const lz of [-PD + 0.1, -0.1]) L(hcM.trim, P0 + 0.02, P0 + 0.12, FL + 0.08, FL + 0.84, lz - 0.04, lz + 0.04, false);   // the side rails
+      L(hcM.trim, P0 + 0.04, P0 + 0.1, FL + 0.78, FL + 0.84, -PD, 0, true); L(hcM.trim, P1 - 0.1, P1 - 0.04, FL + 0.78, FL + 0.84, -PD, 0, true);
+      {
+        const pl = lp(doorX + 0.75, FL + 1.75, -0.12);
+        B.add(UNIT_BOX, hcM.iron, pl.x, pl.y, pl.z, 0, 0, 0, 0.14, 0.24, 0.14);
+        B.add(UNIT_BOX, hcM.lampGlass, pl.x, pl.y, pl.z, 0, 0, 0, 0.1, 0.18, 0.16);
+        const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xffb060, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false }));
+        glow.position.copy(pl); glow.scale.set(1.2, 1.2, 1); scene.add(glow);
+        lightSources.push({ x: pl.x, y: pl.y, z: Zw(-0.8), color: 0xffb070, intensity: 3.2, distance: 6, weight: 1.1 });
+        HC_LAMPS.push({ glow, base: 0.5, x: pl.x, z: pl.z, k: hr(0, 9) });
+      }
+      L(hcM.rug, doorX - 0.45, doorX + 0.45, FL, FL + 0.01, -0.7, -0.15, false);         // doormat
+      // the front walk to the sidewalk, and the driveway down the side
+      const fenceDist = N ? HALLOW.fenceN - HALLOW.zN : HALLOW.zS - HALLOW.fenceS;
+      L(hcM.concrete, doorX - 0.6, doorX + 0.6, 0.004, 0.02, -PD - 0.9, -fenceDist - 0.3, false, 1.2);
+      L(hcM.gravel, W + 1.0, W + 3.4, 0.003, 0.016, D - 1, -fenceDist - 0.3, false, 2);
+      HALLOW.fenceGaps[H.side].push([X(doorX - 0.65), X(doorX + 0.65)], [X(W + 0.9), X(W + 3.5)]);
+      // ---------- ground floor walls ----------
+      const TOP0 = two ? F1 : FL + ST + 0.1;
+      // front: the door, the living-room and kitchen windows
+      wallX(siding, T / 2, 0, W, FL, TOP0, [DOOR(doorX), WIN(1.8, 1.5), WIN(7.2, 1.4)], T, true, 1.6);
+      wallX(siding, D - T / 2, 0, W, FL, TOP0, [WIN(1.8), WIN(7.2)], T, true, 1.6);                    // back
+      wallZ(siding, T / 2, 0, D, FL, TOP0, [WIN(4.1, 0.9), WIN(6.6, 1.0)], T, true, 1.6);             // side (left)
+      wallZ(siding, W - T / 2, 0, D, FL, TOP0, [WIN(2.4, 1.1), WIN(6.3, 1.0)], T, true, 1.6);         // side (right)
+      // wallpaper inside the outer walls (a thin lining, same openings)
+      const PT = 0.012, C0 = FL + ST;
+      wallX(paper, T + PT / 2, T, W - T, FL, C0, [DOOR(doorX), WIN(1.8, 1.5), WIN(7.2, 1.4)], PT, false);
+      wallX(paper, D - T - PT / 2, T, W - T, FL, C0, [WIN(1.8), WIN(7.2)], PT, false);
+      wallZ(paper, T + PT / 2, T, D - T, FL, C0, [WIN(4.1, 0.9), WIN(6.6, 1.0)], PT, false);
+      wallZ(paper, W - T - PT / 2, T, D - T, FL, C0, [WIN(2.4, 1.1), WIN(6.3, 1.0)], PT, false);
+      // interior walls
+      const IT = 0.1, CW = two ? F1 : C0;
+      if (two) {
+        wallZ(paper, 3.6, T, D - T, FL, CW, [{ c: 1.9, w: 1.6, b: FL, t: FL + 2.15 }, DOOR(6.85)], IT);   // living / utility | hall
+        wallZ(paper, 5.4, T, D - T, FL, CW, [DOOR(1.3), { c: 6.95, w: 1.1, b: FL, t: FL + 2.1 }], IT);   // hall | kitchen / dining
+        wallX(paper, 5.0, T, 3.6, FL, CW, [], IT);                                                           // living | utility
+        wallX(paper, 4.6, 5.4, W - T, FL, CW, [{ c: 7.3, w: 1.7, b: FL, t: FL + 2.15 }], IT);                // kitchen | dining (wide opening)
+      } else {
+        wallZ(paper, 3.6, T, D - T, FL, C0, [{ c: 1.9, w: 1.6, b: FL, t: FL + 2.15 }, DOOR(6.85)], IT);   // living / bedroom | hall
+        wallZ(paper, 5.4, T, D - T, FL, C0, [DOOR(1.3), DOOR(6.95)], IT);                                  // hall | kitchen / back bedroom
+        wallX(paper, 5.0, T, 3.6, FL, C0, [], IT);
+        wallX(paper, 4.6, 5.4, W - T, FL, C0, [], IT);
+      }
+      // ceiling under the upstairs (or the attic)
+      // ---------- doors ----------
+      door('x', T / 2, doorX, FL, frontPaint, { number: H.no, numberSide: N ? 1 : -1 });
+      door('z', 5.4, 1.3, FL);                                                                 // kitchen
+      door('z', 3.6, 6.85, FL);                                                                // utility room / back bedroom
+      if (!two) door('z', 5.4, 6.95, FL);                                                      // the second bedroom
+      // ---------- windows: frames, sills, mullions, glass (solid), some with warm lit curtains ----------
+      const glassB = makeBatch();
+      const winAt = (axis, at, c, w, b, t, lit, outward) => {
+        // frame on the outside face, the glass in the middle of the wall
+        const o = outward * (T / 2 + 0.02);
+        if (axis === 'x') {
+          L(hcM.trim, c - w / 2 - 0.06, c + w / 2 + 0.06, t, t + 0.08, at + o - 0.03, at + o + 0.03, false);
+          L(hcM.trim, c - w / 2 - 0.08, c + w / 2 + 0.08, b - 0.06, b, at + o * 1.6 - 0.05, at + o * 1.6 + 0.05, false);
+          for (const s of [-1, 1]) L(hcM.trim, c + s * (w / 2 + 0.03) - 0.03, c + s * (w / 2 + 0.03) + 0.03, b, t, at + o - 0.03, at + o + 0.03, false);
+          L(hcM.trim, c - 0.02, c + 0.02, b, t, at - 0.02, at + 0.02, false); L(hcM.trim, c - w / 2, c + w / 2, (b + t) / 2 - 0.02, (b + t) / 2 + 0.02, at - 0.02, at + 0.02, false);
+          const p = lp(c, (b + t) / 2, at); const g = new THREE.PlaneGeometry(w, t - b); glassB.add(g, hcM.glass, p.x, p.y, p.z); g.dispose();
+          addBoxCollider(p.x, b, p.z, w, t - b, 0.04);
+          if (lit) { const q = lp(c, (b + t) / 2, at - outward * (T / 2 + 0.05)); const g2 = new THREE.PlaneGeometry(w * 0.96, (t - b) * 0.96); glassB.add(g2, hcM.curtain, q.x, q.y, q.z); g2.dispose(); }
+        } else {
+          L(hcM.trim, at + o - 0.03, at + o + 0.03, t, t + 0.08, c - w / 2 - 0.06, c + w / 2 + 0.06, false);
+          L(hcM.trim, at + o * 1.6 - 0.05, at + o * 1.6 + 0.05, b - 0.06, b, c - w / 2 - 0.08, c + w / 2 + 0.08, false);
+          for (const s of [-1, 1]) L(hcM.trim, at + o - 0.03, at + o + 0.03, b, t, c + s * (w / 2 + 0.03) - 0.03, c + s * (w / 2 + 0.03) + 0.03, false);
+          L(hcM.trim, at - 0.02, at + 0.02, b, t, c - 0.02, c + 0.02, false); L(hcM.trim, at - 0.02, at + 0.02, (b + t) / 2 - 0.02, (b + t) / 2 + 0.02, c - w / 2, c + w / 2, false);
+          const p = lp(at, (b + t) / 2, c); const g = new THREE.PlaneGeometry(w, t - b).rotateY(Math.PI / 2); glassB.add(g, hcM.glass, p.x, p.y, p.z); g.dispose();
+          addBoxCollider(p.x, b, p.z, 0.04, t - b, w);
+          if (lit) { const q = lp(at - outward * (T / 2 + 0.05), (b + t) / 2, c); const g2 = new THREE.PlaneGeometry(w * 0.96, (t - b) * 0.96).rotateY(Math.PI / 2); glassB.add(g2, hcM.curtain, q.x, q.y, q.z); g2.dispose(); }
+        }
+      };
+      const wins0 = [['x', T / 2, 1.8, 1.5, -1], ['x', T / 2, 7.2, 1.4, -1], ['x', D - T / 2, 1.8, 1.2, 1], ['x', D - T / 2, 7.2, 1.2, 1],
+        ['z', T / 2, 4.1, 0.9, -1], ['z', T / 2, 6.6, 1.0, -1], ['z', W - T / 2, 2.4, 1.1, 1], ['z', W - T / 2, 6.3, 1.0, 1]];
+      wins0.forEach(([ax, at, c, w, out], k) => winAt(ax, at, c, w, FL + 0.85, FL + 2.0, (H.no + k) % 5 === 0, out));
+      // ---------- upstairs ----------
+      if (two) {
+        // the floor slab over the ground floor, with the stairwell cut out (x 4.5..5.4, z 2.3..6.1); ceiling below it
+        const SW = { x0: 4.5, x1: 5.4, z0: 2.3, z1: 6.1 };
+        for (const [a0, a1, b0, b1] of [[0, W, 0, SW.z0], [0, W, SW.z1, D], [0, SW.x0, SW.z0, SW.z1], [SW.x1, W, SW.z0, SW.z1]]) {
+          L(hcM.floor, a0 + (a0 ? 0 : T), a1 - (a1 === W ? T : 0), F1 - SLAB, F1, b0 + (b0 ? 0 : T), b1 - (b1 === D ? T : 0), true, 1.5);
+          L(hcM.ceil, a0 + (a0 ? 0 : T), a1 - (a1 === W ? T : 0), F1 - SLAB - 0.01, F1 - SLAB, b0 + (b0 ? 0 : T), b1 - (b1 === D ? T : 0), false, 2);
+        }
+        // the staircase: 15 even steps up the hall (from z 2.3 to 6.1), solid blocks under the treads, a stringer on the
+        // open side, a handrail, newel posts; under it the collision is a smooth ramp
+        const NS = 15, RUN = SW.z1 - SW.z0, RISE = F1 - FL, TR = RUN / NS;
+        for (let k = 0; k < NS; k++) {
+          const top = FL + RISE * (k + 1) / NS, z0 = SW.z0 + k * TR;
+          L(hcM.furn, SW.x0 + 0.02, SW.x1 - 0.02, top - 0.035, top, z0 - 0.02, z0 + TR, false, 1);            // tread with nosing
+          L(hcM.trim, SW.x0 + 0.04, SW.x1 - 0.04, FL, top - 0.035, z0, z0 + TR, false, 1);                   // the block under it
+        }
+        { const za = Zw(SW.z0), zb = Zw(SW.z1); hcRamp(X(SW.x0), X(SW.x1), Math.min(za, zb), Math.max(za, zb), FL, F1 + 0.01, N ? '-z' : '+z', 30); }
+        // handrail on the open (hall) side, following the slope, with balusters
+        const ang = Math.atan2(RISE, RUN), len = Math.hypot(RUN, RISE);
+        {
+          const mid = lp(SW.x0 + 0.03, FL + RISE / 2 + 0.85, (SW.z0 + SW.z1) / 2);
+          B.add(UNIT_BOX, hcM.furnDark, mid.x, mid.y, mid.z, N ? ang : -ang, 0, 0, 0.06, 0.06, len);
+          for (let k = 0; k <= NS; k += 2) { const z = SW.z0 + k * TR, y0 = FL + RISE * k / NS; L(hcM.trim, SW.x0 + 0.01, SW.x0 + 0.05, y0, y0 + 0.85, z - 0.02, z + 0.02, false); }
+          L(hcM.furnDark, SW.x0 - 0.05, SW.x0 + 0.09, FL, FL + 1.05, SW.z0 - 0.07, SW.z0 + 0.07, true);           // newel post
+          addBoxCollider(mid.x, FL + 0.6, mid.z, 0.06, RISE + 0.5, 0.06);                                     // (a thin bar the hands can grip)
+        }
+        // upstairs railing round the stairwell (open side and the front end)
+        L(hcM.furnDark, SW.x0 - 0.03, SW.x0 + 0.03, F1 + 0.86, F1 + 0.92, SW.z0, SW.z1, true);
+        L(hcM.furnDark, SW.x0, SW.x1, F1 + 0.86, F1 + 0.92, SW.z0 - 0.03, SW.z0 + 0.03, true);
+        for (let z = SW.z0; z < SW.z1 - 0.05; z += 0.16) L(hcM.trim, SW.x0 - 0.015, SW.x0 + 0.015, F1, F1 + 0.86, z - 0.015, z + 0.015, false);
+        for (let x = SW.x0; x < SW.x1; x += 0.16) L(hcM.trim, x - 0.015, x + 0.015, F1, F1 + 0.86, SW.z0 - 0.015, SW.z0 + 0.015, false);
+        addBoxCollider(X(SW.x0), F1, (Zw(SW.z0) + Zw(SW.z1)) / 2, 0.06, 0.9, Math.abs(Zw(SW.z0) - Zw(SW.z1)));
+        // upstairs walls (outer, with windows) and the rooms: big bedroom (left) with the closet in its back corner,
+        // bedroom (front right), bathroom (back right), the hall and landing
+        const TOP1 = EAVE, C1 = F1 + UP;
+        wallX(siding, T / 2, 0, W, F1, TOP1, [WIN(1.8, 1.3, true), WIN(4.5, 0.9, true), WIN(7.2, 1.3, true)], T, true, 1.6);
+        wallX(siding, D - T / 2, 0, W, F1, TOP1, [WIN(1.8, 1.1, true), WIN(7.2, 0.8, true)], T, true, 1.6);
+        wallZ(siding, T / 2, 0, D, F1, TOP1, [WIN(4.6, 1.1, true)], T, true, 1.6);
+        wallZ(siding, W - T / 2, 0, D, F1, TOP1, [WIN(2.4, 1.1, true)], T, true, 1.6);
+        wallX(paper, T + PT / 2, T, W - T, F1, C1, [WIN(1.8, 1.3, true), WIN(4.5, 0.9, true), WIN(7.2, 1.3, true)], PT, false);
+        wallX(paper, D - T - PT / 2, T, W - T, F1, C1, [WIN(1.8, 1.1, true), WIN(7.2, 0.8, true)], PT, false);
+        wallZ(paper, T + PT / 2, T, D - T, F1, C1, [WIN(4.6, 1.1, true)], PT, false);
+        wallZ(paper, W - T - PT / 2, T, D - T, F1, C1, [WIN(2.4, 1.1, true)], PT, false);
+        wallZ(paper, 3.6, T, D - T, F1, C1, [DOOR1(6.9)], IT);                                     // big bedroom | hall
+        wallZ(paper, 5.4, T, D - T, F1, C1, [DOOR1(1.25), DOOR1(6.95)], IT);                       // hall | front bedroom / bath
+        wallX(paper, 4.8, 5.4, W - T, F1, C1, [], IT);                                               // front bedroom | bath
+        // the closet in the big bedroom's back corner (x 0..1.35, z 6.3..8), its door facing the room
+        wallX(paper, 6.3, T, 1.35, F1, C1, [{ c: 0.74, w: 0.92, b: F1, t: F1 + 2.0 }], IT);
+        wallZ(paper, 1.35, 6.3, D - T, F1, C1, [], IT);
+        door('z', 3.6, 6.9, F1); door('z', 5.4, 1.25, F1); door('z', 5.4, 6.95, F1);
+        H.closet = door('x', 6.3, 0.74, F1, doorPaint, { w: 0.84, h: 1.95 });
+        // the upstairs ceiling (the attic floor)
+        L(hcM.ceil, T, W - T, C1, C1 + 0.1, T, D - T, true, 2);
+        const wins1 = [['x', T / 2, 1.8, 1.3, -1], ['x', T / 2, 4.5, 0.9, -1], ['x', T / 2, 7.2, 1.3, -1], ['x', D - T / 2, 1.8, 1.1, 1], ['x', D - T / 2, 7.2, 0.8, 1], ['z', T / 2, 4.6, 1.1, -1], ['z', W - T / 2, 2.4, 1.1, 1]];
+        wins1.forEach(([ax, at, c, w, out], k) => winAt(ax, at, c, w, F1 + 0.85, F1 + 2.0, (H.no * 3 + k) % 4 === 0, out));
+      } else {
+        L(hcM.ceil, T, W - T, FL + ST, FL + ST + 0.1, T, D - T, true, 2);                       // the ceiling (the attic floor)
+        // the back bedroom's closet (back corner x 0..1.35, z 6.3..8)
+        wallX(paper, 6.3, T, 1.35, FL, C0, [{ c: 0.74, w: 0.92, b: FL, t: FL + 2.0 }], IT);
+        wallZ(paper, 1.35, 6.3, D - T, FL, C0, [], IT);
+        H.closet = door('x', 6.3, 0.74, FL, doorPaint, { w: 0.84, h: 1.95 });
+      }
+      // ---------- the roof: a pitched gable over the whole house, eaves overhanging; the attic is solid ----------
+      {
+        const OV = 0.45, sl = (D / 2 + OV) / Math.cos(PITCH), th = 0.12;
+        for (const half of [0, 1]) {                                            // front slope, back slope
+          const lzc = half ? D * 0.75 + OV / 2 : D * 0.25 - OV / 2, yc = EAVE + RISE / 2 - (OV / 2) * Math.tan(PITCH) + th / 2;
+          const front = half === 0, rx = (front ? 1 : -1) * (N ? 1 : -1) * PITCH;
+          const g = hcTiledBox(W + 2 * OV, th, sl, 1.2), p = lp(W / 2, yc, lzc);
+          B.add(g, roofM, p.x, p.y, p.z, rx, 0, 0); g.dispose();
+        }
+        // gable ends (siding triangles) and the fascia
+        const tri = new THREE.Shape(); tri.moveTo(-D / 2, 0); tri.lineTo(D / 2, 0); tri.lineTo(0, RISE); tri.closePath();
+        for (const lx of [0, W - T]) {
+          const g = new THREE.ExtrudeGeometry(tri, { depth: T, bevelEnabled: false }).rotateY(Math.PI / 2);
+          const uv = g.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) / 1.6, uv.getY(i) / 1.6);
+          const p = lp(lx + (lx ? T : 0), EAVE, D / 2); B.add(g, siding, p.x - (lx ? T : 0), p.y, p.z); g.dispose();
+        }
+        for (const lz of [-OV, D + OV]) L(hcM.trim, -OV, W + OV, EAVE - 0.12 - OV * Math.tan(PITCH), EAVE - OV * Math.tan(PITCH) + 0.02, lz - 0.04, lz + 0.04, false);
+        // the attic as stacked slices (you can climb the roof, not get inside it)
+        const NSL = 8;
+        for (let k = 0; k < NSL; k++) {
+          const f = k / NSL, top = EAVE + RISE * (k + 0.5) / NSL;
+          const za = Zw(f * D / 2), zb = Zw(D - f * D / 2);
+          addBoxCollider(X(W / 2), EAVE, (za + zb) / 2, W, top - EAVE, Math.abs(zb - za));
+        }
+        // a brick chimney up the left side (houses with a fireplace)
+        if (H.fire) {
+          L(hcM.brick, -0.55, 0.0, 0, EAVE + RISE * 0.55 + 0.9, 1.9, 3.1, true, 1.2);
+          L(hcM.brick, -0.62, 0.07, EAVE + RISE * 0.55 + 0.8, EAVE + RISE * 0.55 + 0.95, 1.83, 3.17, false, 1.2);
+        }
+      }
+      // ---------- rooms: furniture (colliders on the big pieces), lamps, decorations ----------
+      const f0 = FL, f1 = F1;
+      const furnish = hcFurnish(H, { L, lp, X, Zw, N, f0, f1, two, B, doorX, C0, paper });
+      // the house's footprint for the minimap / searched checks (world AABB)
+      const za = Zw(0), zb = Zw(D);
+      HC_ROOMS.push({ H, x0: X(0), x1: X(W), z0: Math.min(za, zb), z1: Math.max(za, zb), doorAt: lp(doorX, 0, -PD - 1.2), two, furnish });
+      B.build(group, { castShadow: false });
+      glassB.build(group, { castShadow: false, receiveShadow: false });
+      H.group = group; H.doors = doors; H.lp = lp; H.X = X; H.Zw = Zw;
+      hcChunk(group, doors);
+    }
+    // the boarded-up houses at the far ends: solid shells, boards over the windows and the door, a sagging porch
+    function hcDeadHouse(H) {
+      const { FL, T, W, D } = HALLOW, N = H.side === 'N', sg = N ? -1 : 1, zf = N ? HALLOW.zN : HALLOW.zS, EAVE = FL + 5.4, PITCH = 0.62, RISE = (D / 2) * Math.tan(PITCH);
+      const X = (lx) => H.x0 + lx, Zw = (lz) => zf + sg * lz, group = new THREE.Group(); scene.add(group);
+      const B = makeBatch(), siding = new THREE.MeshStandardMaterial({ map: hcSidingTex, color: H.siding, roughness: 0.95 });
+      const roofM = new THREE.MeshStandardMaterial({ map: hcRoofTex, color: 0x262222, roughness: 1 });
+      const L = (mat, lx0, lx1, y0, y1, lz0, lz1, solid = true, tile = 1) => { const za = Zw(lz0), zb = Zw(lz1); hcBox(B, mat, X(Math.min(lx0, lx1)), X(Math.max(lx0, lx1)), y0, y1, Math.min(za, zb), Math.max(za, zb), solid, tile); };
+      L(hcM.brick, 0, W, 0, FL, 0, D, true, 1.2);
+      L(siding, 0, W, FL, EAVE, 0, D, true, 1.6);
+      for (const [c, y] of [[1.8, FL + 1.4], [7.2, FL + 1.4], [1.8, FL + 4.1], [4.5, FL + 4.1], [7.2, FL + 4.1]]) {
+        L(hcM.black, c - 0.6, c + 0.6, y - 0.55, y + 0.55, -0.02, 0.0, false);
+        for (let k = 0; k < 3; k++) { const g = hcTiledBox(1.45, 0.16, 0.03, 1); const p = new THREE.Vector3(X(c), y - 0.35 + k * 0.35, Zw(-0.03)); B.add(g, hcM.board, p.x, p.y, p.z, 0, 0, hr(-0.25, 0.25)); g.dispose(); }
+      }
+      L(hcM.black, 4.05, 4.95, FL, FL + 2.0, -0.02, 0, false);
+      for (let k = 0; k < 4; k++) { const g = hcTiledBox(1.2, 0.18, 0.03, 1); const p = new THREE.Vector3(X(4.5), FL + 0.4 + k * 0.45, Zw(-0.04)); B.add(g, hcM.board, p.x, p.y, p.z, 0, 0, hr(-0.4, 0.4)); g.dispose(); }
+      L(hcM.board, 1, W - 1, 0, FL - 0.08, -2, 0, true, 1.5);                                 // the porch, sagging
+      const OV = 0.4, sl = (D / 2 + OV) / Math.cos(PITCH);
+      for (const half of [0, 1]) { const g = hcTiledBox(W + 2 * OV, 0.12, sl, 1.2), p = new THREE.Vector3(X(W / 2), EAVE + RISE / 2 - (OV / 2) * Math.tan(PITCH) + 0.06, Zw(half ? D * 0.75 + OV / 2 : D * 0.25 - OV / 2)); B.add(g, roofM, p.x, p.y, p.z, (half ? -1 : 1) * (N ? 1 : -1) * PITCH, 0, 0); g.dispose(); }
+      const tri = new THREE.Shape(); tri.moveTo(-D / 2, 0); tri.lineTo(D / 2, 0); tri.lineTo(0, RISE); tri.closePath();
+      for (const lx of [0, W]) { const g = new THREE.ExtrudeGeometry(tri, { depth: 0.05, bevelEnabled: false }).rotateY(Math.PI / 2); B.add(g, siding, X(lx), EAVE, Zw(D / 2)); g.dispose(); }
+      for (let k = 0; k < 6; k++) { const za = Zw((k / 6) * D / 2), zb = Zw(D - (k / 6) * D / 2); addBoxCollider(X(W / 2), EAVE, (za + zb) / 2, W, RISE * (k + 0.5) / 6, Math.abs(zb - za)); }
+      B.build(group, { castShadow: false });
+      hcChunk(group);
+      HC_ROOMS.push({ H, dead: true, x0: X(0), x1: X(W), z0: Math.min(Zw(0), Zw(D)), z1: Math.max(Zw(0), Zw(D)) });
+    }
+    // ---------- furniture, room by room (local coordinates; y absolute). Returns the hidden-item spots. ----------
+    const hcWebGeo = new THREE.PlaneGeometry(1, 1).translate(0.5, -0.5, 0);
+    const hcPicketZGeo = mergeGeometries([new THREE.BoxGeometry(0.024, 0.78, 0.075).translate(0, 0.39, 0), new THREE.ConeGeometry(0.053, 0.11, 4).rotateY(Math.PI / 4).scale(0.45, 1, 1).translate(0, 0.835, 0)], false);
+    function hcWeb(p, dx, dz, s = 0.7) { hcPut('web', hcWebGeo, hcM.web, p.x, p.y, p.z, 0, Math.atan2(-dz, dx), 0, s, s, 1); }
+    function hcFurnish(H, C) {
+      const { L, lp, X, Zw, N, f0, f1, two, B } = C, out = {}, sg = N ? -1 : 1;
+      const lamp = (lx, lz, y, color = 0xffb070, intensity = 2.6, dist = 5, w = 0.9) => {
+        const p = lp(lx, y, lz); lightSources.push({ x: p.x, y: p.y, z: p.z, color, intensity, distance: dist, weight: w });
+      };
+      const wz = (dzLocal) => sg * dzLocal;                                   // a local z direction in the world
+      // ---------- living room (x 0.15..3.55, z 0.15..4.95) ----------
+      L(hcM.rug, 0.6, 3.1, f0, f0 + 0.012, 1.3, 4.0, false);
+      // sofa under the front window, facing into the room
+      L(hcM.fabricG, 0.9, 2.7, f0, f0 + 0.42, 0.2, 1.0, true);
+      L(hcM.fabricG, 0.9, 2.7, f0 + 0.42, f0 + 0.84, 0.17, 0.4, true);
+      for (const a of [0.9, 2.52]) L(hcM.fabricG, a, a + 0.18, f0 + 0.42, f0 + 0.62, 0.2, 1.0, false);
+      for (const a of [1.0, 1.82]) L(hcM.fabricY, a, a + 0.78, f0 + 0.42, f0 + 0.5, 0.42, 0.95, false);     // cushions
+      // coffee table with a bowl of candy and two candles
+      L(hcM.furnDark, 1.3, 2.3, f0 + 0.36, f0 + 0.42, 1.5, 2.05, true);
+      for (const [a, b] of [[1.33, 1.53], [1.33, 2.02], [2.27, 1.53], [2.27, 2.02]]) L(hcM.furnDark, a - 0.03, a + 0.03, f0, f0 + 0.36, b - 0.03, b + 0.03, false);
+      { const p = lp(1.75, f0 + 0.45, 1.78); B.add(new THREE.SphereGeometry(0.12, 10, 6, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2), hcM.porcelain, p.x, p.y + 0.12, p.z);
+        for (let k = 0; k < 6; k++) B.add(new THREE.SphereGeometry(0.03, 6, 4), k % 2 ? hcM.pumpkin : hcM.fabricR, p.x + hr(-0.06, 0.06), p.y + 0.04, p.z + hr(-0.06, 0.06)); }
+      for (const a of [2.0, 2.15]) { const p = lp(a, f0 + 0.42, 1.65); B.add(new THREE.CylinderGeometry(0.02, 0.02, 0.12, 8), hcM.porcelain, p.x, p.y + 0.06, p.z); B.add(new THREE.SphereGeometry(0.012, 6, 4), hcM.bulb, p.x, p.y + 0.135, p.z); }
+      // armchair facing the fireplace / TV
+      L(hcM.fabricR, 1.75, 2.45, f0, f0 + 0.42, 3.55, 4.25, true);
+      L(hcM.fabricR, 2.3, 2.5, f0 + 0.42, f0 + 0.95, 3.55, 4.25, true);
+      for (const b of [3.5, 4.12]) L(hcM.fabricR, 1.75, 2.45, f0 + 0.42, f0 + 0.6, b, b + 0.13, false);
+      // floor lamp in the corner (lit)
+      L(hcM.iron, 0.33, 0.37, f0, f0 + 1.45, 0.43, 0.47, false); L(hcM.iron, 0.25, 0.45, f0, f0 + 0.03, 0.35, 0.55, false);
+      { const p = lp(0.35, f0 + 1.48, 0.45); B.add(new THREE.CylinderGeometry(0.12, 0.2, 0.26, 12, 1, true), hcM.shade, p.x, p.y, p.z); }
+      lamp(0.35, 0.6, f0 + 1.4, 0xffb070, 3, 6, 1.1);
+      // the fireplace (No. 11 and No. 13; No. 11's still has embers), or the TV, or a bookcase
+      if (H.fire) {
+        L(hcM.brick, 0.15, 0.55, f0, f0 + 1.15, 1.85, 3.15, true, 0.9);
+        L(hcM.black, 0.5, 0.56, f0 + 0.08, f0 + 0.72, 2.2, 2.8, false);
+        L(hcM.furnDark, 0.12, 0.72, f0 + 1.15, f0 + 1.24, 1.75, 3.25, true);
+        L(hcM.brick, 0.55, 1.05, f0, f0 + 0.05, 1.85, 3.15, false, 0.9);
+        for (let k = 0; k < 4; k++) L(hcM.iron, 0.3, 0.5, f0 + 0.1, f0 + 0.12, 2.28 + k * 0.14, 2.31 + k * 0.14, false);   // the grate
+        for (const z of [3.35]) { L(hcM.iron, 0.72, 0.76, f0, f0 + 0.7, z - 0.02, z + 0.02, false); L(hcM.iron, 0.64, 0.84, f0, f0 + 0.02, z - 0.1, z + 0.1, false); L(hcM.brass, 0.68, 0.8, f0 + 0.68, f0 + 0.7, z - 0.06, z + 0.06, false); }
+        // the stand's shovel and brush still hang on it; the poker is gone from its hook (it's on the hearth)
+        L(hcM.iron, 0.76, 0.78, f0 + 0.18, f0 + 0.68, 3.28, 3.3, false); L(hcM.iron, 0.7, 0.84, f0 + 0.14, f0 + 0.2, 3.25, 3.33, false);
+        if (H.no === 11) {
+          L(hcM.ember, 0.3, 0.5, f0 + 0.12, f0 + 0.17, 2.3, 2.7, false);
+          for (let k = 0; k < 3; k++) L(hcM.furnDark, 0.28, 0.52, f0 + 0.15 + k * 0.03, f0 + 0.2 + k * 0.03, 2.35 + k * 0.08, 2.4 + k * 0.08, false);
+          const p = lp(0.6, f0 + 0.35, 2.5); lightSources.push({ x: p.x, y: p.y, z: p.z, color: 0xff5a18, intensity: 2.4, distance: 4.5, weight: 1, fire: true });
+          out.poker = lp(0.86, f0, 2.5); out.pokerYaw = N ? 0.2 : Math.PI + 0.2;
+        }
+        // mantel decorations: a skull, two candles, a small pumpkin
+        { const p = lp(0.42, f0 + 1.24, 2.1); B.add(new THREE.SphereGeometry(0.07, 10, 8), hcM.porcelain, p.x, p.y + 0.07, p.z); }
+        for (const z of [2.6, 2.95]) { const p = lp(0.42, f0 + 1.24, z); B.add(new THREE.CylinderGeometry(0.025, 0.025, 0.18, 8), hcM.porcelain, p.x, p.y + 0.09, p.z); B.add(new THREE.SphereGeometry(0.015, 6, 4), hcM.bulb, p.x, p.y + 0.195, p.z); }
+      } else if (H.tv) {
+        L(hcM.furnDark, 0.15, 0.6, f0, f0 + 0.55, 2.0, 3.0, true);
+        L(hcM.furnDark, 0.18, 0.66, f0 + 0.55, f0 + 1.05, 2.15, 2.85, true);
+        L(hcM.black, 0.66, 0.67, f0 + 0.6, f0 + 1.0, 2.2, 2.8, false);
+        { const p = lp(0.675, f0 + 0.8, 2.5); const g = new THREE.PlaneGeometry(0.52, 0.36).rotateY(N ? Math.PI / 2 : Math.PI / 2); B.add(g, hcM.tv, p.x + 0.001, p.y, p.z); g.dispose(); }
+        for (const s of [-1, 1]) { const p = lp(0.4, f0 + 1.05, 2.5 + s * 0.12); B.add(new THREE.CylinderGeometry(0.004, 0.004, 0.4, 4), hcM.chrome, p.x, p.y + 0.18, p.z, s * 0.4, 0, 0); }   // rabbit ears
+        lamp(0.9, 2.5, f0 + 0.8, 0x7a90ff, 2.2, 4.5, 1);
+        out.tv = lp(0.68, f0 + 0.8, 2.5);
+      } else {
+        L(hcM.furnDark, 0.15, 0.5, f0, f0 + 1.9, 1.7, 3.3, true);
+        for (let k = 0; k < 4; k++) {
+          L(hcM.furn, 0.17, 0.5, f0 + 0.35 + k * 0.42, f0 + 0.38 + k * 0.42, 1.72, 3.28, false);
+          for (let j = 0; j < 9; j++) { const c = [hcM.fabricR, hcM.fabricB, hcM.fabricG, hcM.fabricY][(j + k) % 4], z0 = 1.78 + j * 0.16; L(c, 0.2, 0.46, f0 + 0.38 + k * 0.42, f0 + 0.38 + k * 0.42 + hr(0.2, 0.3), z0, z0 + hr(0.06, 0.12), false); }
+        }
+      }
+      // a picture on the wall, cobwebs high in the corners
+      L(hcM.furnDark, 1.2, 2.0, f0 + 1.4, f0 + 2.0, 4.93, 4.96, false); L(hcM.black, 1.28, 1.92, f0 + 1.47, f0 + 1.93, 4.92, 4.94, false);
+      hcWeb(lp(0.16, f0 + 2.58, 0.16), 1, wz(1)); hcWeb(lp(3.54, f0 + 2.58, 4.94), -1, wz(-1), 0.55);
+      // ---------- the hall: a console table, a coat stand, a runner ----------
+      L(hcM.rug, 3.75, 4.4, f0, f0 + 0.012, 0.4, two ? 2.2 : 7.5, false);
+      L(hcM.furnDark, 3.65, 3.95, f0 + 0.78, f0 + 0.82, 0.3, 0.9, true); L(hcM.furnDark, 3.66, 3.7, f0, f0 + 0.78, 0.32, 0.88, false);
+      { const p = lp(3.8, f0 + 0.82, 0.6); B.add(new THREE.SphereGeometry(0.11, 12, 9).scale(1, 0.8, 1), hcM.pumpkin, p.x, p.y + 0.09, p.z); }
+      lamp(4.4, two ? 1.2 : 4, f0 + 2.3, 0xffc890, 1.6, 4, 0.7);
+      { const p = lp(4.4, f0 + 2.55, two ? 1.2 : 4); B.add(new THREE.SphereGeometry(0.1, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2), hcM.shade, p.x, p.y - 0.06, p.z, Math.PI, 0, 0); }
+      // ---------- kitchen (x 5.45..8.85, z 0.15..4.55) ----------
+      L(hcM.tile, 5.45, 8.85, f0 + 0.004, f0 + 0.008, 0.15, 4.55, false, 0.6);
+      L(hcM.furn, 8.25, 8.85, f0, f0 + 0.86, 0.7, 3.7, true);                                    // counter run (right wall)
+      L(hcM.counter, 8.2, 8.85, f0 + 0.86, f0 + 0.9, 0.68, 3.72, true);
+      for (let k = 0; k < 5; k++) L(hcM.furnDark, 8.23, 8.25, f0 + 0.08, f0 + 0.8, 0.75 + k * 0.6, 1.25 + k * 0.6, false);   // cabinet doors
+      L(hcM.chrome, 8.32, 8.75, f0 + 0.86, f0 + 0.905, 2.05, 2.75, false); L(hcM.black, 8.36, 8.71, f0 + 0.8, f0 + 0.906, 2.1, 2.7, false);   // sink
+      { const p = lp(8.8, f0 + 1.0, 2.4); B.add(new THREE.CylinderGeometry(0.015, 0.015, 0.22, 6), hcM.chrome, p.x, p.y + 0.02, p.z); }
+      L(hcM.furn, 8.5, 8.85, f0 + 1.55, f0 + 2.25, 0.7, 1.75, true); L(hcM.furn, 8.5, 8.85, f0 + 1.55, f0 + 2.25, 3.05, 3.7, true);   // upper cabinets
+      // the stove (front wall) and the rounded old fridge (back corner)
+      L(hcM.cream, 5.55, 6.3, f0, f0 + 0.9, 0.17, 0.8, true); L(hcM.black, 5.57, 6.28, f0 + 0.9, f0 + 0.91, 0.19, 0.78, false);
+      for (const [a, b] of [[5.75, 0.35], [6.1, 0.35], [5.75, 0.62], [6.1, 0.62]]) { const p = lp(a, f0 + 0.915, b); B.add(new THREE.TorusGeometry(0.07, 0.01, 4, 12).rotateX(Math.PI / 2), hcM.iron, p.x, p.y, p.z); }
+      L(hcM.cream, 5.55, 6.3, f0 + 0.9, f0 + 1.18, 0.15, 0.22, false); L(hcM.black, 5.62, 6.2, f0 + 0.2, f0 + 0.6, 0.8, 0.81, false);
+      { const p = lp(5.95, f0 + 0.98, 0.5); B.add(new THREE.CylinderGeometry(0.11, 0.1, 0.16, 12), hcM.chrome, p.x, p.y, p.z); }   // a pot
+      L(hcM.cream, 5.5, 6.25, f0, f0 + 1.75, 3.8, 4.5, true);
+      L(hcM.chrome, 5.52, 5.55, f0 + 1.0, f0 + 1.4, 3.85, 3.9, false);
+      // table and two chairs, a clock, the ceiling light
+      L(hcM.furn, 6.6, 7.5, f0 + 0.72, f0 + 0.77, 1.6, 2.6, true);
+      for (const [a, b] of [[6.65, 1.65], [7.45, 1.65], [6.65, 2.55], [7.45, 2.55]]) L(hcM.furn, a - 0.03, a + 0.03, f0, f0 + 0.72, b - 0.03, b + 0.03, false);
+      for (const b of [1.2, 3.0]) { L(hcM.furnDark, 6.8, 7.3, f0 + 0.42, f0 + 0.46, b - 0.22, b + 0.22, true); L(hcM.furnDark, 6.8, 7.3, f0 + 0.46, f0 + 0.95, b === 1.2 ? b - 0.24 : b + 0.2, b === 1.2 ? b - 0.2 : b + 0.24, false); }
+      { const p = lp(7.0, f0 + 2.0, 0.17); B.add(new THREE.CylinderGeometry(0.14, 0.14, 0.03, 16).rotateX(Math.PI / 2), hcM.cream, p.x, p.y, p.z + wz(0.01)); }
+      lamp(7.0, 2.2, f0 + 2.3, 0xffd8a0, 1.8, 5, 0.8);
+      { const p = lp(7.0, f0 + 2.5, 2.2); B.add(new THREE.SphereGeometry(0.12, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2), hcM.shade, p.x, p.y, p.z, Math.PI, 0, 0); }
+      out.ammo = lp(8.55, f0 + 0.9, 3.35);
+      hcWeb(lp(8.84, f0 + 2.58, 0.16), -1, wz(1), 0.6);
+      if (two) {
+        // ---------- dining room (x 5.45..8.85, z 4.65..7.85) ----------
+        L(hcM.rug, 6.1, 8.3, f0, f0 + 0.012, 5.1, 7.4, false);
+        L(hcM.furnDark, 6.4, 7.9, f0 + 0.74, f0 + 0.79, 5.6, 6.9, true);
+        for (const [a, b] of [[6.45, 5.65], [7.85, 5.65], [6.45, 6.85], [7.85, 6.85]]) L(hcM.furnDark, a - 0.03, a + 0.03, f0, f0 + 0.74, b - 0.03, b + 0.03, false);
+        for (const [a, b] of [[6.8, 5.2], [7.5, 5.2], [6.8, 7.3], [7.5, 7.3]]) { L(hcM.furn, a - 0.22, a + 0.22, f0 + 0.42, f0 + 0.46, b - 0.2, b + 0.2, true); L(hcM.furn, a - 0.22, a + 0.22, f0 + 0.46, f0 + 1.0, b < 6 ? b - 0.2 : b + 0.16, b < 6 ? b - 0.16 : b + 0.2, false); }
+        L(hcM.furnDark, 7.45, 8.6, f0, f0 + 1.9, 7.42, 7.85, true);
+        for (let k = 0; k < 3; k++) L(hcM.porcelain, 7.55 + k * 0.35, 7.8 + k * 0.35, f0 + 1.2, f0 + 1.45, 7.4, 7.41, false);   // plates in the hutch
+        { const p = lp(7.15, f0 + 2.3, 6.25); B.add(new THREE.CylinderGeometry(0.01, 0.01, 0.3, 4), hcM.iron, p.x, p.y + 0.15, p.z);
+          for (let k = 0; k < 5; k++) { const a = k * 1.256; B.add(new THREE.SphereGeometry(0.035, 6, 4), hcM.bulb, p.x + Math.cos(a) * 0.22, p.y - 0.05, p.z + Math.sin(a) * 0.22); }
+          B.add(new THREE.TorusGeometry(0.22, 0.012, 4, 20).rotateX(Math.PI / 2), hcM.brass, p.x, p.y - 0.08, p.z); }
+        lamp(7.15, 6.25, f0 + 2.2, 0xffc080, 2.0, 5, 0.8);
+        { const p = lp(7.15, f0 + 0.79, 6.25); B.add(new THREE.SphereGeometry(0.14, 12, 9).scale(1, 0.78, 1), hcM.pumpkin, p.x, p.y + 0.11, p.z); }
+        hcWeb(lp(8.84, f0 + 2.58, 7.84), -1, wz(-1), 0.7);
+        // ---------- utility room (x 0.15..3.55, z 5.05..7.85): washer, dryer, shelves, a bare bulb ----------
+        L(hcM.cream, 0.25, 0.9, f0, f0 + 0.9, 7.15, 7.8, true); L(hcM.cream, 0.95, 1.6, f0, f0 + 0.9, 7.15, 7.8, true);
+        { const p = lp(0.575, f0 + 0.5, 7.14); B.add(new THREE.CircleGeometry(0.18, 16).rotateY(N ? 0 : Math.PI), hcM.black, p.x, p.y, p.z); }
+        L(hcM.furnDark, 0.15, 0.55, f0, f0 + 1.9, 5.2, 6.4, true);
+        for (let k = 0; k < 4; k++) L(hcM.furn, 0.15, 0.55, f0 + 0.35 + k * 0.45, f0 + 0.38 + k * 0.45, 5.2, 6.4, false);
+        for (let k = 0; k < 5; k++) L([hcM.fabricY, hcM.cream, hcM.fabricB][k % 3], 0.2, 0.48, f0 + 0.38 + (k % 3) * 0.45, f0 + 0.38 + (k % 3) * 0.45 + 0.22, 5.3 + k * 0.2, 5.45 + k * 0.2, false);
+        out.shelf = lp(0.34, f0 + 0.38 + 2 * 0.45, 6.05);                                     // the third shelf (the flashlight in No. 12)
+        L(hcM.chrome, 2.6, 3.0, f0, f0 + 0.3, 7.3, 7.7, false);                                 // a mop bucket
+        L(hcM.furn, 2.78, 2.82, f0, f0 + 1.3, 7.48, 7.52, false);
+        { const p = lp(1.8, f0 + 2.5, 6.4); B.add(new THREE.SphereGeometry(0.04, 8, 6), hcM.bulb, p.x, p.y, p.z); B.add(new THREE.CylinderGeometry(0.004, 0.004, 0.12, 4), hcM.iron, p.x, p.y + 0.08, p.z); }
+        lamp(1.8, 6.4, f0 + 2.4, 0xffe0b0, 1.4, 4, 0.6);
+        hcWeb(lp(0.16, f0 + 2.58, 7.84), 1, wz(-1), 0.8); hcWeb(lp(3.54, f0 + 2.58, 5.06), -1, wz(1), 0.5);
+        // ---------- upstairs ----------
+        // the big bedroom (x 0.15..3.55, z 0.15..7.85; the closet takes the back corner)
+        L(hcM.rug, 0.9, 3.2, f1, f1 + 0.012, 1.4, 4.6, false);
+        L(hcM.furnDark, 0.15, 2.25, f1, f1 + 0.35, 2.2, 3.8, true);                             // bed
+        L(hcM.sheet, 0.2, 2.2, f1 + 0.35, f1 + 0.55, 2.25, 3.75, true);
+        L(H.no === 13 ? hcM.fabricR : hcM.fabricB, 0.9, 2.24, f1 + 0.5, f1 + 0.6, 2.22, 3.78, false);
+        for (const b of [2.4, 3.1]) L(hcM.sheet, 0.25, 0.7, f1 + 0.55, f1 + 0.7, b, b + 0.5, false);
+        L(hcM.furnDark, 0.15, 0.22, f1, f1 + 1.15, 2.15, 3.85, true);                            // headboard
+        for (const b of [1.65, 3.95]) { L(hcM.furn, 0.15, 0.6, f1, f1 + 0.55, b, b + 0.45, true); const p = lp(0.37, f1 + 0.55, b + 0.22); B.add(new THREE.CylinderGeometry(0.06, 0.12, 0.18, 10, 1, true), hcM.shade, p.x, p.y + 0.34, p.z); B.add(new THREE.CylinderGeometry(0.02, 0.05, 0.25, 8), hcM.brass, p.x, p.y + 0.12, p.z); }
+        lamp(0.4, 1.87, f1 + 0.9, 0xffb070, 1.6, 4, 0.7);
+        L(hcM.furn, 2.6, 3.45, f1, f1 + 1.05, 0.17, 0.62, true);                                // dresser with a mirror
+        for (let k = 0; k < 3; k++) L(hcM.furnDark, 2.65, 3.4, f1 + 0.12 + k * 0.32, f1 + 0.38 + k * 0.32, 0.62, 0.635, false);
+        L(hcM.furnDark, 2.75, 3.3, f1 + 1.05, f1 + 1.75, 0.17, 0.2, false); L(hcM.chrome, 2.8, 3.25, f1 + 1.1, f1 + 1.7, 0.2, 0.21, false);
+        // a rocking chair by the window
+        L(hcM.furn, 1.0, 1.5, f1 + 0.4, f1 + 0.45, 5.0, 5.5, true); L(hcM.furn, 1.0, 1.5, f1 + 0.45, f1 + 1.1, 5.48, 5.53, false);
+        for (const a of [1.02, 1.44]) L(hcM.furn, a, a + 0.04, f1, f1 + 0.08, 4.85, 5.65, false);
+        // the closet (x 0.15..1.35, z 6.3..7.85): a shelf, a rail of clothes, boxes
+        L(hcM.furn, 0.15, 1.3, f1 + 1.62, f1 + 1.66, 7.35, 7.85, false);
+        L(hcM.chrome, 0.15, 1.3, f1 + 1.5, f1 + 1.52, 7.5, 7.52, false);
+        for (let k = 0; k < 6; k++) L([hcM.fabricB, hcM.sheet, hcM.fabricR, hcM.black][k % 4], 0.22 + k * 0.17, 0.34 + k * 0.17, f1 + 0.6, f1 + 1.48, 7.32, 7.7, false);
+        L(hcM.cream, 0.95, 1.3, f1 + 1.66, f1 + 1.95, 7.4, 7.8, false);
+        out.closetFloor = lp(0.74, f1, 6.95); out.closetLock = lp(0.74 + 0.32, f1 + 0.85, 6.3);
+        hcWeb(lp(0.16, f1 + 2.48, 0.16), 1, wz(1), 0.6); hcWeb(lp(3.54, f1 + 2.48, 0.16), -1, wz(1), 0.5);
+        // the front bedroom (x 5.45..8.85, z 0.15..4.75): a child's room
+        L(hcM.furn, 7.95, 8.85, f1, f1 + 0.3, 0.8, 2.8, true); L(hcM.sheet, 8.0, 8.85, f1 + 0.3, f1 + 0.48, 0.85, 2.75, true);
+        L(hcM.fabricY, 8.0, 8.85, f1 + 0.45, f1 + 0.52, 1.4, 2.77, false); L(hcM.sheet, 8.15, 8.7, f1 + 0.48, f1 + 0.6, 0.9, 1.3, false);
+        L(hcM.furn, 6.0, 7.1, f1 + 0.72, f1 + 0.76, 4.0, 4.6, true); for (const [a, b] of [[6.03, 4.03], [7.07, 4.03], [6.03, 4.57], [7.07, 4.57]]) L(hcM.furn, a - 0.025, a + 0.025, f1, f1 + 0.72, b - 0.025, b + 0.025, false);
+        { const p = lp(6.5, f1 + 0.76, 4.3); B.add(new THREE.SphereGeometry(0.12, 12, 9).scale(1, 0.8, 1), hcM.pumpkin, p.x, p.y + 0.1, p.z); }
+        L(hcM.fabricR, 5.6, 6.3, f1, f1 + 0.45, 0.3, 0.75, true);                                // toy chest
+        hcWeb(lp(8.84, f1 + 2.48, 4.74), -1, wz(-1), 0.6);
+        // the bathroom (x 5.45..8.85, z 4.85..7.85)
+        L(hcM.tile, 5.45, 8.85, f1 + 0.004, f1 + 0.008, 4.85, 7.85, false, 0.5);
+        L(hcM.porcelain, 7.0, 8.8, f1, f1 + 0.55, 7.05, 7.8, true); L(hcM.black, 7.1, 8.7, f1 + 0.5, f1 + 0.56, 7.15, 7.7, false);
+        L(hcM.porcelain, 8.3, 8.8, f1, f1 + 0.42, 5.3, 5.75, true); L(hcM.porcelain, 8.65, 8.85, f1 + 0.42, f1 + 0.85, 5.3, 5.75, false);
+        L(hcM.porcelain, 5.62, 6.05, f1, f1 + 0.8, 7.45, 7.8, true); L(hcM.porcelain, 5.55, 6.12, f1 + 0.8, f1 + 0.88, 7.4, 7.85, false);
+        L(hcM.chrome, 5.6, 6.07, f1 + 1.2, f1 + 1.8, 7.82, 7.84, false);
+        lamp(7.0, 6.3, f1 + 2.2, 0xd8e0ff, 1.3, 4, 0.6);
+        // the upstairs hall and landing: a runner, a table with a candle, the ceiling light, a portrait
+        L(hcM.rug, 3.75, 4.35, f1, f1 + 0.012, 0.4, 7.5, false);
+        L(hcM.furnDark, 3.68, 4.1, f1 + 0.76, f1 + 0.8, 7.35, 7.8, true); L(hcM.furnDark, 3.7, 3.75, f1, f1 + 0.76, 7.4, 7.75, false);
+        { const p = lp(3.9, f1 + 0.8, 7.55); B.add(new THREE.CylinderGeometry(0.03, 0.03, 0.2, 8), hcM.porcelain, p.x, p.y + 0.1, p.z); B.add(new THREE.SphereGeometry(0.016, 6, 4), hcM.bulb, p.x, p.y + 0.215, p.z); }
+        lamp(4.4, 4.0, f1 + 2.2, 0xffc890, 1.6, 5, 0.7);
+        L(hcM.furnDark, 3.66, 3.68, f1 + 1.2, f1 + 1.9, 3.0, 3.55, false);
+        hcWeb(lp(3.66, f1 + 2.48, 7.84), 1, wz(-1), 0.55);
+      } else {
+        // ---------- bungalow: back bedroom with its closet (x 0.15..3.55, z 5.05..7.85) ----------
+        L(hcM.rug, 1.7, 3.3, f0, f0 + 0.012, 5.4, 6.9, false);
+        L(hcM.furnDark, 1.55, 3.05, f0, f0 + 0.35, 5.6, 7.8, true); L(hcM.sheet, 1.6, 3.0, f0 + 0.35, f0 + 0.55, 5.65, 7.75, true);
+        L(hcM.fabricB, 1.58, 3.02, f0 + 0.5, f0 + 0.58, 5.62, 7.0, false); L(hcM.sheet, 1.75, 2.85, f0 + 0.55, f0 + 0.68, 7.25, 7.65, false);
+        L(hcM.furnDark, 1.55, 3.05, f0, f0 + 1.1, 7.75, 7.85, true);
+        L(hcM.furn, 0.3, 1.3, f0, f0 + 0.95, 5.1, 5.55, true);                                  // dresser (the key in No. 14)
+        for (let k = 0; k < 3; k++) L(hcM.furnDark, 0.35, 1.25, f0 + 0.1 + k * 0.28, f0 + 0.34 + k * 0.28, 5.55, 5.565, false);
+        out.dresser = lp(0.62, f0 + 0.95, 5.33);
+        { const p = lp(1.15, f0 + 0.95, 5.3); B.add(new THREE.CylinderGeometry(0.06, 0.11, 0.17, 10, 1, true), hcM.shade, p.x, p.y + 0.3, p.z); B.add(new THREE.CylinderGeometry(0.02, 0.045, 0.22, 8), hcM.brass, p.x, p.y + 0.11, p.z); }
+        lamp(1.15, 5.6, f0 + 1.3, 0xffb070, 1.8, 4.5, 0.8);
+        // the closet: clothes, a shelf, a box
+        L(hcM.furn, 0.15, 1.3, f0 + 1.62, f0 + 1.66, 7.35, 7.85, false); L(hcM.chrome, 0.15, 1.3, f0 + 1.5, f0 + 1.52, 7.5, 7.52, false);
+        for (let k = 0; k < 6; k++) L([hcM.fabricG, hcM.sheet, hcM.fabricY, hcM.black][k % 4], 0.22 + k * 0.17, 0.34 + k * 0.17, f0 + 0.6, f0 + 1.48, 7.32, 7.7, false);
+        out.closetFloor = lp(0.74, f0, 6.95); out.closetLock = lp(0.74 + 0.32, f0 + 0.85, 6.3);
+        hcWeb(lp(0.16, f0 + 2.58, 5.06), 1, wz(1), 0.6);
+        // ---------- the second bedroom (x 5.45..8.85, z 4.65..7.85) ----------
+        L(hcM.furn, 7.9, 8.85, f0, f0 + 0.3, 5.0, 7.0, true); L(hcM.sheet, 7.95, 8.85, f0 + 0.3, f0 + 0.48, 5.05, 6.95, true);
+        L(hcM.fabricR, 7.95, 8.85, f0 + 0.45, f0 + 0.52, 5.05, 6.3, false); L(hcM.sheet, 8.1, 8.7, f0 + 0.48, f0 + 0.6, 6.5, 6.9, false);
+        L(hcM.furnDark, 5.55, 6.3, f0, f0 + 1.7, 7.35, 7.85, true);                             // wardrobe
+        L(hcM.brass, 5.9, 5.93, f0 + 0.9, f0 + 1.0, 7.34, 7.35, false);
+        lamp(7.0, 6.2, f0 + 2.3, 0xffc890, 1.4, 4, 0.6);
+        hcWeb(lp(8.84, f0 + 2.58, 7.84), -1, wz(-1), 0.75);
+      }
+      return out;
+    }
+    // ---------- build the houses ----------
+    for (const H of HC_HOUSES) hcHouse(H);
+    for (const H of HC_DEAD) hcDeadHouse(H);
+    // the front fences, now that the walks and driveways are known
+    {
+      const lots = { N: [-46, -35.5, -17.5, 0.5, 18.5, 46], S: [-46, -32.5, -13.5, 4.5, 22.5, 46] };
+      for (const side of ['N', 'S']) {
+        const z = side === 'N' ? HALLOW.fenceN : HALLOW.fenceS, cuts = [...HALLOW.fenceGaps[side]].sort((a, b) => a[0] - b[0]);
+        const L0 = lots[side];
+        for (let k = 0; k < L0.length - 1; k++) {
+          let a = L0[k] + 0.1; const b = L0[k + 1] - 0.1;
+          for (const [g0, g1] of cuts) { if (g1 <= a || g0 >= b) continue; HALLOW.fenceRun(a, g0, z); a = g1; }
+          HALLOW.fenceRun(a, b, z);
+        }
+        // side fences between the front yards (low pickets, house front to the sidewalk fence)
+        for (const x of L0.slice(1, -1)) {
+          const z0 = side === 'N' ? HALLOW.zN : HALLOW.fenceS, z1 = side === 'N' ? HALLOW.fenceN : HALLOW.zS;
+          hcBox(HALLOW.fenceBatch, hcM.fence, x - 0.04, x + 0.04, 0.2, 0.26, z0, z1, false); hcBox(HALLOW.fenceBatch, hcM.fence, x - 0.04, x + 0.04, 0.62, 0.68, z0, z1, false);
+          addBoxCollider(x, 0, (z0 + z1) / 2, 0.08, 0.9, z1 - z0);
+          for (let zz = z0 + 0.08; zz < z1 - 0.05; zz += 0.15) hcPut('picketZ', hcPicketZGeo, hcM.fence, x, 0, zz, 0, 0, hr(-0.03, 0.03), 1, hr(0.95, 1.05), 1);
+          // and tall board fences on down the back yards (house front line to the back fence)
+          const zb0 = side === 'N' ? HALLOW.zb0 : HALLOW.zS, zb1 = side === 'N' ? HALLOW.zN : HALLOW.zb1;
+          hcBox(HALLOW.fenceBatch, hcM.privacy, x - 0.04, x + 0.04, 0, 1.8, zb0, zb1, true, 1.8);
+        }
+      }
+      const fences = new THREE.Group(); scene.add(fences);
+      HALLOW.fenceBatch.build(fences, { castShadow: false });
+    }
+    // ---------- Halloween: pumpkins, skeletons, hay, grave markers, string lights, leaf piles ----------
+    const hcPumpkinGeo = (() => {                                       // a ribbed, squat pumpkin (radius 1)
+      const g = new THREE.SphereGeometry(1, 18, 12), p = g.attributes.position, v = new THREE.Vector3();
+      for (let i = 0; i < p.count; i++) { v.fromBufferAttribute(p, i); const ph = Math.atan2(v.z, v.x), k = 1 - 0.07 * Math.pow(Math.abs(Math.sin(ph * 4)), 0.6); v.x *= k; v.z *= k; v.y *= 0.74; if (v.y > 0.6) v.y -= 0.12 * (1 - Math.hypot(v.x, v.z)); p.setXYZ(i, v.x, v.y, v.z); }
+      g.computeVertexNormals(); return g;
+    })();
+    const hcStemGeo = new THREE.CylinderGeometry(0.06, 0.1, 0.28, 6).translate(0, 0.14, 0);
+    const hcFaceGeo = new THREE.PlaneGeometry(1, 1);
+    const hcPumpkinLit = new THREE.MeshStandardMaterial({ color: 0xe0701e, roughness: 0.55, emissive: 0x6a2000, emissiveIntensity: 1 });
+    // a pumpkin at (x, y = the surface it sits on, z), radius r, its face (if carved) turned to yaw (the face's +z)
+    function hcPumpkin(x, y, z, r, yaw, carved = true, light = false) {
+      const ry = yaw + hr(-0.3, 0.3);
+      hcPut(carved ? 'pumpkinLit' : 'pumpkin', hcPumpkinGeo, carved ? hcPumpkinLit : hcM.pumpkin, x, y + r * 0.72, z, 0, ry, 0, r, r, r);
+      hcPut('stem', hcStemGeo, hcM.stem, x, y + r * 1.3, z, hr(-0.2, 0.2), hr(0, 3), hr(-0.2, 0.2), r, r, r);
+      if (carved) {
+        hcPut('face', hcFaceGeo, hcM.face, x + Math.sin(ry) * r * 0.99, y + r * 0.74, z + Math.cos(ry) * r * 0.99, 0, ry, 0, r * 1.45, r * 1.2, 1);
+        if (light) lightSources.push({ x: x + Math.sin(ry) * r * 1.5, y: y + r, z: z + Math.cos(ry) * r * 1.5, color: 0xff7a1a, intensity: 1.6, distance: 3.2, weight: 0.6, fire: true });
+      }
+    }
+    // skeletons (sitting and hanging), bone and dark sockets in one vertex-coloured geometry each
+    const hcSkel = (() => {
+      const BONE = 0xd8cfb4, DARK = 0x16100c, parts = { sit: [], hang: [] };
+      const limb = (list, a, b, r) => {                                  // a bone between two points
+        const A = new THREE.Vector3(...a), Bv = new THREE.Vector3(...b), len = A.distanceTo(Bv), m = new THREE.Matrix4();
+        const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), Bv.clone().sub(A).normalize());
+        m.compose(A.clone().add(Bv).multiplyScalar(0.5), q, new THREE.Vector3(1, len, 1));
+        list.push([new THREE.CylinderGeometry(r * 0.8, r, 1, 6), BONE, m]);
+        list.push([new THREE.SphereGeometry(r * 1.5, 6, 4), BONE, hcMat4(...b)]);
+      };
+      const torso = (list, o) => {
+        const [ox, oy, oz] = o;
+        list.push([new THREE.SphereGeometry(0.1, 12, 9), BONE, hcMat4(ox, oy + 0.66, oz + 0.01, 0, 0, 0, 0.9, 1, 1.05)]);     // skull
+        list.push([new THREE.BoxGeometry(0.1, 0.04, 0.07), BONE, hcMat4(ox, oy + 0.575, oz + 0.04)]);                       // jaw
+        for (const s of [-1, 1]) list.push([new THREE.SphereGeometry(0.026, 8, 6), DARK, hcMat4(ox + s * 0.036, oy + 0.67, oz + 0.085)]);   // sockets
+        list.push([new THREE.ConeGeometry(0.014, 0.03, 4), DARK, hcMat4(ox, oy + 0.62, oz + 0.095, Math.PI, 0, 0)]);
+        limb(list, [ox, oy + 0.02, oz], [ox, oy + 0.55, oz - 0.02], 0.018);                                                   // spine
+        for (let k = 0; k < 5; k++) list.push([new THREE.TorusGeometry(0.115 - k * 0.008, 0.011, 4, 14), BONE, hcMat4(ox, oy + 0.26 + k * 0.055, oz + 0.02, Math.PI / 2, 0, 0, 1, 0.75, 1)]);   // ribs
+        list.push([new THREE.TorusGeometry(0.1, 0.022, 5, 12), BONE, hcMat4(ox, oy, oz, Math.PI / 2 - 0.3, 0, 0, 1.1, 0.8, 1)]);   // pelvis
+        limb(list, [ox - 0.17, oy + 0.5, oz], [ox + 0.17, oy + 0.5, oz], 0.012);                                               // collarbones
+      };
+      // sitting: hips at y 0.45, thighs forward, shins down, hands on the knees
+      {
+        const L = parts.sit, o = [0, 0.47, 0];
+        torso(L, o);
+        for (const s of [-1, 1]) {
+          limb(L, [s * 0.17, 0.97, 0], [s * 0.21, 0.72, 0.08], 0.016); limb(L, [s * 0.21, 0.72, 0.08], [s * 0.16, 0.55, 0.34], 0.013);
+          L.push([new THREE.BoxGeometry(0.05, 0.02, 0.09), BONE, hcMat4(s * 0.16, 0.54, 0.4)]);
+          limb(L, [s * 0.09, 0.46, 0.02], [s * 0.11, 0.5, 0.42], 0.02); limb(L, [s * 0.11, 0.5, 0.42], [s * 0.11, 0.06, 0.47], 0.016);
+          L.push([new THREE.BoxGeometry(0.07, 0.03, 0.18), BONE, hcMat4(s * 0.11, 0.03, 0.53)]);
+        }
+      }
+      // hanging by the neck from a rope (its top at y = 0): straight, arms dangling, toes down
+      {
+        const L = parts.hang, o = [0, -1.0, 0];
+        L.push([new THREE.CylinderGeometry(0.012, 0.012, 1, 5), 0x3a2c1c, hcMat4(0, 0.5, 0)]);                               // the rope up to the branch
+        L.push([new THREE.TorusGeometry(0.05, 0.012, 4, 10), 0x3a2c1c, hcMat4(0, -0.38, 0, Math.PI / 2, 0, 0)]);
+        torso(L, o);
+        for (const s of [-1, 1]) {
+          limb(L, [s * 0.17, -0.5, 0], [s * 0.2, -0.8, 0.02], 0.016); limb(L, [s * 0.2, -0.8, 0.02], [s * 0.21, -1.06, 0.05], 0.013);
+          limb(L, [s * 0.09, -1.0, 0], [s * 0.1, -1.42, 0.02], 0.02); limb(L, [s * 0.1, -1.42, 0.02], [s * 0.1, -1.82, 0], 0.016);
+          L.push([new THREE.BoxGeometry(0.07, 0.17, 0.03), BONE, hcMat4(s * 0.1, -1.9, 0.03)]);
+        }
+      }
+      return { sit: hcMergeColored(parts.sit), hang: hcMergeColored(parts.hang) };
+    })();
+    const hcHayGeo = hcTiledBox(0.95, 0.48, 0.52, 0.6);
+    const hcRipGeo = new THREE.BoxGeometry(0.42, 0.62, 0.04);
+    const hcCrossGeo = mergeGeometries([new THREE.BoxGeometry(0.07, 0.85, 0.05).translate(0, 0.42, 0), new THREE.BoxGeometry(0.42, 0.07, 0.05).translate(0, 0.62, 0)], false);
+    const hcPileGeo = new THREE.IcosahedronGeometry(1, 1);
+    const hcBulbGeo = new THREE.SphereGeometry(0.032, 6, 4);
+    const hcWirePts = [];
+    function hcHay(x, y, z, ry, solid = true) {
+      hcPut('hay', hcHayGeo, hcM.hay, x, y + 0.24, z, 0, ry, 0, 1, 1, 1);
+      if (solid) { const c = Math.abs(Math.cos(ry)), s = Math.abs(Math.sin(ry)); addBoxCollider(x, y, z, 0.95 * c + 0.52 * s, 0.48, 0.95 * s + 0.52 * c); }
+    }
+    function hcMarker(x, z, cross = false) {
+      if (cross) hcPut('cross', hcCrossGeo, hcM.furnDark, x, -0.12, z, hr(-0.12, 0.12), hr(-0.4, 0.4), hr(-0.15, 0.15), 1, 1, 1);
+      else hcPut('rip', hcRipGeo, hcM.rip, x, 0.22, z, hr(-0.15, 0.12), hr(-0.35, 0.35), hr(-0.12, 0.12), 1, 1, 1);
+      addBoxCollider(x, 0, z, 0.4, 0.55, 0.12);
+    }
+    let hcBulbK = 0;
+    function hcStrand(a, b, sag, spacing = 0.22) {                    // orange / purple bulbs on a sagging wire from a to b
+      const n = Math.max(2, Math.round(a.distanceTo(b) / spacing)), P = new THREE.Vector3(), prev = new THREE.Vector3();
+      for (let i = 0; i <= n; i++) {
+        const t = i / n; P.lerpVectors(a, b, t); P.y -= sag * 4 * t * (1 - t);
+        if (i) hcWirePts.push(prev.clone(), P.clone());
+        prev.copy(P);
+        if (i % 1 === 0 && i > 0 && i < n) hcPut('bulb', hcBulbGeo, hcM.bulbs, P.x, P.y - 0.03, P.z, 0, 0, 0, 1, 1.3, 1, (hcBulbK++ % 2) ? 0x9a3aff : 0xff7a1a);
+      }
+    }
+    for (const H of HC_HOUSES) {
+      const lp = H.lp, { FL } = HALLOW, two = H.floors === 2, PD = 2.2, P0 = 0.9, P1 = HALLOW.W - 0.9, doorX = 4.5, PR = two ? FL + 2.6 : FL + 2.2;
+      const face = H.side === 'N' ? 0 : Math.PI;                       // looking out to the street
+      // jack-o'-lanterns down the steps, on the porch rail and in the yard
+      for (const [lx, k, r, carved] of [[doorX - 0.62, 0, 0.19, true], [doorX + 0.62, 1, 0.16, true], [doorX + 0.6, 2, 0.22, H.no % 2 === 1]]) {
+        const p = lp(lx, FL * (3 - k) / 3, -PD - 0.15 - 0.3 * k); hcPumpkin(p.x, p.y, p.z, r, face, carved, k === 0);
+      }
+      { const p = lp(P0 + 0.6, FL + 0.84, -PD + 0.1); hcPumpkin(p.x, p.y, p.z, 0.15, face, true); }
+      // hay bales stacked at a porch corner with a pumpkin on top
+      { const p = lp(P1 - 0.7, FL, -PD + 0.55); hcHay(p.x, p.y, p.z, 0); hcHay(p.x, p.y + 0.48, p.z, 0.15, true); hcPumpkin(p.x, p.y + 0.96, p.z, 0.2, face, true, true); }
+      { const p = lp(-1.2, 0, -2.6); hcHay(p.x, 0, p.z, 0.5); hcPumpkin(p.x - 0.2, 0.48, p.z, 0.16, face, false); hcPumpkin(p.x + 0.4, 0, p.z + 0.5, 0.26, face, false); }
+      // a skeleton in the porch rocker (Nos. 11 and 12), on the steps (No. 15), cobwebs in the porch corners
+      if (H.no === 11 || H.no === 12) {
+        const p = lp(P0 + 1.2, FL, -1.0), C = H.group;
+        hcPut('skelSit', hcSkel.sit, hcM.bone, p.x, p.y, p.z, 0, face, 0, 1, 1, 1);
+        const RB = makeBatch(), seat = lp(P0 + 1.2, FL + 0.42, -1.0);
+        RB.add(UNIT_BOX, hcM.furn, seat.x, seat.y, seat.z, 0, 0, 0, 0.5, 0.04, 0.5);
+        RB.add(UNIT_BOX, hcM.furn, seat.x, seat.y + 0.35, seat.z - Math.cos(face) * 0.24, 0, 0, 0, 0.5, 0.7, 0.04);
+        for (const s of [-1, 1]) RB.add(UNIT_BOX, hcM.furn, seat.x + s * 0.22, FL + 0.05, seat.z, 0.0, 0, 0, 0.04, 0.08, 0.8);
+        RB.build(C, { castShadow: false });
+        addBoxCollider(seat.x, FL, seat.z, 0.5, 0.46, 0.5);
+      }
+      if (H.no === 15) { const p = lp(doorX + 0.25, FL * 2 / 3, -PD - 0.55); hcPut('skelSit', hcSkel.sit, hcM.bone, p.x, p.y - 0.42, p.z, 0, face, 0, 1, 1, 1); }
+      for (const [lx, dx] of [[P0 + 0.12, 1], [P1 - 0.12, -1]]) { const p = lp(lx, PR - 0.02, -PD + 0.12); hcWeb(p, dx, H.side === 'N' ? -1 : 1, 0.75); }
+      // string lights along the porch eave (and No. 15's along its fence)
+      if (H.no !== 15) hcStrand(lp(P0 - 0.05, PR - 0.03, -PD - 0.12), lp(P1 + 0.05, PR - 0.03, -PD - 0.12), 0.22);
+      else { const z = HALLOW.fenceN + 0.02; hcStrand(new THREE.Vector3(1.0, 0.95, z), new THREE.Vector3(H.x0 + 3.8, 0.95, z), 0.14); hcStrand(new THREE.Vector3(H.x0 + 5.2, 0.95, z), new THREE.Vector3(H.x0 + 9.8, 0.95, z), 0.14); }
+      // grave markers in the front yards of Nos. 13, 12 and 14
+      if (H.no === 13 || H.no === 12 || H.no === 14) {
+        const zs = H.side === 'N' ? [HALLOW.zN + 2.2, HALLOW.zN + 3.4] : [HALLOW.zS - 2.2, HALLOW.zS - 3.4];
+        let k = 0; for (const lx of [0.6, 1.8, 3.0]) for (const z of zs) { if ((k++ + H.no) % 3 === 0) continue; hcMarker(H.x0 + lx + hr(-0.2, 0.2), z + hr(-0.2, 0.2), (k % 3) === 1); }
+      }
+    }
+    // the yards and the empty lots: hanging skeletons, leaf piles, more pumpkins and hay by the welcome sign
+    for (const [x, z] of [[-33.5, 142.8], [6.5, 158.2], [27, 141]]) {
+      const T = HC_TREES.find((t) => Math.hypot(t.x - x, t.z - z) < 0.5); if (!T) continue;
+      hcPut('skelHang', hcSkel.hang, hcM.bone, x + 1.1 * T.s, T.H * 0.92, z + 0.2, 0, hr(0, 6), 0, 1, 1, 1);
+    }
+    for (const [x, z, r] of [[-36, 143.5, 0.9], [-16, 143.8, 0.7], [21.5, 143.8, 0.8], [26, 143.4, 1.1], [-30, 156.6, 0.85], [6, 157, 0.9], [28, 157.5, 1.0], [38, 156.2, 0.75], [-26, 128, 0.9], [22, 172, 1]]) {
+      hcPut('pile', hcPileGeo, hcM.canopy, x, 0, z, 0, hr(0, 6), 0, r * 1.2, r * 0.32, r, [0xa83a14, 0xc86418, 0x8a3010][(hr(0, 3)) | 0]);
+    }
+    {
+      const s = HC_SPOTS.sign;
+      hcHay(s.x - 1.6, 0, s.z - 0.2, 0.2); hcHay(s.x + 1.6, 0, s.z - 0.1, -0.15); hcHay(s.x + 1.6, 0.48, s.z - 0.1, 0.1);
+      hcPumpkin(s.x - 1.6, 0.48, s.z - 0.2, 0.2, Math.PI / 2, true, true); hcPumpkin(s.x + 1.6, 0.96, s.z - 0.1, 0.17, Math.PI / 2, true); hcPumpkin(s.x - 0.4, 0, s.z + 0.5, 0.26, Math.PI / 2, false);
+      hcStrand(new THREE.Vector3(s.x - 1.05, 2.2, s.z + 0.1), new THREE.Vector3(s.x + 1.05, 2.2, s.z + 0.1), 0.25);
+      for (const [x, z] of [[33, 156.5], [35, 157.8], [36.6, 156.4]]) hcMarker(x, z, x > 34);
+      hcPumpkin(34.6, 0, 156.9, 0.28, -Math.PI / 2, true, true);
+    }
+    // ---------- fallen leaves everywhere (most under the trees), denser along the curbs ----------
+    {
+      const leafGeo = new THREE.PlaneGeometry(0.17, 0.17).rotateX(-Math.PI / 2), COLS = [0xb8401a, 0xd06a1c, 0x8a2a12, 0xd89a2a, 0x6a2a12, 0xc05a20];
+      const onWalk = (z) => Math.abs(z - HALLOW.z) > HALLOW.roadHW && Math.abs(z - HALLOW.z) < HALLOW.roadHW + HALLOW.curb + HALLOW.walk;
+      const inHouse = (x, z) => HC_ROOMS.some((r) => x > r.x0 - 0.1 && x < r.x1 + 0.1 && z > r.z0 - 0.1 && z < r.z1 + 0.1);
+      const put = (x, z) => {
+        if (inHouse(x, z)) return;
+        const y = Math.abs(z - HALLOW.z) < HALLOW.roadHW ? 0.02 : onWalk(z) ? 0.126 : 0.012;
+        hcPut('leaf', leafGeo, hcM.leaf, x, y + hr(0, 0.004), z, hr(-0.25, 0.25), hr(0, 6.3), hr(-0.25, 0.25), hr(0.7, 1.25), 1, hr(0.7, 1.25), COLS[(hr(0, COLS.length)) | 0], { order: 'YXZ' });
+      };
+      for (const T of HC_TREES) for (let k = 0; k < 70; k++) { const a = hr(0, 6.3), r = Math.sqrt(_hcR()) * 4.2 * T.s; put(T.x + Math.cos(a) * r, T.z + Math.sin(a) * r); }
+      for (let k = 0; k < 700; k++) put(hr(-46, 46), hr(HALLOW.zb0 + 0.5, HALLOW.zb1 - 0.5));
+      for (let k = 0; k < 500; k++) { const s = _hcR() < 0.5 ? -1 : 1; put(hr(-46, 46), HALLOW.z + s * hr(HALLOW.roadHW - 0.6, HALLOW.roadHW + HALLOW.curb + HALLOW.walk)); }
+    }
+    // ---------- turn the instance lists into InstancedMeshes: one per kind per street block (the culling chunks) ----------
+    {
+      const blocks = HC_BLOCKS.slice(1).map(() => new THREE.Group());
+      for (const [key, E] of hcInst) {
+        E.lists.forEach((list, b) => {
+          if (!list.length) return;
+          const im = new THREE.InstancedMesh(E.geo, E.mat, list.length);
+          list.forEach(([m, c], i) => { im.setMatrixAt(i, m); if (c) im.setColorAt(i, c); });
+          im.instanceMatrix.needsUpdate = true; if (im.instanceColor) im.instanceColor.needsUpdate = true;
+          im.castShadow = false; im.receiveShadow = key !== 'bulb' && key !== 'face' && key !== 'web';
+          im.computeBoundingSphere(); im.computeBoundingBox?.();
+          im.userData.hcKind = key; im.name = 'hc:' + key;
+          blocks[b].add(im);
+        });
+      }
+      for (const g of blocks) { if (!g.children.length) continue; scene.add(g); hcChunk(g); }
+      HALLOW.blocks = blocks;
+      const wire = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(hcWirePts), hcM.wire);
+      scene.add(wire);
+    }
+    // ---------- beyond the fences: dark rooftops with a lit window or two, black pines past the street's ends ----------
+    {
+      const BG = makeBatch();
+      const tri = new THREE.Shape(); tri.moveTo(-4, 0); tri.lineTo(4, 0); tri.lineTo(0, 2.6); tri.closePath();
+      for (const zc of [113, 187]) for (let x = -44; x <= 44; x += hr(10, 14)) {
+        const w = hr(7, 10), h = hr(4.5, 7), z = zc + hr(-2, 2);
+        BG.add(UNIT_BOX, hcM.silhouette, x, h / 2, z, 0, 0, 0, w, h, 7);
+        const g = new THREE.ExtrudeGeometry(tri, { depth: w, bevelEnabled: false }).rotateY(Math.PI / 2); BG.add(g, hcM.silhouette, x - w / 2, h, z); g.dispose();
+        for (let k = 0; k < 2; k++) if (_hcR() < 0.55) { const wx = x + hr(-w / 3, w / 3), wy = hr(1.5, h - 1); BG.add(new THREE.PlaneGeometry(0.8, 1.0), hcM.farWin, wx, wy, z + (zc < HALLOW.z ? 3.51 : -3.51), 0, zc < HALLOW.z ? 0 : Math.PI, 0); }
+      }
+      for (let k = 0; k < 40; k++) { const s = k % 2 ? -1 : 1, x = s * hr(48, 62), z = hr(120, 180), h = hr(6, 12); BG.add(new THREE.ConeGeometry(h * 0.28, h, 6), hcM.silhouette, x, h / 2, z); }
+      const bg = new THREE.Group(); scene.add(bg); BG.build(bg, { castShadow: false, receiveShadow: false });
+    }
+    // ---------- low mist banks drifting along the street, and the harvest moon (kept low behind you by X37) ----------
+    const HC_MIST = [];
+    {
+      const mistTex = canvasTexture(128, (g, s) => { const grd = g.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2); grd.addColorStop(0, 'rgba(255,255,255,0.55)'); grd.addColorStop(1, 'rgba(255,255,255,0)'); g.fillStyle = grd; g.fillRect(0, 0, s, s); }, 1);
+      for (let k = 0; k < 18; k++) {
+        const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: mistTex, color: k % 3 ? 0x8a7a9a : 0x9a7a6a, transparent: true, opacity: 0.22, depthWrite: false }));
+        const x = hr(-44, 44), z = HALLOW.z + hr(-20, 20); sp.position.set(x, hr(0.4, 1.1), z); sp.scale.set(hr(7, 11), hr(2, 3.2), 1); scene.add(sp);
+        HC_MIST.push({ sp, x0: x, k: hr(0, 9), sp0: hr(0.15, 0.35) });
+      }
+      const moonTex = canvasTexture(256, (g, s) => {
+        const h = g.createRadialGradient(s / 2, s / 2, s * 0.18, s / 2, s / 2, s / 2); h.addColorStop(0, 'rgba(255,190,120,0.5)'); h.addColorStop(1, 'rgba(255,150,80,0)'); g.fillStyle = h; g.fillRect(0, 0, s, s);
+        const m = g.createRadialGradient(s * 0.46, s * 0.46, 2, s / 2, s / 2, s * 0.2); m.addColorStop(0, '#ffe2b0'); m.addColorStop(1, '#d88a4a'); g.fillStyle = m; g.beginPath(); g.arc(s / 2, s / 2, s * 0.2, 0, Math.PI * 2); g.fill();
+        for (let k = 0; k < 7; k++) { g.fillStyle = 'rgba(150,80,40,0.25)'; g.beginPath(); g.arc(s / 2 + hr(-30, 30), s / 2 + hr(-30, 30), hr(4, 12), 0, Math.PI * 2); g.fill(); }
+      }, 1);
+      HALLOW.moon = new THREE.Sprite(new THREE.SpriteMaterial({ map: moonTex, transparent: true, depthWrite: false, fog: false }));
+      HALLOW.moon.scale.set(16, 16, 1); HALLOW.moon.position.set(-30, 26, 112); HALLOW.moon.renderOrder = -1; scene.add(HALLOW.moon);
+      HALLOW.mist = HC_MIST;
+    }
+    // ---------- the map itself ----------
+    MAPS.push({ id: 'hallowcreek', name: 'HALLOWCREEK', tag: 'NEW MAP',
+      desc: 'Halloween night on misty Maple Lane. Search the five houses: a closet key, the shotgun locked in an upstairs closet, a fire poker by a hearth and a flashlight.',
+      spawn: { x: 38, z: HALLOW.z, yaw: Math.PI / 2 }, fog: [0x2a2333, 0.07], sky: 0x16121c, hemi: [0x7a6a8c, 0x140e0a, 0.44],
+      desk: { cam: [44, 2.2, HALLOW.z + 0.6], target: [30, 1.0, HALLOW.z] } });
 
     // =====================================================================
     //  3D UI PANELS (map screen + settings menu), TURN MODES, PLAYER ROLE and the PLAYER-DRIVEN MONSTER
@@ -9255,6 +10360,51 @@
         g.beginPath(); g.moveTo(185, 150); g.lineTo(120, 225); g.moveTo(215, 150); g.lineTo(280, 225); g.stroke();
         g.fillStyle = '#d8c8a0'; g.font = 'bold 14px Georgia, serif'; g.fillText('MINE No. 3', 160, 66);
       });
+      // HALLOWCREEK: a violet-orange haze over a street of gabled houses with lit windows, burning maples, a picket
+      // fence, a streetlamp's glow, jack-o'-lanterns on the porch steps and leaves blowing across the road
+      mapPreview.hallowcreek = mk((g, W, H) => {
+        let grd = g.createLinearGradient(0, 0, 0, H); grd.addColorStop(0, '#1a1426'); grd.addColorStop(0.55, '#3a2a3a'); grd.addColorStop(1, '#2a2018'); g.fillStyle = grd; g.fillRect(0, 0, W, H);
+        const mg = g.createRadialGradient(318, 50, 6, 318, 50, 70); mg.addColorStop(0, 'rgba(255,200,130,0.95)'); mg.addColorStop(0.3, 'rgba(240,150,80,0.5)'); mg.addColorStop(1, 'rgba(240,150,80,0)');
+        g.fillStyle = mg; g.fillRect(240, 0, 160, 130); g.fillStyle = '#f4c890'; g.beginPath(); g.arc(318, 50, 17, 0, Math.PI * 2); g.fill();
+        const house = (x, w, h, roof, col, lit) => {                                   // a gabled house with windows and a porch
+          g.fillStyle = col; g.fillRect(x, 150 - h, w, h);
+          g.beginPath(); g.moveTo(x - 6, 150 - h); g.lineTo(x + w / 2, 150 - h - roof); g.lineTo(x + w + 6, 150 - h); g.closePath(); g.fillStyle = '#120e12'; g.fill();
+          for (let k = 0; k < 3; k++) for (let j = 0; j < (h > 60 ? 2 : 1); j++) {
+            const on = lit.includes(k + j * 3); g.fillStyle = on ? '#ffb050' : '#0e0c10'; g.fillRect(x + 8 + k * (w - 16) / 3, 150 - h + 10 + j * 34, (w - 16) / 3 - 8, 18);
+            if (on) { const gl = g.createRadialGradient(x + 8 + k * (w - 16) / 3 + 8, 150 - h + 19 + j * 34, 2, x + 8 + k * (w - 16) / 3 + 8, 150 - h + 19 + j * 34, 26); gl.addColorStop(0, 'rgba(255,160,60,0.35)'); gl.addColorStop(1, 'rgba(255,160,60,0)'); g.fillStyle = gl; g.fillRect(x - 20, 100 - h, w + 40, 120); }
+          }
+          g.fillStyle = '#1a1210'; g.fillRect(x + w / 2 - 6, 130, 12, 20);                   // the door
+          g.fillStyle = 'rgba(30,22,20,0.9)'; g.fillRect(x - 4, 132, w + 8, 4);             // the porch roof
+        };
+        house(18, 92, 70, 34, '#3e4a52', [1, 4]); house(140, 84, 56, 30, '#5a4a36', [0]); house(250, 96, 74, 36, '#4a3030', [2, 3, 5]);
+        g.fillStyle = 'rgba(160,140,180,0.22)'; g.fillRect(0, 118, W, 30);              // mist
+        const maple = (x, y, r) => {
+          g.fillStyle = '#1a0e08'; g.fillRect(x - 3, y, 6, 150 - y + 10);
+          for (let k = 0; k < 9; k++) { g.fillStyle = ['#c8441a', '#e0801e', '#a82a14', '#e8a030'][k % 4]; g.beginPath(); g.arc(x + Math.cos(k * 2.1) * r * 0.55, y - 4 + Math.sin(k * 1.7) * r * 0.4, r * (0.45 + (k % 3) * 0.12), 0, Math.PI * 2); g.fill(); }
+        };
+        maple(124, 88, 30); maple(232, 96, 24); maple(372, 84, 32);
+        g.fillStyle = '#211c1c'; g.fillRect(0, 150, W, 75);                              // the road and the curb
+        g.fillStyle = '#4a4640'; g.fillRect(0, 160, W, 6);
+        g.fillStyle = 'rgba(200,170,80,0.5)'; for (let x = 6; x < W; x += 46) g.fillRect(x, 196, 24, 3);
+        g.fillStyle = '#c8c0b0'; for (let x = 4; x < W; x += 7) { g.fillRect(x, 140, 3, 16); g.beginPath(); g.moveTo(x, 140); g.lineTo(x + 1.5, 136); g.lineTo(x + 3, 140); g.fill(); }
+        g.fillRect(0, 144, W, 2); g.fillRect(0, 151, W, 2);                              // the picket fence
+        const lg = g.createRadialGradient(206, 92, 2, 206, 92, 80); lg.addColorStop(0, 'rgba(255,170,80,0.7)'); lg.addColorStop(1, 'rgba(255,140,60,0)');
+        g.fillStyle = lg; g.fillRect(126, 12, 160, 180);                                 // the streetlamp
+        g.fillStyle = '#0c0a0a'; g.fillRect(203, 92, 4, 70); g.fillRect(196, 88, 18, 6); g.fillStyle = '#ffc070'; g.fillRect(200, 94, 10, 6);
+        const jack = (x, y, r) => {
+          const pg = g.createRadialGradient(x, y, 1, x, y, r * 3); pg.addColorStop(0, 'rgba(255,140,30,0.55)'); pg.addColorStop(1, 'rgba(255,120,20,0)'); g.fillStyle = pg; g.fillRect(x - r * 3, y - r * 3, r * 6, r * 6);
+          g.fillStyle = '#d0601a'; g.beginPath(); g.ellipse(x, y, r * 1.15, r, 0, 0, Math.PI * 2); g.fill();
+          g.fillStyle = '#ffe070'; g.beginPath(); g.moveTo(x - r * 0.6, y - r * 0.15); g.lineTo(x - r * 0.2, y - r * 0.15); g.lineTo(x - r * 0.4, y - r * 0.55); g.fill();
+          g.beginPath(); g.moveTo(x + r * 0.6, y - r * 0.15); g.lineTo(x + r * 0.2, y - r * 0.15); g.lineTo(x + r * 0.4, y - r * 0.55); g.fill();
+          g.fillRect(x - r * 0.55, y + r * 0.25, r * 1.1, r * 0.22);
+          g.fillStyle = '#3a3a1a'; g.fillRect(x - 1, y - r - 4, 3, 5);
+        };
+        jack(56, 172, 9); jack(80, 176, 7); jack(278, 170, 10); jack(176, 168, 6);
+        for (let k = 0; k < 60; k++) { g.fillStyle = ['#b8401a', '#d06a1c', '#8a2a12', '#d89a2a'][k % 4]; g.beginPath(); g.ellipse((k * 53) % W, 158 + ((k * 29) % 64), 3, 1.6, k, 0, Math.PI * 2); g.fill(); }
+        g.fillStyle = 'rgba(160,120,200,0.9)'; for (let x = 20; x < 120; x += 9) { g.beginPath(); g.arc(x, 132 + Math.sin(x * 0.05) * 3, 1.6, 0, Math.PI * 2); g.fill(); }
+        g.fillStyle = 'rgba(255,140,40,0.95)'; for (let x = 24; x < 120; x += 18) { g.beginPath(); g.arc(x, 132 + Math.sin(x * 0.05) * 3, 1.6, 0, Math.PI * 2); g.fill(); }
+        g.fillStyle = '#e8dcc0'; g.font = 'bold 13px Georgia, serif'; g.fillText('MAPLE LANE', 300, 214);
+      });
     }
 
     // ---------- the map selection screen in the waiting room ----------
@@ -9270,14 +10420,16 @@
       g.fillStyle = 'rgba(200,60,40,0.8)'; g.fillRect(W / 2 - 170, 78, 340, 3);
       g.textAlign = 'left';
       // map cards on the left
+      // (the cards shrink to fit when there are more than three maps)
+      const nM = MAPS.length, CH = Math.min(118, Math.floor((H - 104 - 30 - (nM - 1) * 14) / nM)), TH = CH - 20, TW = Math.round(TH * 1.53);
       MAPS.forEach((m, k) => {
-        const x = 34, y = 104 + k * 132, w = 380, h = 118, on = m.id === mapSelected, hov = uiButton(p, 'map:' + m.id, x, y, w, h);
+        const x = 34, y = 104 + k * (CH + 14), w = 380, h = CH, on = m.id === mapSelected, hov = uiButton(p, 'map:' + m.id, x, y, w, h);
         roundRect(g, x, y, w, h, 12);
         g.fillStyle = on ? 'rgba(120,28,20,0.85)' : hov ? 'rgba(60,50,40,0.95)' : 'rgba(30,26,22,0.95)'; g.fill();
         g.lineWidth = on ? 5 : hov ? 4 : 2; g.strokeStyle = on ? '#ffb090' : hov ? '#d8c8a0' : 'rgba(216,200,160,0.35)'; g.stroke();
-        g.save(); roundRect(g, x + 10, y + 10, 150, 98, 8); g.clip(); g.drawImage(mapPreview[m.id], x + 10, y + 10, 150, 98); g.restore();
-        g.fillStyle = on ? '#fff2e0' : '#e8dcc0'; g.font = `bold 21px ${UI_FONT}`; g.fillText(m.name, x + 172, y + 40);
-        g.fillStyle = on ? '#ffc0a0' : 'rgba(216,200,160,0.6)'; g.font = `18px ${UI_FONT}`; g.fillText(m.id === 'camp' ? 'PRIMARY MAP' : 'NEW MAP', x + 172, y + 74);
+        g.save(); roundRect(g, x + 10, y + 10, TW, TH, 8); g.clip(); g.drawImage(mapPreview[m.id], x + 10, y + 10, TW, TH); g.restore();
+        g.fillStyle = on ? '#fff2e0' : '#e8dcc0'; g.font = `bold 21px ${UI_FONT}`; g.fillText(m.name, x + TW + 22, y + h * 0.34);
+        g.fillStyle = on ? '#ffc0a0' : 'rgba(216,200,160,0.6)'; g.font = `18px ${UI_FONT}`; g.fillText(m.id === 'camp' ? 'PRIMARY MAP' : 'NEW MAP', x + TW + 22, y + h * 0.63);
       });
       // the preview on the right
       const m = mapById(mapSelected), px = 446, py = 104, pw = W - px - 34, ph = 236;
@@ -15004,6 +16156,7 @@
       ['waiting', { x0: -25, x1: 25, z0: -125, z1: -68 }],
       ['graveyard', { x0: 56, x1: 174, z0: -64, z1: 64 }],
       ['mine', { x0: -200, x1: -56, z0: -64, z1: 64 }],
+      ['hallowcreek', { x0: -72, x1: 72, z0: 90, z1: 210 }],
       ['camp', { x0: -60, x1: 60, z0: -64, z1: 64 }],
     ];
     function regionOfPoint(x, z) {
@@ -15025,8 +16178,8 @@
       keepAll(playerRig, avatar, monsterModel, aiRoot, titleGroup, menuGroup, victoryGroup, caughtGroup, branchMesh, chipMesh, skyDome, sunDisc, sunHalo,
         moon, stars, stunGlow, propFx.glint, ...smokePuffs.map((s) => s.sp), ...hands.flatMap((h) => [h.follower, h.sphere]),
         ...lightPool.map((s) => s.light), moonLight, moonLight.target, sunLight, sunLight.target, hemiLight);
-      const owned = { camp: [], graveyard: [], mine: [], waiting: [] };
-      const lights = { camp: [], graveyard: [], mine: [], waiting: [] };
+      const owned = { camp: [], graveyard: [], mine: [], waiting: [], hallowcreek: [] };
+      const lights = { camp: [], graveyard: [], mine: [], waiting: [], hallowcreek: [] };
       const _b = new THREE.Box3();
       for (const o of [...scene.children]) {
         if (keep.has(o)) continue;
@@ -15042,12 +16195,12 @@
         if (id) owned[id].push(o);
       }
       // the pointer's targets, by map
-      const rt = { camp: [], graveyard: [], mine: [], waiting: [] };
+      const rt = { camp: [], graveyard: [], mine: [], waiting: [], hallowcreek: [] };
       for (const m of rayTargets) {
         try { m.updateMatrixWorld(true); _b.setFromObject(m, false); const id = regionOfBox(_b); if (id) rt[id].push(m); } catch (e) { }
       }
-      const stash = { camp: null, graveyard: null, mine: null, waiting: null };
-      const loaded = new Set(['camp', 'graveyard', 'mine', 'waiting']);
+      const stash = { camp: null, graveyard: null, mine: null, waiting: null, hallowcreek: null };
+      const loaded = new Set(['camp', 'graveyard', 'mine', 'waiting', 'hallowcreek']);
       const neverUnloadCols = new Set([aiCol]);
       function resourcesOf(obj, geos, mats, texs) {
         obj.traverse((o) => {
@@ -15113,12 +16266,12 @@
       }
       function update() {
         const w = wanted();
-        for (const id of ['camp', 'graveyard', 'mine', 'waiting']) if (w.has(id) && !loaded.has(id)) load(id);
-        for (const id of ['camp', 'graveyard', 'mine', 'waiting']) if (!w.has(id) && loaded.has(id)) unload(id);
+        for (const id of ['camp', 'graveyard', 'mine', 'waiting', 'hallowcreek']) if (w.has(id) && !loaded.has(id)) load(id);
+        for (const id of ['camp', 'graveyard', 'mine', 'waiting', 'hallowcreek']) if (!w.has(id) && loaded.has(id)) unload(id);
       }
       // lights of unloaded maps stay dark even if their own code turns them back on (e.g. a running generator's floodlights)
       function darkenUnloaded() {
-        for (const id of ['camp', 'graveyard', 'mine', 'waiting']) if (!loaded.has(id)) for (const L of lights[id]) L.l.visible = false;
+        for (const id of ['camp', 'graveyard', 'mine', 'waiting', 'hallowcreek']) if (!loaded.has(id)) for (const L of lights[id]) L.l.visible = false;
       }
       // the AI's walkable grid needs a map's colliders even if that map isn't loaded right now
       function withColliders(id, fn) {
@@ -15501,6 +16654,7 @@
       camp: { x0: -36, x1: 58, z0: -38, z1: 38 },
       graveyard: { x0: GRAVE.x - 32, x1: GRAVE.x + 51, z0: GRAVE.z - 32, z1: GRAVE.z + 32 },
       mine: { x0: MINE.x - 76, x1: MINE.x + 19, z0: MINE.z - 27, z1: MINE.z + 27 },
+      hallowcreek: { x0: HALLOW.x0, x1: HALLOW.x1, z0: HALLOW.z - 47, z1: HALLOW.z + 47 },
     };
     const MAP_PX = 512;
     for (const B of Object.values(MAP2D)) {
@@ -15549,6 +16703,27 @@
         rect(GY.crypt.x - 3.6, GY.crypt.z - 3, GY.crypt.x + 3.6, GY.crypt.z + 3, '#4a4c48', '#a0a098');
         rect(GY.dock.x0, GY.dock.z0, GY.dock.x1, GY.dock.z1, '#7a5a38');
         const [gx, gy] = P(G.x, G.z + GH2); g.fillStyle = '#a0a098'; g.fillRect(gx - 8, gy - 2, 16, 4);    // the gate
+      } else if (id === 'hallowcreek') {
+        const Hc = HALLOW, Z = Hc.z;
+        rect(Hc.x0, Hc.zb0, Hc.x1, Hc.zb1, '#1c1e14');                                       // lawns
+        rect(Hc.x0, Z - Hc.roadHW, Hc.x1, Z + Hc.roadHW, '#2a2a2e');                           // Maple Lane
+        for (const s of [-1, 1]) rect(Hc.x0, s < 0 ? Z - Hc.roadHW - Hc.curb - Hc.walk : Z + Hc.roadHW, Hc.x1, s < 0 ? Z - Hc.roadHW : Z + Hc.roadHW + Hc.curb + Hc.walk, '#4a4844');
+        { g.strokeStyle = 'rgba(200,170,80,0.6)'; g.lineWidth = 1.5; g.setLineDash([5, 5]); const [a, b] = P(Hc.x0, Z), [c] = P(Hc.x1, Z); g.beginPath(); g.moveTo(a, b); g.lineTo(c, b); g.stroke(); g.setLineDash([]); }
+        for (const zf of [Hc.zb0, Hc.zb1]) rect(Hc.x0, zf - 0.3, Hc.x1, zf + 0.3, '#5a4a38');   // back fences
+        for (const zf of [Hc.fenceN, Hc.fenceS]) { const [a, b] = P(Hc.x0, zf), [c] = P(Hc.x1, zf); g.strokeStyle = 'rgba(220,214,200,0.55)'; g.lineWidth = 1; g.beginPath(); g.moveTo(a, b); g.lineTo(c, b); g.stroke(); }
+        for (const t of HC_TREES) dot(t.x, t.z, 2.6 * t.s, 'rgba(180,80,30,0.55)');
+        for (const R of HC_ROOMS) {
+          rect(R.x0, R.z0, R.x1, R.z1, R.dead ? '#2a2422' : '#4a3a2c', R.dead ? 'rgba(120,110,100,0.5)' : '#c8a878');
+          if (R.dead) continue;
+          const N = R.H.side === 'N', zw = (lz) => (N ? HALLOW.zN - lz : HALLOW.zS + lz);
+          g.strokeStyle = 'rgba(200,170,120,0.45)'; g.lineWidth = 1;
+          for (const lx of [3.6, 5.4]) { const [a, b] = P(R.x0 + lx, zw(0.2)), [c, d] = P(R.x0 + lx, zw(7.8)); g.beginPath(); g.moveTo(a, b); g.lineTo(c, d); g.stroke(); }
+          { const [a, b] = P(R.x0 + 0.2, zw(5)), [c, d] = P(R.x0 + 3.6, zw(5)); g.beginPath(); g.moveTo(a, b); g.lineTo(c, d); g.stroke(); }
+          { const [a, b] = P(R.x0 + 5.4, zw(4.6)), [c, d] = P(R.x0 + 8.8, zw(4.6)); g.beginPath(); g.moveTo(a, b); g.lineTo(c, d); g.stroke(); }
+          rect(R.x0 + 0.9, Math.min(zw(0), zw(-2.2)), R.x0 + 8.1, Math.max(zw(0), zw(-2.2)), '#5a4630');   // porch
+          const [a, b] = P((R.x0 + R.x1) / 2, (R.z0 + R.z1) / 2); mmLabel(g, a, b, String(R.H.no), '#f0d8a8');
+        }
+        for (const [x, s] of HC_LAMP_SPOTS) dot(x, Z + s * (Hc.roadHW + 0.45), 2.2, '#ffb050');
       } else {
         const M = MN.grid;
         if (M) for (let i = 0; i < M.NX; i++) for (let j = 0; j < M.NZ; j++) {
@@ -15607,6 +16782,8 @@
           for (const pt of exParts) if (pt.map === 'graveyard' && !pt.installed) { const [a, b] = P(pt.mesh.position.x, pt.mesh.position.z); mmIcon(g, a, b, 'diamond', pt.kind === 'prop' ? '#80c8ff' : '#ffa040', 6); }
           boatAt(escapeBoats.graveyard.group.position, escapeBoats.graveyard.yaw);
           exitAt(GY.edgeX + 2, (GY.lake.z0 + GY.lake.z1) / 2);
+        } else if (map === 'hallowcreek') {
+          if (typeof hcMenuIcons === 'function') hcMenuIcons(g, P);
         } else {
           for (const l of levers) { const [a, b] = P(l.pos.x, l.pos.z); mmIcon(g, a, b, 'square', l.pulled ? '#40d060' : '#ff4a3a', l.pulled ? 4 : 6); if (!l.pulled) mmLabel(g, a, b, 'B', '#fff'); }
           for (const f of fuelCans) if (!f.taken) { const [a, b] = P(f.p.x, f.p.z); mmIcon(g, a, b, 'circle', '#ff8a20', 6); }
@@ -15678,6 +16855,7 @@
         const ky = y0 + 6 + MS + 18;
         const keys = map === 'camp' ? [['square', '#ff4a3a', 'GENERATOR'], ['diamond', '#80c8ff', 'BOAT PART'], ['tri', '#ffe24a', 'YOU']]
           : map === 'graveyard' ? [['square', '#ff4a3a', 'GEN'], ['tri', '#ff9a30', 'BRAZIER'], ['circle', '#f0ead8', 'SKULL'], ['diamond', '#80c8ff', 'PART']]
+          : map === 'hallowcreek' ? [['diamond', '#40c8ff', 'SHOTGUN'], ['circle', '#ffd040', 'KEY'], ['tri', '#ff7040', 'POKER'], ['square', '#fff0b0', 'TORCH']]
           : [['square', '#ff4a3a', 'GEN / BREAKER'], ['circle', '#ff8a20', 'FUEL'], ['diamond', '#80c8ff', 'PART']];
         let kx = MX + 8;
         g.font = `14px ${UI_FONT}`; g.textAlign = 'left';
@@ -15700,9 +16878,9 @@
       setMenu = function (open) { if (open && currentMap !== 'waiting' && !menuGroup.visible) menuTab = 'obj'; return baseSetMenu(open); };
     }
     // no shadows cast by the graveyard's and the mine's props (they still receive them)
-    for (const id of ['graveyard', 'mine']) for (const o of mapLoad.owned[id]) o.traverse((m) => { if (m.isMesh) m.castShadow = false; });
+    for (const id of ['graveyard', 'mine', 'hallowcreek']) for (const o of mapLoad.owned[id]) o.traverse((m) => { if (m.isMesh) m.castShadow = false; });
     // per-map rendering budget: the far plane (the fog hides everything past it anyway) and the flashlight's shadow map
-    const MAP_FAR = { camp: 240, waiting: 40, graveyard: 42, mine: 34 };
+    const MAP_FAR = { camp: 240, waiting: 40, graveyard: 42, mine: 34, hallowcreek: 60 };
     let menuRedrawT = 0, cueT = 0, perfMap = '';
     const CUE_SPARK = new THREE.Color(0xffc060);
     function updateMenuAndPerf(dt) {
@@ -24431,6 +25609,600 @@
         renderer.xr.addEventListener('sessionstart', () => setTimeout(tryOn, 300));
       }
     }
+    // =====================================================================
+    //  r88: HALLOWCREEK, the things hidden in its houses, and keeping it fast on Quest
+    //  - The shotgun (the same stun shotgun as the other maps) lies on the floor of the upstairs closet in No. 13,
+    //    and that closet is LOCKED: the door rattles and won't budge. Its brass key (with a little paper tag) is on
+    //    the dresser in No. 14's back bedroom. Grip to take it, touch it to the closet's lock: click, unlocked.
+    //  - A fire poker (a new melee weapon kind, swung like the bat / pipe / hatchet) lies on No. 11's hearth.
+    //  - A heavy yellow flashlight sits on the utility-room shelf in No. 12: Grip to take it and your lamp's beam
+    //    comes from it instead (narrower, brighter, where you point); Trigger (or B / Y) switches it.
+    //  - A box of shells on No. 15's kitchen counter.
+    //  - Dropped things land on whatever floor they fall onto (upstairs floors too), not the ground under the house.
+    //  - Key, closet lock and flashlight are synced over the network; the poker and the shotgun use the existing sync.
+    //  - Objectives: search the five houses, find the key, unlock the closet, take the shotgun, the poker, the flashlight.
+    //  - The menu map shows the houses, and each item once you've been near it.
+    //  - Behind-you culling: every house and street block is a chunk; a chunk more than 8 m away whose centre is
+    //    behind you (dot(forward, toChunk) < -0.25) is hidden until you turn round. Repeats are InstancedMeshes.
+    //  - Ambience: jack-o'-lanterns flicker, string lights chase, one streetlamp is dying, mist drifts, the harvest
+    //    moon sits low in the west, leaves fall round you, No. 12's TV hisses static.
+    // =====================================================================
+    const HC_HINT0 = 1.2;                                     // default "probe height" for the floor under a spot
+    let hcHintY = HC_HINT0;
+    // the floor under (x, z) at or below height yHint: the highest collider top there (houses' floors, porches,
+    // stair slices, furniture tops), else the ground
+    function hcFloorAt(x, z, yHint = HC_HINT0) {
+      let best = 0;
+      for (const c of colliders) {
+        const b = c.box;
+        if (b.max.y > yHint + 0.001 || b.max.y <= best || b.max.y < -500) continue;
+        if (x < b.min.x || x > b.max.x || z < b.min.z || z > b.max.z) continue;
+        if (b.max.y - b.min.y > 6) continue;                  // (invisible walls)
+        best = b.max.y;
+      }
+      return best;
+    }
+    {
+      const base = goreFloorOf;
+      goreFloorOf = function (map, x, z) { return map === 'hallowcreek' ? hcFloorAt(x, z, hcHintY) : base(map, x, z); };
+    }
+    const hcHouseNo = (no) => HC_HOUSES.find((H) => H.no === no);
+    const hcRoom = (no) => HC_ROOMS.find((R) => R.H && R.H.no === no);
+    const HC_SP = {
+      gun: hcRoom(13).furnish.closetFloor, lock: hcRoom(13).furnish.closetLock,
+      key: hcRoom(14).furnish.dresser, torch: hcRoom(12).furnish.shelf,
+      poker: hcRoom(11).furnish.poker, pokerYaw: hcRoom(11).furnish.pokerYaw, ammo: hcRoom(15).furnish.ammo,
+    };
+    const hcCloset = hcHouseNo(13).closet;
+    const _hcV = new THREE.Vector3(), _hcV2 = new THREE.Vector3(), _hcQ = new THREE.Quaternion(), _hcE = new THREE.Euler();
+    const hcPeersHere = () => [...netPeers().values()].some((r) => r.st && r.st.m === currentMap && !r.leftAt);
+    const hcOnline = () => { const N = netState(); return !!(N.room && N.sendEvent); };
+    // ---------- the fire poker: a new weapon kind ----------
+    {
+      const baseMW = makeWeapon;
+      makeWeapon = function (kind) {
+        if (kind !== 'poker') return baseMW(kind);
+        const group = new THREE.Group(), inner = new THREE.Group();
+        inner.rotation.x = 0.75; group.add(inner);
+        const b = makeBatch(), black = new THREE.MeshStandardMaterial({ color: 0x1a1a1c, roughness: 0.45, metalness: 0.85 });
+        b.add(new THREE.TorusGeometry(0.035, 0.008, 6, 14), hcM.brass, 0, 0, 0.06, 0, Math.PI / 2, 0);                          // the brass loop handle
+        b.add(new THREE.CylinderGeometry(0.014, 0.014, 0.12, 8).rotateX(Math.PI / 2), hcM.brass, 0, 0, -0.03);                   // brass grip
+        b.add(new THREE.CylinderGeometry(0.009, 0.01, 0.58, 8).rotateX(Math.PI / 2), black, 0, 0, -0.38);                       // the iron shaft
+        b.add(new THREE.ConeGeometry(0.014, 0.08, 6).rotateX(-Math.PI / 2), black, 0, 0, -0.71);                                  // the spike
+        b.add(new THREE.CylinderGeometry(0.007, 0.008, 0.075, 6), black, 0, 0.034, -0.64, -0.5, 0, 0);                           // the hook
+        b.add(new THREE.ConeGeometry(0.008, 0.03, 5), black, 0, 0.074, -0.66, -0.4, 0, 0);
+        b.build(inner);
+        return { group, inner, len: 0.74, dmg: [12, 17] };
+      };
+    }
+    const hcPoker = (() => {
+      const W = makeWeapon('poker');
+      const w = Object.assign(W, { kind: 'poker', map: 'hallowcreek', home: new THREE.Vector3(HC_SP.poker.x, HC_SP.poker.y, HC_SP.poker.z), homeYaw: HC_SP.pokerYaw,
+        held: -1, netBy: null, netSeen: 0, vel: new THREE.Vector3(), falling: false, cool: 0, aiCool: 0, prevTip: new THREE.Vector3(), tipOk: false });
+      scene.add(w.group);
+      weapons.push(w);
+      weaponHome(w);
+      return w;
+    })();
+    {
+      const baseLay = weaponLay;
+      weaponLay = function (w, yaw) {
+        if (w.map !== 'hallowcreek') return baseLay(w, yaw);
+        hcHintY = w.group.position.y + 0.35;
+        try { return baseLay(w, yaw); } finally { hcHintY = HC_HINT0; }
+      };
+      weaponHome(hcPoker);                                       // (again, now on the hearth's real floor height)
+      // falling weapons on Hallowcreek land on the floor they fall onto (upstairs too)
+      const baseUW = updateWeapons;
+      updateWeapons = function (dt) {
+        const pre = weapons.filter((w) => w.map === 'hallowcreek' && w.falling);
+        for (const w of pre) w.falling = false;
+        const r = baseUW(dt);
+        for (const w of pre) if (w.held < 0 && !w.netBy) w.falling = true;
+        for (const w of weapons) {
+          if (w.map !== 'hallowcreek' || !w.falling || w.held >= 0 || w.netBy) continue;
+          const p = w.group.position, prevY = p.y;
+          w.vel.y -= 9.8 * dt; p.addScaledVector(w.vel, dt);
+          const fl = hcFloorAt(p.x, p.z, prevY + 0.06);
+          if (p.y < fl + 0.05) {
+            w.falling = false; w.vel.set(0, 0, 0);
+            _hcV.set(0, 0, -1).applyQuaternion(w.group.quaternion);
+            const yaw = Math.atan2(-_hcV.x, -_hcV.z);
+            p.y = fl + 0.05; weaponLay(w, yaw);
+            try { gameAudio.clunk(); } catch (e) { }
+            r67Send({ t: 'wpn', k: weapons.indexOf(w), p: [r3(p.x), r3(p.z)], y: r3(yaw), m: w.map, yy: r3(fl) });
+          }
+          if (p.y < -8) weaponHome(w);
+        }
+        return r;
+      };
+      const baseNW = netOnWeapon;
+      netOnWeapon = function (d) {
+        const r = baseNW(d);
+        const w = weapons[d.k | 0];
+        if (w && w.map === 'hallowcreek' && w.held < 0 && Number.isFinite(+d.yy)) { w.group.position.y = +d.yy + 0.1; weaponLay(w, +d.y || 0); }
+        return r;
+      };
+    }
+    // ---------- the shotgun in No. 13's upstairs closet ----------
+    GUN_SPOTS.hallowcreek = [{ x: HC_SP.gun.x, y: HC_SP.gun.y, z: HC_SP.gun.z, yaw: Math.PI / 2, label: "the locked upstairs closet in No. 13" }];
+    const hcGun = (() => {
+      const gun = makeShotgun(); scene.add(gun.group);
+      const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0x40c8ff, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false }));
+      glow.scale.set(0.55, 0.55, 1); scene.add(glow);
+      const sg = { map: 'hallowcreek', rack: glow, glow, gun, restPos: new THREE.Vector3(), restQuat: new THREE.Quaternion(), spot: null, held: -1, shells: 1, onRack: true, vel: new THREE.Vector3(), kick: 0, flashT: 0,
+        emptyNoteT: 0, lastHand: new THREE.Vector3(), handVel: new THREE.Vector3(), told: false };
+      hideStunGun(sg); drawShells(sg); putOnRack(sg);
+      stunGuns.push(sg);
+      addDeskClick([gun.group], () => showToast('THE SHOTGUN', hcLock.locked ? 'Locked in the closet. Find the key first.' : 'In VR: Grip to take it, Trigger to fire'), 'hallowcreek');
+      return sg;
+    })();
+    {
+      // a dropped shotgun on Hallowcreek falls onto the floor below it (the base drop only knows the ground)
+      const baseUSG = updateStunGuns;
+      updateStunGuns = function (dt) {
+        const sg = hcGun, own = sg.map === currentMap && sg.held < 0 && !sg.onRack && !sg.netHeldBy;
+        if (own) sg.onRack = true;
+        let r;
+        try { r = baseUSG(dt); } finally { if (own && sg.held < 0 && !sg.netHeldBy) sg.onRack = false; }
+        if (own && sg.held < 0 && !sg.onRack && !sg.netHeldBy) {
+          sg.glow.visible = false; sg.glow.material.opacity = 0;
+          const p = sg.gun.group.position, fl = hcFloorAt(p.x, p.z, p.y + 0.02) + 0.025;
+          if (p.y > fl + 0.001 || sg.vel.y > 0 || sg.vel.lengthSq() > 0) {
+            const prevY = p.y;
+            sg.vel.y -= GRAVITY * dt; p.addScaledVector(sg.vel, dt);
+            const fl2 = hcFloorAt(p.x, p.z, Math.max(prevY, p.y) + 0.02) + 0.025;
+            if (p.y <= fl2) {
+              p.y = fl2; sg.vel.set(0, 0, 0);
+              _hcE.setFromQuaternion(sg.gun.group.quaternion, 'YXZ');
+              sg.gun.group.quaternion.setFromEuler(_hcE.set(0, _hcE.y, Math.PI / 2, 'YXZ'));
+              try { gameAudio.clunk(); } catch (e) { }
+              if (hcOnline()) { sg.netLand = false; netSendGun({ t: 'gun', a: 'rest', m: sg.map, p: v3a(p), q: q4a(sg.gun.group.quaternion), rk: 0 }); }
+            }
+          }
+          if (p.y < -8) putOnRack(sg);
+        }
+        return r;
+      };
+    }
+    // the box of shells on No. 15's kitchen counter
+    {
+      const g = makeAmmoBox(), p = HC_SP.ammo;
+      g.position.set(p.x, p.y, p.z); g.rotation.y = 0.4; g.visible = false; scene.add(g);
+      const box = { g, map: 'hallowcreek', taken: false, back: 0 };
+      ammoBoxes.push(box);
+      addDeskClick([g], () => { const sg = gunOf('hallowcreek'); if (sg && !sg.netHeldBy) ammoUse(box, sg); }, 'hallowcreek');
+    }
+    // ---------- the closet key and the lock ----------
+    const hcLock = { locked: true, rattleT: 0, toastT: 0 };
+    const hcKey = (() => {
+      const g = new THREE.Group(), b = makeBatch();
+      b.add(new THREE.TorusGeometry(0.018, 0.005, 6, 14), hcM.brass, 0, 0, 0.028, Math.PI / 2, 0, 0);                         // the bow
+      b.add(new THREE.CylinderGeometry(0.0035, 0.0035, 0.06, 6).rotateX(Math.PI / 2), hcM.brass, 0, 0, -0.018);              // the shank
+      b.add(UNIT_BOX, hcM.brass, 0, -0.007, -0.04, 0, 0, 0, 0.004, 0.014, 0.008); b.add(UNIT_BOX, hcM.brass, 0, -0.006, -0.028, 0, 0, 0, 0.004, 0.011, 0.005);   // the bit
+      b.add(new THREE.CylinderGeometry(0.0007, 0.0007, 0.04, 3), hcM.fabricR, 0.012, 0, 0.055, 0, 0, Math.PI / 3);               // a red string
+      b.add(UNIT_BOX, hcM.sheet, 0.03, -0.01, 0.07, 0, 0.3, 0, 0.026, 0.002, 0.038);                                             // and a paper tag
+      b.build(g, { castShadow: false });
+      const tagTex = canvasTexture(64, (c, s) => { c.fillStyle = '#e8e0c8'; c.fillRect(0, 0, s, s); c.fillStyle = '#2a1a10'; c.font = 'bold 22px Georgia, serif'; c.textAlign = 'center'; c.fillText('13', s / 2, 30); c.font = '12px Georgia, serif'; c.fillText('closet', s / 2, 50); }, 1);
+      const tag = new THREE.Mesh(new THREE.PlaneGeometry(0.026, 0.038).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ map: tagTex }));
+      tag.position.set(0.03, -0.008, 0.07); tag.rotation.y = 0.3; g.add(tag);
+      const glint = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xffd880, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
+      glint.scale.set(0.08, 0.08, 1); g.add(glint);
+      g.scale.setScalar(1.6);                                     // (a big old key, easy to see on a dresser)
+      scene.add(g);
+      return { g, glint, home: new THREE.Vector3(HC_SP.key.x, HC_SP.key.y + 0.008, HC_SP.key.z), held: -1, netBy: null, netSeen: 0, used: false, vel: new THREE.Vector3(), falling: false, desk: false, prev: new THREE.Vector3() };
+    })();
+    function hcKeyHome() {
+      const K = hcKey; K.held = -1; K.netBy = null; K.falling = false; K.vel.set(0, 0, 0); K.desk = false;
+      K.g.position.copy(K.home); K.g.quaternion.setFromEuler(_hcE.set(0, 0.7, Math.PI / 2, 'XYZ')); K.g.rotation.set(0, 0.7, 0);
+    }
+    hcKeyHome();
+    function hcUnlock(local) {
+      if (!hcLock.locked) return;
+      hcLock.locked = false; hcKey.used = true; hcKey.held = -1; hcKey.netBy = null; hcKey.desk = false;
+      const d = hcCloset;
+      try { cabinAudio.latch(0.5); setTimeout(() => { try { cabinAudio.creak(0.8); } catch (e) { } }, 180); } catch (e) { }
+      d.av = 1.4; d.angle = 0.08;                                                 // it swings open a little
+      if (local) {
+        showToast('UNLOCKED', 'The closet in No. 13 is open');
+        for (const c of controllers) pulse(c, 0.7, 60);
+        if (hcOnline()) r67Send({ t: 'hcl', a: 'unlock' });
+      }
+    }
+    // the locked closet: every frame it is forced shut; pushing or pulling it rattles it
+    {
+      const baseDW = updateDoorsAndWindows;
+      updateDoorsAndWindows = function (dt) {
+        const r = baseDW(dt);
+        const d = hcCloset;
+        hcLock.rattleT = Math.max(0, hcLock.rattleT - dt); hcLock.toastT = Math.max(0, hcLock.toastT - dt);
+        if (hcLock.locked) {
+          const tried = Math.abs(d.angle) > 0.004 || d.grabbed >= 0 || d.target !== null;
+          if (tried && currentMap === 'hallowcreek') {
+            if (hcLock.rattleT <= 0) {
+              hcLock.rattleT = 0.45;
+              try { camera.getWorldPosition(_hcV); const dist = _hcV.distanceTo(d.hinge); cabinAudio.latch(dist); setTimeout(() => { try { cabinAudio.latch(dist); } catch (e) { } }, 90); } catch (e) { }
+              if (d.grabbed >= 0 && controllers[d.grabbed]) pulse(controllers[d.grabbed], 0.45, 40);
+            }
+            if (hcLock.toastT <= 0) { hcLock.toastT = 5; showToast('LOCKED', hcKey.held >= 0 ? 'Touch the key to the lock' : 'The closet is locked. The key must be somewhere on Maple Lane'); }
+          }
+          d.grabbed = -1; d.target = null; d.angle = 0; d.av = 0;
+          d.pivot.rotation.y = d.yaw; d.col.box.copy(d.closedBox);
+          if (d.segs) fitDoorSegs(d);
+        }
+        return r;
+      };
+    }
+    // ---------- the flashlight ----------
+    const hcTorch = (() => {
+      const g = new THREE.Group(), b = makeBatch();
+      const yellow = new THREE.MeshStandardMaterial({ color: 0xe0b020, roughness: 0.5 }), black = new THREE.MeshStandardMaterial({ color: 0x141414, roughness: 0.7 });
+      b.add(new THREE.CylinderGeometry(0.024, 0.024, 0.17, 12).rotateX(Math.PI / 2), yellow, 0, 0, 0.05);                       // the body (batteries)
+      for (let k = 0; k < 5; k++) b.add(new THREE.TorusGeometry(0.0245, 0.003, 4, 14), black, 0, 0, 0.0 + k * 0.03);            // grip rings
+      b.add(new THREE.CylinderGeometry(0.04, 0.025, 0.07, 14).rotateX(-Math.PI / 2), black, 0, 0, -0.065);                       // the head
+      b.add(new THREE.CylinderGeometry(0.026, 0.026, 0.02, 12).rotateX(Math.PI / 2), black, 0, 0, 0.145);                        // tail cap
+      b.add(UNIT_BOX, black, 0, 0.027, 0.0, 0, 0, 0, 0.012, 0.01, 0.03);                                                          // the slide switch
+      b.add(new THREE.TorusGeometry(0.02, 0.003, 4, 10), black, 0, 0, 0.17, Math.PI / 2, 0, 0);                                   // wrist strap loop
+      b.build(g, { castShadow: false });
+      const lensMat = new THREE.MeshBasicMaterial({ color: 0x333028 });
+      const lens = new THREE.Mesh(new THREE.CircleGeometry(0.036, 16), lensMat); lens.position.z = -0.101; lens.rotation.y = Math.PI; g.add(lens);
+      const beamHolder = new THREE.Group(); beamHolder.position.z = -0.1; g.add(beamHolder);
+      const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xfff0c0, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
+      glow.scale.set(0.22, 0.22, 1); glow.position.z = -0.11; g.add(glow);
+      scene.add(g);
+      return { g, lensMat, glow, beamHolder, home: new THREE.Vector3(HC_SP.torch.x, HC_SP.torch.y + 0.025, HC_SP.torch.z), held: -1, netBy: null, netSeen: 0, netOn: false,
+               vel: new THREE.Vector3(), falling: false, prev: new THREE.Vector3(), headOn: false, saved: null, told: false };
+    })();
+    function hcTorchHome() {
+      const T = hcTorch; if (T.held >= 0) hcTorchRelease(false);
+      T.held = -1; T.netBy = null; T.falling = false; T.vel.set(0, 0, 0);
+      T.g.position.copy(T.home); T.g.rotation.set(0, Math.PI / 2 + 0.3, Math.PI / 2, 'YXZ');
+    }
+    function hcTorchTake(i) {
+      const T = hcTorch, d = flashlight.userData;
+      T.held = i; T.falling = false;
+      T.headOn = d.on;
+      T.saved = { angle: d.spot.angle, intensity: d.spot.intensity, distance: d.spot.distance };
+      attachFlashlight(T.beamHolder);
+      d.spot.angle = Math.PI / 12; d.spot.intensity = 58; d.spot.distance = 32;
+      if (!d.on) toggleFlashlight();
+      try { gunAudio.click(); } catch (e) { }
+      pulse(controllers[i], 0.5, 50);
+      if (!T.told) { T.told = true; showToast('FLASHLIGHT', 'Your lamp now shines from it. Trigger (or B / Y) switches it'); }
+      if (hcOnline()) r67Send({ t: 'hct', a: 'take', hd: itemHandIndex(i) });
+    }
+    function hcTorchRelease(throwIt = true) {
+      const T = hcTorch, d = flashlight.userData, i = T.held;
+      T.held = -1;
+      attachFlashlight(camera);
+      if (T.saved) { d.spot.angle = T.saved.angle; d.spot.intensity = T.saved.intensity; d.spot.distance = T.saved.distance; T.saved = null; }
+      if (d.on !== T.headOn) toggleFlashlight();
+      if (throwIt && i >= 0) { T.falling = true; T.vel.subVectors(T.g.position, T.prev).divideScalar(1 / 72).clampLength(0, 5); }
+    }
+    // ---------- holding the key and the flashlight ----------
+    const hcGripPrev = [false, false], hcTrigPrev = [false, false];
+    const hcBusy = (i) => hcKey.held === i || hcTorch.held === i;
+    {
+      const baseHHS = handHoldsSomething;
+      handHoldsSomething = function (i) { return hcBusy(i) || baseHHS(i); };
+      const baseHIP = heldItemsPacket;
+      heldItemsPacket = function () {
+        const out = baseHIP();
+        if (hcKey.held >= 0) out.push(['hk', 0, itemHandIndex(hcKey.held)]);
+        if (hcTorch.held >= 0) out.push(['ht', flashlight.userData.on ? 1 : 0, itemHandIndex(hcTorch.held)]);
+        return out;
+      };
+    }
+    function hcHandPose(obj, i) { const c = controllers[i]; obj.position.copy(hands[i].last); c.getWorldQuaternion(obj.quaternion); }
+    function hcFall(o, dt) {                                       // a small thing falling onto whatever floor is below it
+      const p = o.g.position, prevY = p.y;
+      o.vel.y -= 9.8 * dt; p.addScaledVector(o.vel, dt);
+      const fl = hcFloorAt(p.x, p.z, prevY + 0.03);
+      if (p.y < fl + 0.02) {
+        p.y = fl + 0.02; o.vel.set(0, 0, 0); o.falling = false;
+        _hcE.setFromQuaternion(o.g.quaternion, 'YXZ'); o.g.rotation.set(0, _hcE.y, Math.PI / 2, 'YXZ');
+        try { gameAudio.clunk(); } catch (e) { }
+        return true;
+      }
+      if (p.y < -8) { p.y = fl + 0.02; o.vel.set(0, 0, 0); o.falling = false; return true; }
+      return false;
+    }
+    function hcUpdateItems(dt) {
+      const vr = renderer.xr.isPresenting && locomotionReady, here = currentMap === 'hallowcreek', now = r67Now();
+      const K = hcKey, T = hcTorch;
+      K.g.visible = here && !K.used && !K.desk && !titleActive;
+      T.g.visible = here && !titleActive;
+      // leaving the map, or no longer a survivor: let go
+      if ((!here || playerRole !== 'survivor') && T.held >= 0) { hcTorchRelease(false); hcTorchHome(); }
+      if ((!here || playerRole !== 'survivor') && K.held >= 0) { K.held = -1; if (!K.used) hcKeyHome(); }
+      if (!here) return;
+      controllers.forEach((c, i) => {
+        const h = hands[i], grip = vr && btn(c, 1), trig = vr && btn(c, 0);
+        const edge = grip && !hcGripPrev[i], tEdge = trig && !hcTrigPrev[i];
+        hcGripPrev[i] = grip; hcTrigPrev[i] = trig;
+        // let go
+        if (K.held === i && (!grip || !h.tracked)) {
+          K.held = -1; K.falling = true; K.vel.subVectors(K.g.position, K.prev).divideScalar(Math.max(dt, 1e-3)).clampLength(0, 4);
+          if (hcOnline()) r67Send({ t: 'hck', a: 'fall' });
+        }
+        if (T.held === i && (!grip || !h.tracked)) { hcTorchRelease(true); if (hcOnline()) r67Send({ t: 'hct', a: 'fall' }); }
+        if (T.held === i && tEdge) { toggleFlashlight(); try { gunAudio.click(); } catch (e) { } pulse(c, 0.25, 25); }
+        // pick up
+        if (!edge || !vr || !h.tracked || playerRole !== 'survivor' || titleActive || handHoldsSomething(i)) return;
+        if (!K.used && K.held < 0 && !K.netBy && !K.desk && h.last.distanceTo(K.g.position) < 0.2) {
+          K.held = i; K.falling = false; pulse(c, 0.5, 40);
+          try { gameAudio.chime(); } catch (e) { }
+          if (!hcUpdateItems.keyTold) { hcUpdateItems.keyTold = true; showToast('THE CLOSET KEY', 'Its tag says 13. Touch it to the closet lock upstairs in No. 13'); }
+          if (hcOnline()) r67Send({ t: 'hck', a: 'take', hd: itemHandIndex(i) });
+          return;
+        }
+        if (T.held < 0 && !T.netBy && h.last.distanceTo(T.g.position) < 0.2) hcTorchTake(i);
+      });
+      // the key
+      if (K.held >= 0) {
+        K.prev.copy(K.g.position);
+        hcHandPose(K.g, K.held); K.g.rotateX(-0.4);
+        if (hcLock.locked && K.g.position.distanceTo(HC_SP.lock) < 0.14) { pulse(controllers[K.held], 0.8, 70); hcUnlock(true); }
+      } else if (K.netBy) {
+        if (now - K.netSeen > 600) { K.netBy = null; K.falling = true; K.vel.set(0, 0, 0); }
+      } else if (K.falling && !K.used) {
+        if (hcFall(K, dt) && hcOnline()) r67Send({ t: 'hck', a: 'rest', p: v3a(K.g.position), y: r3(K.g.rotation.y) });
+      } else if (!K.used) {
+        // a faint glint every few seconds, so a careful look finds it
+        const t = performance.now() * 0.001, s = Math.max(0, Math.sin(t * 1.3) - 0.93) / 0.07;
+        K.glint.material.opacity = 0.9 * s; K.glint.material.rotation = t;
+      }
+      if (K.held >= 0 || K.netBy) K.glint.material.opacity = 0;
+      // the flashlight
+      const on = flashlight.userData.on;
+      if (T.held >= 0) {
+        T.prev.copy(T.g.position);
+        hcHandPose(T.g, T.held);
+        T.lensMat.color.set(on ? 0xfff4d6 : 0x333028); T.glow.material.opacity = on ? 0.55 : 0;
+      } else if (T.netBy) {
+        if (now - T.netSeen > 600) { T.netBy = null; T.falling = true; T.vel.set(0, 0, 0); }
+        T.lensMat.color.set(T.netOn ? 0xfff4d6 : 0x333028); T.glow.material.opacity = T.netOn ? 0.55 : 0;
+      } else {
+        T.lensMat.color.set(0x333028); T.glow.material.opacity = 0;
+        if (T.falling && hcFall(T, dt) && hcOnline()) r67Send({ t: 'hct', a: 'rest', p: v3a(T.g.position), y: r3(T.g.rotation.y) });
+      }
+      // other players carrying them: the key / flashlight rides in their hand
+      for (const [id, r] of netPeers()) {
+        const s = r.st; if (!s || s.m !== currentMap || !Array.isArray(s.it)) continue;
+        for (const it of s.it) {
+          if (!Array.isArray(it)) continue;
+          const H = r.hand[it[2] ? 1 : 0]; if (!H || !H.ok) continue;
+          if (it[0] === 'hk' && K.held < 0 && !K.used) { K.netBy = id; K.netSeen = now; K.falling = false; K.g.position.copy(H.p); K.g.quaternion.copy(H.q); K.g.rotateX(-0.4); }
+          if (it[0] === 'ht' && T.held < 0) { T.netBy = id; T.netSeen = now; T.netOn = !!it[1]; T.falling = false; T.g.position.copy(H.p); T.g.quaternion.copy(H.q); }
+        }
+      }
+    }
+    // desktop: click the key to pocket it, click the closet door to unlock it
+    addDeskClick([hcKey.g], () => {
+      if (hcKey.used || hcKey.netBy || hcKey.held >= 0) return;
+      hcKey.desk = true; showToast('KEY TAKEN', 'Click the locked closet door upstairs in No. 13');
+    }, 'hallowcreek');
+    addDeskClick(hcCloset.meshes, () => {
+      if (!hcLock.locked) return;
+      if (hcKey.desk) hcUnlock(true);
+      else showToast('LOCKED', 'The closet is locked. The key must be somewhere on Maple Lane');
+    }, 'hallowcreek');
+    addDeskClick([hcTorch.g], () => showToast('FLASHLIGHT', 'In VR: Grip to take it, Trigger switches it'), 'hallowcreek');
+    // ---------- what's been searched / spotted (for the objectives and the menu map) ----------
+    const hcSeen = { houses: new Set(), items: new Set(), gun: false, poker: false, torch: false, key: false };
+    function hcResetVisit() {
+      hcSeen.houses.clear(); hcSeen.items.clear(); hcSeen.gun = hcSeen.poker = hcSeen.torch = hcSeen.key = false;
+    }
+    function hcResetItems() {
+      if (hcTorch.held >= 0) hcTorchRelease(false);
+      hcLock.locked = true; hcKey.used = false; hcKeyHome(); hcTorchHome();
+      const d = hcCloset; d.angle = 0; d.av = 0; d.target = null; d.grabbed = -1; d.pivot.rotation.y = d.yaw; d.col.box.copy(d.closedBox); if (d.segs) fitDoorSegs(d);
+    }
+    function hcUpdateSeen() {
+      headWorld(_hcV);
+      for (const R of HC_ROOMS) {
+        if (R.dead || hcSeen.houses.has(R.H.no)) continue;
+        if (_hcV.x > R.x0 + 0.2 && _hcV.x < R.x1 - 0.2 && _hcV.z > R.z0 + 0.2 && _hcV.z < R.z1 - 0.2 && _hcV.y > HALLOW.FL - 0.3) {
+          hcSeen.houses.add(R.H.no);
+          showToast(`${R.H.label} SEARCHED`, `${hcSeen.houses.size} of ${HC_HOUSES.length} houses`);
+        }
+      }
+      const near = (p, r = 5) => _hcV.distanceTo(p) < r;
+      if (near(hcGun.gun.group.position)) hcSeen.items.add('gun');
+      if (near(hcKey.g.position)) hcSeen.items.add('key');
+      if (near(hcPoker.group.position)) hcSeen.items.add('poker');
+      if (near(hcTorch.g.position)) hcSeen.items.add('torch');
+      if (near(HC_SP.lock, 4)) hcSeen.items.add('lock');
+      if (hcGun.held >= 0) hcSeen.gun = true;
+      if (hcPoker.held >= 0) hcSeen.poker = true;
+      if (hcTorch.held >= 0) hcSeen.torch = true;
+      if (hcKey.held >= 0 || hcKey.desk || hcKey.used) hcSeen.key = true;
+    }
+    {
+      const baseOL = objectiveLines;
+      objectiveLines = function (map) {
+        if (map !== 'hallowcreek') return baseOL(map);
+        const n = hcSeen.houses.size, N = HC_HOUSES.length;
+        return [
+          [`Search the houses on Maple Lane  ${n}/${N}`, n >= N],
+          ['Find the closet key', hcSeen.key || !!hcKey.netBy],
+          ['Unlock the upstairs closet in No. 13', !hcLock.locked],
+          ['Take the shotgun', hcSeen.gun || !!hcGun.netHeldBy],
+          ['Find the fire poker', hcSeen.poker || !!hcPoker.netBy],
+          ['Find a flashlight', hcSeen.torch || !!hcTorch.netBy],
+        ];
+      };
+    }
+    // the live icons on the menu map (houses not yet searched get a "?"; items once you've been near them)
+    function hcMenuIcons(g, P) {
+      for (const R of HC_ROOMS) {
+        if (R.dead || hcSeen.houses.has(R.H.no)) continue;
+        const [a, b] = P((R.x0 + R.x1) / 2, (R.z0 + R.z1) / 2); mmLabel(g, a + 14, b - 10, '?', '#ffb050');
+      }
+      const icon = (key, pos, kind, color, label, show = true) => {
+        if (!show || !hcSeen.items.has(key)) return;
+        const [a, b] = P(pos.x, pos.z); mmIcon(g, a, b, kind, color, 6); mmLabel(g, a, b - 12, label, color);
+      };
+      icon('gun', hcGun.gun.group.position, 'diamond', '#40c8ff', 'S', hcGun.held < 0);
+      icon('key', hcKey.g.position, 'circle', '#ffd040', 'K', !hcKey.used && hcKey.held < 0 && !hcKey.desk);
+      icon('poker', hcPoker.group.position, 'tri', '#ff7040', 'P', hcPoker.held < 0);
+      icon('torch', hcTorch.g.position, 'square', '#fff0b0', 'F', hcTorch.held < 0);
+      if (hcLock.locked && hcSeen.items.has('lock')) { const [a, b] = P(HC_SP.lock.x, HC_SP.lock.z); mmIcon(g, a, b, 'square', '#ff4030', 5); mmLabel(g, a + 12, b, 'L', '#ff6040'); }
+    }
+    // ---------- network: key, lock, flashlight; catching up when you arrive ----------
+    function hcStatePacket() {
+      const K = hcKey, T = hcTorch;
+      return { t: 'hcs', a: 'state', lk: hcLock.locked ? 1 : 0, ku: K.used ? 1 : 0, kp: v3a(K.g.position), ky: r3(K.g.rotation.y), kh: K.held >= 0 ? 1 : 0,
+               tp: v3a(T.g.position), ty: r3(T.g.rotation.y), th: T.held >= 0 ? 1 : 0 };
+    }
+    function hcOnEvent(id, d) {
+      const K = hcKey, T = hcTorch;
+      if (d.t === 'hcl' && d.a === 'unlock') { hcUnlock(false); return true; }
+      if (d.t === 'hck') {
+        if (d.a === 'take' && K.held < 0) { K.netBy = id; K.netSeen = r67Now(); K.falling = false; }
+        else if (d.a === 'fall' && K.netBy === id) { K.netBy = null; K.falling = true; K.vel.set(0, 0, 0); }
+        else if (d.a === 'rest' && K.held < 0 && Array.isArray(d.p)) { K.netBy = null; K.falling = false; K.g.position.set(+d.p[0] || 0, +d.p[1] || 0, +d.p[2] || 0); K.g.rotation.set(0, +d.y || 0, Math.PI / 2, 'YXZ'); }
+        return true;
+      }
+      if (d.t === 'hct') {
+        if (d.a === 'take' && T.held < 0) { T.netBy = id; T.netSeen = r67Now(); T.falling = false; }
+        else if (d.a === 'fall' && T.netBy === id) { T.netBy = null; T.falling = true; T.vel.set(0, 0, 0); }
+        else if (d.a === 'rest' && T.held < 0 && Array.isArray(d.p)) { T.netBy = null; T.falling = false; T.g.position.set(+d.p[0] || 0, +d.p[1] || 0, +d.p[2] || 0); T.g.rotation.set(0, +d.y || 0, Math.PI / 2, 'YXZ'); }
+        return true;
+      }
+      if (d.t === 'hcs') {
+        if (d.a === 'ask') { if (currentMap === 'hallowcreek') r67Send(hcStatePacket(), id); return true; }
+        if (d.a === 'state' && currentMap === 'hallowcreek') {
+          if (!d.lk) hcUnlock(false);
+          if (d.ku) { K.used = true; K.netBy = null; }
+          else if (K.held < 0 && !d.kh && Array.isArray(d.kp)) { K.netBy = null; K.falling = false; K.g.position.set(+d.kp[0] || 0, +d.kp[1] || 0, +d.kp[2] || 0); K.g.rotation.y = +d.ky || 0; }
+          if (T.held < 0 && !d.th && Array.isArray(d.tp)) { T.netBy = null; T.falling = false; T.g.position.set(+d.tp[0] || 0, +d.tp[1] || 0, +d.tp[2] || 0); T.g.rotation.y = +d.ty || 0; }
+          return true;
+        }
+      }
+      return false;
+    }
+    {
+      const baseEv = netOnEvent;
+      netOnEvent = function (id, d) {
+        try { if (d && typeof d.t === 'string' && d.t.startsWith('hc') && hcOnEvent(id, d)) return; } catch (e) { console.warn('[hallowcreek] net', e); }
+        return baseEv(id, d);
+      };
+    }
+    // a run reset (caught / respawn) puts Hallowcreek's things back too
+    {
+      const baseRRP = resetRunProgress;
+      resetRunProgress = function (silent = false) { const r = baseRRP(silent); try { hcResetItems(); hcResetVisit(); } catch (e) { } return r; };
+    }
+    // ---------- behind-you culling ----------
+    const _hcCam = new THREE.Vector3(), _hcFwd = new THREE.Vector3(), _hcTo = new THREE.Vector3();
+    let hcCullOn = false;
+    function hcCull() {
+      const on = currentMap === 'hallowcreek' && !titleActive;
+      if (!on) {
+        if (hcCullOn) { hcCullOn = false; for (const C of HC_CHUNKS) { C.obj.visible = true; for (const d of C.doors) for (const m of d.meshes) m.visible = true; } }
+        return;
+      }
+      hcCullOn = true;
+      camera.getWorldPosition(_hcCam); camera.getWorldDirection(_hcFwd);
+      for (const C of HC_CHUNKS) {
+        _hcTo.subVectors(C.c, _hcCam);
+        const d = _hcTo.length(), dist = d - C.r;
+        const vis = !(dist > 8 && _hcFwd.dot(_hcTo.multiplyScalar(1 / Math.max(d, 1e-4))) < -0.25);
+        if (C.obj.visible !== vis) { C.obj.visible = vis; for (const dd of C.doors) for (const m of dd.meshes) m.visible = vis; }
+      }
+    }
+    // ---------- ambience ----------
+    const hcAmb = { t: 0, bulbT: 0, tvT: 0, lampSrc: null, fall: null };
+    {
+      const L = HC_LAMPS.find((l) => l.dying);
+      if (L) hcAmb.lampSrc = lightSources.find((s) => Math.abs(s.x - L.x) < 0.01 && Math.abs(s.z - L.z) < 0.01) || null;
+      if (hcAmb.lampSrc) hcAmb.lampSrc.base = hcAmb.lampSrc.intensity;
+      for (const g of HALLOW.blocks) g.traverse((m) => { if (m.isInstancedMesh && m.userData.hcKind === 'bulb' && m.instanceColor) m.userData.base = m.instanceColor.array.slice(); });
+      // falling leaves round you: 36 leaves recycled from above
+      const geo = new THREE.PlaneGeometry(0.16, 0.16), im = new THREE.InstancedMesh(geo, hcM.leaf, 36);
+      const COLS = [0xb8401a, 0xd06a1c, 0x8a2a12, 0xd89a2a];
+      const L2 = [];
+      for (let k = 0; k < 36; k++) { im.setColorAt(k, new THREE.Color(COLS[k % 4])); L2.push({ p: new THREE.Vector3(0, -50, 0), v: 0.5, k: Math.random() * 9, sp: 1 + Math.random() * 2 }); }
+      im.frustumCulled = false; im.visible = false; scene.add(im);
+      hcAmb.fall = { im, L: L2 };
+    }
+    const _hcM4 = new THREE.Matrix4(), _hcQ2 = new THREE.Quaternion(), _hcS = new THREE.Vector3(1, 1, 1), _hcEu = new THREE.Euler();
+    function hcAmbience(dt) {
+      const here = currentMap === 'hallowcreek' && !titleActive;
+      const F = hcAmb.fall; F.im.visible = here;
+      if (!here) return;
+      const t = (hcAmb.t += dt);
+      // jack-o'-lanterns: a shared candle flicker
+      const fl = 0.78 + 0.16 * Math.sin(t * 11) * Math.sin(t * 3.7) + 0.1 * Math.random();
+      hcM.face.color.setScalar(fl); hcPumpkinLitIntensity(fl);
+      // the string lights: a slow chase
+      if ((hcAmb.bulbT -= dt) <= 0) {
+        hcAmb.bulbT = 0.12;
+        for (const g of HALLOW.blocks) for (const m of g.children) {
+          if (m.userData.hcKind !== 'bulb' || !m.userData.base) continue;
+          const a = m.instanceColor.array, b = m.userData.base;
+          for (let i = 0; i < m.count; i++) { const k = 0.45 + 0.55 * Math.max(0, Math.sin(t * 2.2 - i * 0.55)); a[i * 3] = b[i * 3] * k; a[i * 3 + 1] = b[i * 3 + 1] * k; a[i * 3 + 2] = b[i * 3 + 2] * k; }
+          m.instanceColor.needsUpdate = true;
+        }
+      }
+      // streetlamps hum; one by No. 15 sputters
+      for (const Lm of HC_LAMPS) {
+        let k = 0.92 + 0.08 * Math.sin(t * 7 + Lm.k);
+        if (Lm.dying) { const off = Math.sin(t * 1.7) + Math.sin(t * 5.3 + 1) > 1.2 || Math.random() < 0.03; k = off ? 0.08 : 1; if (hcAmb.lampSrc) hcAmb.lampSrc.intensity = hcAmb.lampSrc.base * k; }
+        Lm.glow.material.opacity = Lm.base * k; if (Lm.pool) Lm.pool.material.opacity = 0.55 * k;
+      }
+      // mist drifts and breathes
+      for (const M of HALLOW.mist) { M.sp.position.x = M.x0 + Math.sin(t * 0.05 * M.sp0 * 4 + M.k) * 4; M.sp.material.opacity = 0.16 + 0.08 * Math.sin(t * 0.2 + M.k); }
+      // the moon: far off in the west-north-west, low (it follows you, so it sits at the horizon)
+      camera.getWorldPosition(_hcCam);
+      HALLOW.moon.position.set(_hcCam.x - 34, _hcCam.y + 24, _hcCam.z - 30);
+      // No. 12's TV: static while you're close
+      const tvAt = hcRoom(12).furnish.tv;
+      if (tvAt && _hcCam.distanceTo(tvAt) < 12 && (hcAmb.tvT -= dt) <= 0) {
+        hcAmb.tvT = 0.07;
+        const cv = hcTvTex.userData.canvas, g = cv.getContext('2d'), img = g.createImageData(cv.width, cv.height);
+        for (let i = 0; i < img.data.length; i += 4) { const v = (Math.random() * 200) | 0; img.data[i] = img.data[i + 1] = v; img.data[i + 2] = Math.min(255, v + 30); img.data[i + 3] = 255; }
+        g.putImageData(img, 0, 0); hcTvTex.needsUpdate = true;
+      }
+      // leaves falling round you
+      for (let k = 0; k < F.L.length; k++) {
+        const l = F.L[k];
+        if (l.p.y < 0.03 || l.p.distanceTo(_hcCam) > 14) { l.p.set(_hcCam.x + (Math.random() - 0.5) * 16, 4 + Math.random() * 4, _hcCam.z + (Math.random() - 0.5) * 16); l.v = 0.4 + Math.random() * 0.5; }
+        l.p.y -= l.v * dt; l.p.x += Math.sin(t * l.sp + l.k) * 0.6 * dt; l.p.z += Math.cos(t * l.sp * 0.7 + l.k) * 0.4 * dt + 0.15 * dt;
+        _hcQ2.setFromEuler(_hcEu.set(t * l.sp + l.k, t * 0.7 + l.k, Math.sin(t * l.sp) * 0.8));
+        _hcM4.compose(l.p, _hcQ2, _hcS); F.im.setMatrixAt(k, _hcM4);
+      }
+      F.im.instanceMatrix.needsUpdate = true;
+    }
+    function hcPumpkinLitIntensity(k) { hcPumpkinLit.emissiveIntensity = 0.6 + 0.6 * k; }
+    // ---------- arriving ----------
+    let hcMapWas = null, hcAskT = -1;
+    function hcArrive() {
+      if (currentMap === hcMapWas) return;
+      const was = hcMapWas; hcMapWas = currentMap;
+      if (currentMap !== 'hallowcreek') return;
+      hcResetVisit();
+      if (!hcPeersHere()) hcResetItems();                           // nobody else here: everything is back where it was
+      else hcAskT = 1.2;                                            // ask the others where things are
+      if (was !== 'hallowcreek') showToast('HALLOWCREEK', 'Maple Lane, Halloween night. Search the houses: Grip opens doors (or push them)');
+    }
+    // ---------- every frame ----------
+    {
+      const baseNet = updateNet;
+      updateNet = function (dt) {
+        const r = baseNet(dt);
+        try { hcArrive(); } catch (e) { if (!updateNet.hcW1) { updateNet.hcW1 = true; console.warn('[hallowcreek] arrive', e); } }
+        if (hcAskT > 0 && (hcAskT -= dt) <= 0 && hcOnline()) r67Send({ t: 'hcs', a: 'ask' });
+        try { hcUpdateItems(dt); } catch (e) { if (!updateNet.hcW2) { updateNet.hcW2 = true; console.warn('[hallowcreek] items', e); } }
+        try { if (currentMap === 'hallowcreek' && !titleActive) hcUpdateSeen(); } catch (e) { }
+        try { hcAmbience(dt); } catch (e) { if (!updateNet.hcW3) { updateNet.hcW3 = true; console.warn('[hallowcreek] ambience', e); } }
+        try { hcCull(); } catch (e) { if (!updateNet.hcW4) { updateNet.hcW4 = true; console.warn('[hallowcreek] cull', e); } }
+        return r;
+      };
+    }
+    // (for the tests)
+    window.__hallow = { HALLOW, HC_CHUNKS, HC_ROOMS, hcLock, hcKey, hcTorch, hcGun, hcPoker, hcCloset, hcUnlock, hcFloorAt, hcSeen, hcResetItems, objectiveLines: (m) => objectiveLines(m) };
 
     // ---------- XR session hooks ----------
     renderer.xr.addEventListener('sessionstart', () => {
