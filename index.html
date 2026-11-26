@@ -6293,6 +6293,10 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'NEW', date: '26/11/26', title: 'THE KILL',
+        text: 'Grab and pull: the limb shakes and rumbles, then snaps off at 35 cm and stays in your fist to wave or throw. Every rip, sever or killing blow drains your view to grey with the blood still red and flashes a white outline round the victim, with a deep crunch, a hit-stop and a hard buzz. Hits leave blood on bodies, and blood bursts out and splatters the floor.' },
+      { tag: 'FIX', date: '25/11/26', title: 'NO MORE RUBBER LIMBS',
+        text: 'A grabbed arm or head gives 15 percent at most, then comes away as a solid piece that never stretches. Wound caps sized to the joint and fixed to the torso. Fast machete swings sever arms and heads, fast thrusts impale. The monster no longer sees inside its own chest when looking down.' },
       { tag: 'NEW', date: '25/11/26', title: 'CLEAN DISMEMBERMENT',
         text: 'A torn-off arm or head now comes away exactly where it was, falls with real weight, hits the ground, tumbles and lies flat for at least 18 seconds. Clean dark wound caps with a pale bone centre on the socket and the limb, one small burst of blood and a pool underneath.' },
       { tag: 'NEW', date: '25/11/26', title: 'CHAIN HIM TO THE LAKE FLOOR',
@@ -19651,7 +19655,7 @@
         if (!r || !r.st || r.st.hp <= 0 || !partPos(r, G.part, _gpT)) { goreHold[i] = null; return; }
         const pull = _gpT.distanceTo(h.last);
         pulse(c, Math.min(1, 0.25 + pull * 2), 20);
-        if (pull > (G.part === 'H' ? 0.5 : 0.36) && G.t > 0.08) {                                  // pulled away from them: it tears off
+        if (pull > (G.part === 'H' ? 0.35 : 0.35) && G.t > 0.08) {                                  // pulled away from them: it tears off
           goreHold[i] = null;
           const at = _gpT.clone();
           r67Send({ t: 'rip', v: G.id, p: G.part, at: [r3(at.x), r3(at.y), r3(at.z)], n: playerName(), m: currentMap, h: itemHandIndex(i) });
@@ -23403,6 +23407,667 @@
         if (DMX_CLEAN) for (const r of netPeers().values()) { for (const st of Object.values(r.goreStumps || {})) st.visible = false; if (r.goreDrip) for (const k in r.goreDrip) r.goreDrip[k] = 0; }
         return out;
       };
+    }
+
+    // =====================================================================
+    //  DISMEMBERMENT FIXES (from the VR test)
+    //  1. No rubber: while the monster pulls, a grabbed arm or head stretches 1.12x at most. The frame it comes off,
+    //     the limb on the survivor is collapsed and its arm solver stops for good; the piece is BAKED: its triangles
+    //     skinned into their current world pose, copied into a plain mesh at scale (1, 1, 1) in the scene, a rigid body
+    //     (gravity, the pull, ground collision at groundHeight + limbRadius), so it can never stretch.
+    //  2. Stump caps sized to the joint (shoulder 0.075 m, neck 0.085 m) and parented to the torso's socket bone (they
+    //     can't float or lag). Fast machete swings sever arms (4.2 m/s) and heads (5 m/s); a fast forward thrust
+    //     (velocity along the blade > 2.6 m/s) impales the torso: a blood burst, heavy haptics and a 0.11 s hit-stop.
+    //  3. The monster's own first-person body (your headset only) leaves out the upper chest, shoulders and neck as well
+    //     as the head, so looking down never puts your eyes inside your chest. Everyone else still sees the whole body,
+    //     and the arms stay on your controllers.
+    // =====================================================================
+    const SV3_STRETCH = 1.12, SV3_SEVER_ARM = 4.2, SV3_SEVER_HEAD = 5.0, SV3_THRUST = 2.6, SV3_HITSTOP = 110;
+    const SV3_SOCK_R = { L: 0.075, R: 0.075, H: 0.085 };
+    const _s3A = new THREE.Vector3(), _s3B = new THREE.Vector3(), _s3C = new THREE.Vector3(), _s3D = new THREE.Vector3(), _s3E = new THREE.Vector3();
+    const _s3M = new THREE.Matrix4(), _s3Q = new THREE.Quaternion(), _s3S = new THREE.Vector3();
+
+    // ---------- whose rig is this, and is that side torn off? ----------
+    function sv3OwnerOf(inst) {
+      if (survivorRig && inst === survivorRig.local) return { self: true };
+      for (const r of netPeers().values()) if (r.rig === inst) return { r };
+      return null;
+    }
+    function sv3Ripped(owner, side) {
+      if (!owner) return false;
+      const bit = PART_BIT[side] || 0;
+      if (owner.self) return playerRole === 'survivor' && !!((goreMe.rp | 0) & bit);
+      const s = owner.r.st; return !!(s && s.r === 's' && ((s.rp | 0) & bit));
+    }
+    // ---------- the arm solver: a torn-off arm is never solved again; a grabbed arm reaches 1.15x at most ----------
+    {
+      const baseSolve = solveRigArm;
+      solveRigArm = function (inst, side, W, bodyYaw, handQ, curl) {
+        const owner = sv3OwnerOf(inst), A = inst.bones[side === 'L' ? 'L' : 'R'];
+        if (sv3Ripped(owner, side)) {
+          A.u.matrixAutoUpdate = A.l.matrixAutoUpdate = A.h.matrixAutoUpdate = true;
+          A.u.scale.setScalar(0.001);
+          inst.mesh.updateWorldMatrix(true, false);
+          _s3A.copy(A.bind.u).applyMatrix4(inst.mesh.matrixWorld);
+          inst.cuffAt = inst.cuffAt || {};
+          inst.cuffAt[side] = { s: _s3A.clone(), e: _s3A.clone().setY(_s3A.y - 0.1), w: _s3A.clone().setY(_s3A.y - 0.2), rest: true };
+          return;
+        }
+        // being pulled by your fist: the wrist goes towards your hand, but the arm only gives 15%
+        if (owner && owner.r && W) {
+          const i = goreHold.findIndex((G) => G && G.id === owner.r.id && G.part === side);
+          if (i >= 0 && hands[i] && hands[i].tracked) {
+            inst.mesh.updateWorldMatrix(true, false);
+            inst.mesh.matrixWorld.decompose(_s3B, _s3Q, _s3S);
+            const s = _s3S.x, b = A.bind;
+            const reach = (b.l.distanceTo(b.u) + b.h.distanceTo(b.l)) * s * SV3_STRETCH;
+            _s3A.copy(b.u).applyMatrix4(inst.mesh.matrixWorld);
+            _s3C.subVectors(hands[i].last, _s3A); const d = _s3C.length();
+            W = _s3D.copy(_s3A).addScaledVector(_s3C, Math.min(d, reach) / Math.max(d, 1e-6));
+            const ten = goreHold[i].tension || 0, j = 0.005 * ten;           // the micro-shake as it's about to give
+            if (j > 0) W.set(W.x + (Math.random() - 0.5) * j, W.y + (Math.random() - 0.5) * j, W.z + (Math.random() - 0.5) * j);
+          }
+        }
+        return baseSolve(inst, side, W, bodyYaw, handQ, curl);
+      };
+    }
+    // ---------- a grabbed head: lifted and stretched 15% at most ----------
+    {
+      const baseRG3 = updateRemoteGore;
+      updateRemoteGore = function (dt) {
+        const out = baseRG3(dt), now = performance.now();
+        for (const [id, r] of netPeers()) {
+          const B = r.rig && r.rig.bones, S = strandSets.get(id);
+          if (!B || !S || S.snapT >= 0 || now - S.seenT > 60) continue;
+          const rest = B.head.userData.restPos; if (!rest) continue;
+          const sc = r.rig.mesh.getWorldScale(_s3S).y || 1;
+          const maxLift = (SV3_STRETCH - 1) * 0.3 * sc;                   // 15% of the head-and-neck length (about 30 cm)
+          B.head.getWorldPosition(_s3B);
+          const lift = _s3B.distanceTo(S.A);
+          if (lift > maxLift) {
+            _s3B.sub(S.A).multiplyScalar(maxLift / lift).add(S.A);
+            B.head.position.copy(_s3B); B.head.parent.worldToLocal(B.head.position);
+          }
+          const gh = goreHold.find((G) => G && G.id === id && G.part === 'H'), ten = gh ? gh.tension || 0 : Math.min(1, lift / maxLift);
+          if (ten > 0) { const j = 0.004 * ten * sc; B.head.position.x += (Math.random() - 0.5) * j / sc; B.head.position.y += (Math.random() - 0.5) * j / sc; B.head.position.z += (Math.random() - 0.5) * j / sc; }   // (the shake)
+          const k = 1 + (SV3_STRETCH - 1) * Math.min(1, ten);                // the building tension: up to 1.12x, never more
+          B.head.scale.set(1 / Math.sqrt(k), k, 1 / Math.sqrt(k));
+          B.head.updateMatrixWorld(true);
+          B.head.getWorldPosition(S.B);
+          try { drawStrands(S, now); } catch (e) { }
+        }
+        return out;
+      };
+    }
+
+    // ---------- baking the torn-off part: its own triangles, skinned into the pose they're in right now ----------
+    const _s3V = new THREE.Vector3();
+    function sv3Bake(mesh, rootBone) {
+      const geo = mesh.geometry, sk = mesh.skeleton;
+      const P = geo.attributes.position, SI = geo.attributes.skinIndex, SW = geo.attributes.skinWeight, UV = geo.attributes.uv;
+      if (!P || !SI || !SW || !sk) return null;
+      const partIdx = new Set();
+      sk.bones.forEach((b, i) => { for (let o = b; o; o = o.parent) { if (o === rootBone) { partIdx.add(i); break; } if (o === mesh) break; } });
+      if (!partIdx.size) return null;
+      const n = P.count, member = new Uint8Array(n);
+      for (let v = 0; v < n; v++) {
+        let w = 0;
+        for (let c = 0; c < 4; c++) if (partIdx.has(SI.getComponent(v, c))) w += SW.getComponent(v, c);
+        member[v] = w >= 0.5 ? 1 : 0;
+      }
+      const idx = geo.index, tri = [];
+      const triCount = idx ? idx.count / 3 : n / 3;
+      for (let t = 0; t < triCount; t++) {
+        const a = idx ? idx.getX(t * 3) : t * 3, b = idx ? idx.getX(t * 3 + 1) : t * 3 + 1, c = idx ? idx.getX(t * 3 + 2) : t * 3 + 2;
+        if (member[a] && member[b] && member[c]) tri.push(a, b, c);
+      }
+      if (tri.length < 30) return null;
+      mesh.updateMatrixWorld(true);
+      for (const b of sk.bones) if (!b.matrixAutoUpdate) b.updateMatrixWorld(false);
+      const remap = new Map(), pos = [], uv = [], index = [];
+      const centre = new THREE.Vector3();
+      for (const v of tri) {
+        let k = remap.get(v);
+        if (k === undefined) {
+          k = remap.size; remap.set(v, k);
+          mesh.getVertexPosition(v, _s3V); _s3V.applyMatrix4(mesh.matrixWorld);   // skinned, then into the world
+          pos.push(_s3V.x, _s3V.y, _s3V.z); centre.add(_s3V);
+          if (UV) uv.push(UV.getX(v), UV.getY(v));
+        }
+        index.push(k);
+      }
+      centre.multiplyScalar(1 / remap.size);
+      for (let i = 0; i < pos.length; i += 3) { pos[i] -= centre.x; pos[i + 1] -= centre.y; pos[i + 2] -= centre.z; }
+      if (!pos.every(Number.isFinite)) return null;
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      if (UV) g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+      g.setIndex(index); g.computeVertexNormals(); g.computeBoundingSphere();
+      return { geo: g, centre };
+    }
+    function sv3BakedPiece(r, part) {
+      const inst = r ? r.rig : (survivorRig && survivorRig.local);
+      if (!inst || !inst.mesh || !inst.bones) return null;
+      const B = inst.bones, rootBone = part === 'H' ? B.head : B[part].u;
+      // (undo the grab's stretch first, so the piece is the shape the limb really is)
+      if (part === 'H') { B.head.scale.set(1, 1, 1); B.head.updateMatrixWorld(true); }
+      const bk = sv3Bake(inst.mesh, rootBone); if (!bk) return null;
+      const src = inst.mesh.material;
+      const mat = (Array.isArray(src) ? src[0] : src).clone(); mat.clippingPlanes = null;
+      const mesh = new THREE.Mesh(bk.geo, mat); mesh.castShadow = true; mesh.frustumCulled = true;
+      const g = new THREE.Group(); g.add(mesh); g.position.copy(bk.centre); g.userData.dispose = [mat];
+      scene.add(g); g.updateMatrixWorld(true);
+      // the cut (the shoulder / neck joint) and the far end (the furthest vertex from it), in the piece's frame
+      rootBone.getWorldPosition(_s3A); const cut = g.worldToLocal(_s3A.clone());
+      const P = bk.geo.attributes.position; let far = new THREE.Vector3(), fd = -1;
+      for (let i = 0; i < P.count; i++) { _s3B.fromBufferAttribute(P, i); const d = _s3B.distanceToSquared(cut); if (d > fd) { fd = d; far.copy(_s3B); } }
+      // its thickness: the median distance of its vertices from the cut-to-far line
+      _s3C.subVectors(far, cut); const L2 = Math.max(1e-6, _s3C.lengthSq()), ds = [];
+      for (let i = 0; i < P.count; i += Math.max(1, (P.count / 300) | 0)) {
+        _s3B.fromBufferAttribute(P, i).sub(cut); const t = THREE.MathUtils.clamp(_s3B.dot(_s3C) / L2, 0, 1);
+        ds.push(_s3B.addScaledVector(_s3C, -t).length());
+      }
+      ds.sort((a, b) => a - b);
+      const rad = THREE.MathUtils.clamp(ds[(ds.length / 2) | 0] || 0.04, part === 'H' ? 0.06 : 0.03, part === 'H' ? 0.12 : 0.07);
+      g.userData.cut = cut; g.userData.dmxFar = far; g.userData.dmxR = rad; g.userData.ropes = [];
+      // the clean cap on the cut end (sized to the joint)
+      const toFar = far.clone().sub(cut).normalize();
+      const cap = dmxCap(part === 'H');
+      cap.position.copy(cut).addScaledVector(toFar, 0.008);
+      cap.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), toFar.clone().negate());
+      cap.scale.setScalar(Math.min(SV3_SOCK_R[part], rad * 1.15));
+      g.add(cap); g.userData.dmxCap = cap;
+      return g;
+    }
+    {
+      const baseFx33 = goreRipFx;
+      goreRipFx = function (r, part, at, hold) {
+        let baked = null;
+        try { baked = sv3BakedPiece(r, part); } catch (e) { console.warn('[Dismember] bake', e); }
+        const n0 = gorePieces.length, last0 = gorePieces[n0 - 1];
+        const out = baseFx33(r, part, at, hold);
+        const pc = gorePieces[gorePieces.length - 1];
+        if (baked && pc && pc !== last0 && pc.part === part) {
+          // swap the skinned stand-in for the baked piece
+          const old = pc.g;
+          if (old.userData.dmxCap) { dmxFreeCap(old.userData.dmxCap); old.userData.dmxCap = null; }
+          for (const rp of old.userData.ropes || []) if (rp.grp.parent) rp.grp.parent.remove(rp.grp);
+          if (old.parent) old.parent.remove(old);
+          old.traverse((o) => { if (o.geometry && o.isMesh && !o.isSkinnedMesh && o.geometry !== dmxCapGeo && o.geometry !== dmxRimGeo) { try { o.geometry.dispose(); } catch (e) { } } });
+          for (const m of old.userData.dispose || []) { try { m.dispose(); } catch (e) { } }
+          pc.g = baked; pc.prev.copy(baked.position); pc.dmx = null;
+          if (hold && dmxHandMatrix(hold, _s3M)) pc.dmxOff = _s3M.clone().invert().multiply(baked.matrixWorld); else pc.dmxOff = null;
+        } else if (baked) { if (baked.parent) baked.parent.remove(baked); dmxFreeCap(baked.userData.dmxCap); baked.children[0].geometry.dispose(); }
+        // the original limb: gone from the survivor this frame, and never posed again
+        try {
+          const inst = r ? r.rig : (survivorRig && survivorRig.local), B = inst && inst.bones;
+          if (B) {
+            const bone = part === 'H' ? B.head : B[part].u;
+            if (part !== 'H') { const A = B[part]; A.u.matrixAutoUpdate = A.l.matrixAutoUpdate = A.h.matrixAutoUpdate = true; }
+            bone.scale.setScalar(0.001); bone.updateMatrixWorld(true);
+          }
+        } catch (e) { }
+        return out;
+      };
+    }
+
+    // ---------- the socket caps: on the torso's own bone, sized to the joint ----------
+    {
+      placeWound = function (w, B, part, on, dt, fresh) {
+        const u = w.userData;
+        w.visible = false;                                                  // (the old wound mesh: replaced by the cap)
+        for (const rp of u.ropes || []) rp.grp.visible = false;
+        if (!B || !B.root) return;
+        let cap = u.sv3Cap;
+        if (!cap) { cap = u.sv3Cap = dmxCap(part === 'H'); }
+        if (cap.parent !== B.root) {
+          B.root.add(cap);
+          const mesh = B.root.parent; if (mesh) dmxLayersOf(cap, mesh.layers.mask);
+          // where the socket is (the torso's own space) and which way it faces
+          const p = part === 'H' ? SURVIVOR_NECK_PIVOT.clone() : B[part].bind.u.clone();
+          const nrm = part === 'H' ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(p.x, 0, p.z).normalize().setY(0.35).normalize();
+          if (!Number.isFinite(nrm.x) || nrm.lengthSq() < 1e-6) nrm.set(0, 1, 0);
+          cap.userData.p = p; cap.userData.n = nrm;
+          cap.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), nrm);
+        }
+        cap.visible = on;
+        if (!on) { u.age = 0; return; }
+        if (fresh) u.age = 0;
+        const ws = B.root.getWorldScale(_s3S).x || 1;                      // (the torso's world scale: the cap is sized in metres)
+        const rr = SV3_SOCK_R[part] || 0.075;
+        cap.scale.setScalar(rr / ws);
+        cap.position.copy(cap.userData.p).addScaledVector(cap.userData.n, 0.006 / ws);
+        u.age = (u.age || 0) + dt;
+        if (u.age < 4 && Math.random() < dt * 2) { cap.getWorldPosition(_s3E); bloodDrop(_s3E.x, _s3E.y - 0.01, _s3E.z, 0, -0.2, 0, 0.006); }
+      };
+    }
+
+    // ---------- the machete: fast swings sever, fast thrusts impale (with hit-stop) ----------
+    const SV3 = { prevTip: null, stopUntil: 0, clockWrapped: false };
+    function sv3HitStop(ms = SV3_HITSTOP) {
+      if (!SV3.clockWrapped) {
+        try {
+          const gd = clock.getDelta.bind(clock);
+          clock.getDelta = () => { const d = gd(); return performance.now() < SV3.stopUntil ? d * 0.06 : d; };
+          SV3.clockWrapped = true;
+        } catch (e) { }
+      }
+      SV3.stopUntil = Math.max(SV3.stopUntil, performance.now() + ms);
+    }
+    function sv3PartTargets(r) {
+      const list = [], s = r.st, rp = s.rp | 0;
+      if (!(rp & 4)) list.push({ part: 'H', a: r.pos, b: r.pos, rad: 0.12, need: SV3_SEVER_HEAD });
+      const B = r.rig && r.rig.bones;
+      for (const [k, side] of [[0, 'L'], [1, 'R']]) {
+        if (rp & PART_BIT[side]) continue;
+        const sh = new THREE.Vector3();
+        if (B && B[side] && B[side].u) B[side].u.getWorldPosition(sh);
+        else { const yaw = r.yaw || 0; sh.set(r.pos.x + Math.cos(yaw) * (side === 'L' ? -0.2 : 0.2), r.pos.y - 0.25, r.pos.z - Math.sin(yaw) * (side === 'L' ? -0.2 : 0.2)); }
+        const H = r.hand[k], hd = H && H.ok ? H.p.clone() : sh.clone().setY(sh.y - 0.5);
+        list.push({ part: side, a: sh, b: hd, rad: 0.09, need: SV3_SEVER_ARM });
+      }
+      return list;
+    }
+    const _s3T = new THREE.Vector3(), _s3Mid = new THREE.Vector3(), _s3V2 = new THREE.Vector3(), _s3F = new THREE.Vector3(), _s3Pt = new THREE.Vector3();
+    {
+      const baseMH3 = updateMacheteHits;
+      updateMacheteHits = function (dt) {
+        const N = netState();
+        if (!N.room || playerRole !== 'monster' || !renderer.xr.isPresenting || titleActive || dt <= 0 || N.stunT > 0 || currentMap === 'waiting' || !macheteInHand()) { SV3.prevTip = null; return baseMH3(dt); }
+        mMachete.updateWorldMatrix(true, false);
+        mMachete.localToWorld(_s3T.set(0, 0, MACHETE_BLADE.z1));
+        mMachete.localToWorld(_s3Mid.set(0, 0, (MACHETE_BLADE.z0 + MACHETE_BLADE.z1) / 2));
+        const now = performance.now();
+        // mid hit-stop: no new hits (the slowed clock would make every twitch look fast)
+        if (now < SV3.stopUntil) { SV3.prevTip = (SV3.prevTip || new THREE.Vector3()).copy(_s3T); N.tip = (N.tip || new THREE.Vector3()).copy(_s3T); return; }
+        const prev = SV3.prevTip; SV3.prevTip = (SV3.prevTip || new THREE.Vector3()).copy(_s3T);
+        if (!prev) return baseMH3(dt);
+        _s3V2.subVectors(_s3T, prev).divideScalar(dt);                       // the tip's velocity
+        const speed = _s3V2.length();
+        _s3F.subVectors(_s3T, _s3Mid).normalize();                           // the way the blade points
+        const along = _s3V2.dot(_s3F);
+        if (speed > SV3_SEVER_ARM - 0.5 || along > SV3_THRUST) {
+          for (const r of netPeers().values()) {
+            const s = r.st;
+            if (!s || s.r !== 's' || s.m !== currentMap || s.hp <= 0 || now - r.seen > 2000) continue;
+            if (now - (N.hitCool.get(r.id) || 0) < PVP_COOL) continue;
+            // a thrust into the body: impaled
+            if (along > SV3_THRUST) {
+              _s3A.set(r.pos.x, r.pos.y - 0.15, r.pos.z); _s3B.set(r.pos.x, r.pos.y - 0.6, r.pos.z);
+              if (pvSegDist(_s3T, _s3B, _s3A) < 0.16) {
+                N.hitCool.set(r.id, now);
+                dealDamage(r.id, 50, _s3F.x, _s3F.z);
+                for (let k = 0; k < 22; k++) bloodDrop(_s3T.x, _s3T.y, _s3T.z, -_s3F.x * (0.6 + Math.random()) + (Math.random() - 0.5) * 0.9, 0.3 + Math.random() * 1.1, -_s3F.z * (0.6 + Math.random()) + (Math.random() - 0.5) * 0.9, 0.007 + Math.random() * 0.008);
+                bloodPool(_s3T.x, _s3T.z, r.id, 0.3);
+                try { gameAudio.smash(1.3); gameAudio.squelch(0, 1.4); gameAudio.slice?.(0); } catch (e) { }
+                controllers.forEach((c) => pulse(c, 1, 180));
+                sv3HitStop();
+                showToast(`IMPALED ${String(s.n || 'A SURVIVOR').slice(0, 12).toUpperCase()}!`, '-50 HP');
+                continue;
+              }
+            }
+            // a fast swing through an arm or the neck: it comes off
+            let best = null, bd = Infinity;
+            for (const T of sv3PartTargets(r)) {
+              if (speed < T.need) continue;
+              let d = Infinity;
+              for (const f of [0, 0.5, 1]) { _s3Pt.lerpVectors(_s3Mid, _s3T, f); d = Math.min(d, T.part === 'H' ? _s3Pt.distanceTo(T.a) : pvSegDist(_s3Pt, T.a, T.b)); }
+              if (d < T.rad && d < bd) { bd = d; best = T; }
+            }
+            if (!best) continue;
+            N.hitCool.set(r.id, now);
+            const at = best.part === 'H' ? best.a.clone().setY(best.a.y - 0.08) : best.a.clone();
+            r67Send({ t: 'rip', v: r.id, p: best.part, at: [r3(at.x), r3(at.y), r3(at.z)], n: playerName(), m: currentMap, h: -1 });
+            goreRipFx(r, best.part, at, null);
+            const pc = gorePieces[gorePieces.length - 1];
+            if (pc && pc.part === best.part) { pc.dmxPull = _s3V2.clone().normalize().multiplyScalar(1.4).add(new THREE.Vector3(0, 0.6, 0)); pc.dmx = null; pc.falling = true; pc.landed = false; }
+            if (r.st) r.st.rp = (r.st.rp | 0) | PART_BIT[best.part];
+            controllers.forEach((c) => pulse(c, 1, 140));
+            sv3HitStop(60);
+            try { gameAudio.slice?.(0); gameAudio.squelch(0, 1.2); } catch (e) { }
+            showToast(best.part === 'H' ? 'DECAPITATED!' : `${PART_NAME[best.part]} SEVERED`, String(s.n || 'A survivor').slice(0, 12).toUpperCase());
+          }
+        }
+        return baseMH3(dt);
+      };
+    }
+
+    // ---------- the monster's first-person body: no upper chest, shoulders, neck or head in your own eyes ----------
+    {
+      const baseFP = monFirstPersonGeometry;
+      monFirstPersonGeometry = function (geo) {
+        const g = baseFP(geo);
+        try {
+          let sk = null;
+          MONG.src && MONG.src.scene.traverse((o) => { if (!sk && o.isSkinnedMesh && o.geometry === geo) sk = o.skeleton; });
+          const SI = geo.attributes.skinIndex, SW = geo.attributes.skinWeight, I = g.index;
+          if (!sk || !SI || !SW || !I) return g;
+          const upper = new Set();
+          sk.bones.forEach((b, i) => { if (/^(mixamorig:?)?(spine1|spine2|neck|head|headtop_end|leftshoulder|rightshoulder)$/i.test(b.name)) upper.add(i); });
+          if (!upper.size) return g;
+          const hide = (v) => { let w = 0; for (let c = 0; c < 4; c++) if (upper.has(SI.getComponent(v, c))) w += SW.getComponent(v, c); return w > 0.45; };
+          const out = [];
+          for (let k = 0; k < I.count; k += 3) {
+            const a = I.getX(k), b = I.getX(k + 1), e = I.getX(k + 2);
+            if ((hide(a) ? 1 : 0) + (hide(b) ? 1 : 0) + (hide(e) ? 1 : 0) < 2) out.push(a, b, e);
+          }
+          console.log('[MonsterGLB] first-person body: upper chest left out (' + ((I.count - out.length) / 3) + ' more triangles)');
+          g.setIndex(out);
+        } catch (e) { console.warn('[MonsterGLB] first-person chest', e); }
+        return g;
+      };
+    }
+
+    // =====================================================================
+    //  THE KILL: tension, snap, kill-cam, blood, crunch
+    //  1. Grab-pull: the limb gives 1.12x at most, shaking and rumbling in your controller harder as you pull; past
+    //     0.35 m it snaps off (the baked piece stays in your fist to wave or throw, or drops if you let go).
+    //  2. Kill-cam (the monster's own view, 1.5 s) on a rip, a sever or a fatal machete blow: the world drains to
+    //     high-contrast grey while blood stays deep red, and a crisp white outline flashes round the victim and the
+    //     severed part for 0.8 s, then everything fades back. (It rides three.js's custom tone-mapping slot, which is a
+    //     pass-through the rest of the time: the game's colours, lights and fog are untouched.)
+    //  3. Blood: hits paint blotches onto the survivor's body (everyone sees them), the severed part is stained, the
+    //     monster's fists already are; a dense directional burst of dark droplets and irregular multi-drop splatters
+    //     across the floor under the victim.
+    //  4. Sound: a sub-bass thud (80 -> 30 Hz) with a wet tearing crunch, a 60 ms hit-stop and a strong haptic pulse.
+    // =====================================================================
+    const KC_LEN = 1.5, KC_RIM = 0.8, KC_DESAT = 0.88, KC_OK = { on: false };
+    // ---------- the grey-out: a custom tone map that is the identity unless the kill-cam is on ----------
+    {
+      const chunk = THREE.ShaderChunk ? THREE.ShaderChunk.tonemapping_pars_fragment : null;
+      const old = 'vec3 CustomToneMapping( vec3 color ) { return color; }';
+      const kc = `vec3 CustomToneMapping( vec3 color ) {
+        float kcD = clamp( toneMappingExposure - 1.0, 0.0, 1.0 );
+        if ( kcD <= 0.0 ) return color;
+        float L = dot( color, vec3( 0.2126, 0.7152, 0.0722 ) );
+        vec3 grey = vec3( max( 0.0, ( L - 0.035 ) * 1.75 + 0.035 ) );
+        float red = ( 1.0 - smoothstep( 0.07, 0.22, max( color.g, color.b ) / max( color.r, 1e-4 ) ) ) * step( 0.003, color.r );
+        vec3 keep = color * vec3( 1.45, 0.9, 0.9 );
+        return mix( color, mix( grey, keep, red ), kcD );
+      }`;
+      try {
+        if (typeof chunk === 'string') {
+          const next = chunk.includes(old) ? chunk.replace(old, kc) : chunk.replace(/vec3 CustomToneMapping\( vec3 color \) \{[^}]*\}/, kc);
+          if (next !== chunk) {                                             // (only if the hook really went in)
+            THREE.ShaderChunk.tonemapping_pars_fragment = next;
+            renderer.toneMapping = THREE.CustomToneMapping;
+            renderer.toneMappingExposure = 1;
+            KC_OK.on = true;
+          }
+        }
+      } catch (e) { console.warn('[KillCam] the grey-out could not be set up (the rest of the kill-cam still works)', e); }
+    }
+    // ---------- the white outline: an inverted hull pushed out along the normals ----------
+    function kcHullMat(thick) {
+      const m = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.BackSide, transparent: true, opacity: 1, depthWrite: false, toneMapped: false, fog: false });
+      m.userData.thick = { value: thick };
+      m.onBeforeCompile = (sh) => {
+        sh.uniforms.kcThick = m.userData.thick;
+        sh.vertexShader = 'uniform float kcThick;\n' + sh.vertexShader.replace('#include <begin_vertex>', 'vec3 transformed = vec3( position ) + normalize( normal ) * kcThick;');
+      };
+      m.customProgramCacheKey = () => 'kcHull';
+      return m;
+    }
+    const KC = { t: -1, start: 0, hulls: [] };
+    function kcAddHull(src) {
+      if (!src || !src.geometry || !src.geometry.attributes.normal) return;
+      const ws = src.getWorldScale(new THREE.Vector3()).x || 1;
+      const mat = kcHullMat(0.011 / ws);
+      let h;
+      if (src.isSkinnedMesh) { h = new THREE.SkinnedMesh(src.geometry, mat); src.add(h); h.bind(src.skeleton, src.bindMatrix); }
+      else { h = new THREE.Mesh(src.geometry, mat); src.add(h); }
+      h.frustumCulled = false; h.renderOrder = 3; h.layers.mask = src.layers.mask;
+      h.raycast = () => {};
+      KC.hulls.push(h);
+    }
+    function kcClearHulls() { for (const h of KC.hulls) { if (h.parent) h.parent.remove(h); h.material.dispose(); } KC.hulls.length = 0; }
+    function killCam(r, pc) {
+      if (playerRole !== 'monster') return;
+      kcClearHulls();
+      KC.t = 0; KC.start = performance.now();
+      try { if (r && r.rig && r.rig.mesh) kcAddHull(r.rig.mesh); } catch (e) { }
+      try { if (pc && pc.g) { let m = null; pc.g.traverse((o) => { if (!m && o.isMesh && !o.userData.kcSkip && o.geometry && o.geometry.attributes.normal && o.geometry !== dmxCapGeo && o.geometry !== dmxRimGeo) m = o; }); if (m) kcAddHull(m); } } catch (e) { }
+    }
+    function updateKillCam() {
+      if (KC.t < 0) return;
+      const t = (performance.now() - KC.start) / 1000;                       // (real time: it runs through the hit-stop)
+      KC.t = t;
+      const d = t < 0.06 ? t / 0.06 : t < 0.55 ? 1 : Math.max(0, 1 - (t - 0.55) / (KC_LEN - 0.55));
+      if (KC_OK.on) renderer.toneMappingExposure = 1 + KC_DESAT * d * d * (3 - 2 * d);
+      const ro = t < 0.25 ? 1 : Math.max(0, 1 - (t - 0.25) / (KC_RIM - 0.25));
+      for (const h of KC.hulls) h.material.opacity = ro;
+      if (t >= KC_RIM && KC.hulls.length) kcClearHulls();
+      if (t >= KC_LEN) { KC.t = -1; renderer.toneMappingExposure = 1; kcClearHulls(); }
+    }
+
+    // ---------- the crunch ----------
+    const kcAudio = (() => {
+      let ctx = null, out = null, noise = null;
+      function ok() {
+        try {
+          if (!ctx) {
+            ctx = new (window.AudioContext || window.webkitAudioContext)(); audioTag(ctx, 'sfx');
+            try { out = audioMaster(ctx); } catch (e) { out = ctx.destination; }
+            noise = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+            const d = noise.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+          }
+          if (ctx.state !== 'running') ctx.resume?.();
+          return ctx.state === 'running';
+        } catch (e) { return false; }
+      }
+      function nz(t0, type, f0, f1, q, g, dur) {
+        const s = ctx.createBufferSource(); s.buffer = noise; s.playbackRate.value = 0.7 + Math.random() * 0.6;
+        const f = ctx.createBiquadFilter(); f.type = type; f.Q.value = q; f.frequency.setValueAtTime(f0, t0); f.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t0 + dur);
+        const v = ctx.createGain(); v.gain.setValueAtTime(0, t0); v.gain.linearRampToValueAtTime(g, t0 + 0.004); v.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+        s.connect(f); f.connect(v); v.connect(out); s.start(t0, Math.random() * 0.5); s.stop(t0 + dur + 0.05);
+      }
+      return {
+        crunch(dist = 0, big = 1) {
+          if (!ok()) return;
+          let vol = THREE.MathUtils.clamp(1.25 - dist / 14, 0.08, 1) * big; if (!Number.isFinite(vol)) vol = 0.7;
+          const t = ctx.currentTime;
+          // the sub-bass thud: 80 -> 30 Hz
+          const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.setValueAtTime(80, t); o.frequency.exponentialRampToValueAtTime(30, t + 0.32);
+          const og = ctx.createGain(); og.gain.setValueAtTime(0, t); og.gain.linearRampToValueAtTime(0.95 * vol, t + 0.008); og.gain.exponentialRampToValueAtTime(0.001, t + 0.55);
+          o.connect(og); og.connect(out); o.start(t); o.stop(t + 0.6);
+          const o2 = ctx.createOscillator(); o2.type = 'triangle'; o2.frequency.setValueAtTime(160, t); o2.frequency.exponentialRampToValueAtTime(45, t + 0.12);   // the punch on top of it
+          const og2 = ctx.createGain(); og2.gain.setValueAtTime(0.5 * vol, t); og2.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
+          o2.connect(og2); og2.connect(out); o2.start(t); o2.stop(t + 0.16);
+          // the wet tear: a ripping sweep, the bone and gristle crunching, the squelch under it
+          nz(t, 'bandpass', 2600, 700, 1.4, 0.55 * vol, 0.28);
+          for (let k = 0; k < 7; k++) nz(t + 0.01 + Math.random() * 0.13, 'bandpass', 2400 + Math.random() * 2600, 1800, 5, (0.35 + Math.random() * 0.3) * vol, 0.03 + Math.random() * 0.03);
+          nz(t + 0.02, 'lowpass', 900, 180, 0.8, 0.6 * vol, 0.35);
+        },
+      };
+    })();
+
+    // ---------- the floor: irregular multi-drop splatters ----------
+    const kcSplatTex = [0, 1, 2, 3].map((v) => canvasTexture(256, (g, S) => {
+      g.clearRect(0, 0, S, S);
+      const c = S / 2, fill = (x, y, rx, ry, a) => { g.beginPath(); g.ellipse(x, y, rx, ry, a, 0, Math.PI * 2); g.fill(); };
+      g.fillStyle = '#fff';
+      // the main splash: a lumpy blob of overlapping lobes
+      const lobes = 7 + v * 2;
+      for (let k = 0; k < lobes; k++) { const a = Math.random() * Math.PI * 2, d = Math.random() * S * 0.12; fill(c + Math.cos(a) * d, c + Math.sin(a) * d, S * (0.07 + Math.random() * 0.09), S * (0.05 + Math.random() * 0.07), a); }
+      // spikes and streaks thrown out of it, each ending in a drop
+      const spikes = 9 + v * 3;
+      for (let k = 0; k < spikes; k++) {
+        const a = Math.random() * Math.PI * 2, L = S * (0.16 + Math.random() * 0.26), w = S * (0.006 + Math.random() * 0.016);
+        g.save(); g.translate(c, c); g.rotate(a);
+        g.beginPath(); g.moveTo(S * 0.06, -w); g.lineTo(L, -w * 0.3); g.lineTo(L, w * 0.3); g.lineTo(S * 0.06, w); g.fill();
+        fill(L, 0, w * 1.8, w * 1.4, 0);
+        g.restore();
+      }
+      // satellite droplets scattered round it
+      for (let k = 0; k < 40 + v * 10; k++) { const a = Math.random() * Math.PI * 2, d = S * (0.12 + Math.random() * 0.34), r = S * (0.004 + Math.random() * 0.016); fill(c + Math.cos(a) * d, c + Math.sin(a) * d, r, r * (0.7 + Math.random() * 0.4), a); }
+    }));
+    for (const t of kcSplatTex) { t.colorSpace = THREE.NoColorSpace; t.anisotropy = 4; t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping; }
+    const kcSplatMats = kcSplatTex.map((map) => new THREE.MeshStandardMaterial({ color: 0x4a0505, alphaMap: map, transparent: true, depthWrite: false, roughness: 0.22, metalness: 0.08,
+      polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -6 }));
+    const kcSplatGeo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+    const kcSplats = [];
+    function kcSplat(x, z, size, victim) {
+      let s = kcSplats.length >= 28 ? kcSplats.shift() : null;
+      if (!s) { const m = new THREE.Mesh(kcSplatGeo, kcSplatMats[0]); m.renderOrder = -1; m.receiveShadow = true; m.raycast = () => {}; s = { m }; }
+      s.m.material = kcSplatMats[(Math.random() * kcSplatMats.length) | 0];
+      s.m.position.set(x, goreFloor(x, z) + 0.006 + kcSplats.length * 0.0001, z);
+      s.m.rotation.y = Math.random() * Math.PI * 2;
+      s.bx = size * (0.85 + Math.random() * 0.3); s.bz = size * (0.85 + Math.random() * 0.3);
+      s.m.scale.set(s.bx * 0.4, 1, s.bz * 0.4);
+      s.map = currentMap; s.t = 0; s.victim = victim; s.grow = 0;
+      if (!s.m.parent) scene.add(s.m);
+      s.m.visible = true;
+      kcSplats.push(s);
+    }
+    function updateKcSplats(dt) {
+      for (const s of kcSplats) {
+        s.m.visible = s.map === currentMap;
+        if (s.grow < 1) { s.grow = Math.min(1, s.grow + dt * 5); const k = 0.4 + 0.6 * (1 - (1 - s.grow) ** 3); s.m.scale.set(s.bx * k, 1, s.bz * k); }   // (it lands and spreads)
+      }
+    }
+    // the dense directional burst, and the splatters it leaves under the victim
+    function kcBloodBurst(at, dir, n = 46, victim) {
+      _kcD.copy(dir); _kcD.y = 0; if (_kcD.lengthSq() < 1e-6) _kcD.set(Math.random() - 0.5, 0, Math.random() - 0.5); _kcD.normalize();
+      for (let k = 0; k < n; k++) {
+        const sp = 1.0 + Math.random() * 2.4, spread = 0.55;
+        const vx = _kcD.x * sp + (Math.random() - 0.5) * spread * sp, vz = _kcD.z * sp + (Math.random() - 0.5) * spread * sp;
+        bloodDrop(at.x, at.y, at.z, vx, 0.4 + Math.random() * 1.6, vz, 0.006 + Math.random() * 0.011);
+      }
+      // splatters: one big one under the victim, the rest thrown out the way the blood went
+      kcSplat(at.x, at.z, 0.5 + Math.random() * 0.2, victim);
+      const m = 3 + ((Math.random() * 3) | 0);
+      for (let k = 0; k < m; k++) { const d = 0.35 + Math.random() * 1.2, side = (Math.random() - 0.5) * 0.9; kcSplat(at.x + _kcD.x * d - _kcD.z * side, at.z + _kcD.z * d + _kcD.x * side, 0.18 + Math.random() * 0.3, victim); }
+    }
+    const _kcD = new THREE.Vector3(), _kcA = new THREE.Vector3(), _kcB = new THREE.Vector3();
+
+    // ---------- the severed part: stained with blood ----------
+    const kcStainGeo = new THREE.SphereGeometry(1, 9, 6);
+    const kcStainMat = new THREE.MeshStandardMaterial({ color: 0x3e0404, roughness: 0.18, metalness: 0.1, emissive: 0x0a0000 });
+    function kcStainPiece(pc) {
+      const g = pc && pc.g; if (!g || !g.userData.cut) return;
+      let mesh = null; g.traverse((o) => { if (!mesh && o.isMesh && !o.isSkinnedMesh && o.geometry && o.geometry.attributes.normal && !o.parent.userData.dmxCap && o.geometry !== kcStainGeo) mesh = o; });
+      if (!mesh) return;
+      const P = mesh.geometry.attributes.position, N = mesh.geometry.attributes.normal, cut = g.userData.cut, n = P.count;
+      const near = [];
+      for (let i = 0; i < n; i += Math.max(1, (n / 400) | 0)) { _kcA.fromBufferAttribute(P, i); if (_kcA.distanceTo(cut) < 0.11) near.push(i); }
+      const picks = [];
+      for (let k = 0; k < 9; k++) picks.push(near.length && k < 6 ? near[(Math.random() * near.length) | 0] : (Math.random() * n) | 0);
+      for (const i of picks) {
+        _kcA.fromBufferAttribute(P, i); _kcB.fromBufferAttribute(N, i).normalize();
+        const st = new THREE.Mesh(kcStainGeo, kcStainMat); st.userData.kcSkip = true; st.castShadow = false; st.raycast = () => {};
+        const r = 0.012 + Math.random() * 0.022;
+        st.scale.set(r, r * 0.22, r * (0.6 + Math.random() * 0.8));
+        st.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), _kcB);
+        st.position.copy(_kcA).addScaledVector(_kcB, 0.0015).applyMatrix4(mesh.matrix);
+        st.layers.mask = mesh.layers.mask;
+        mesh.parent.add(st);
+      }
+    }
+
+    // ---------- body blotches from hits, shared through the state ('bh') ----------
+    const KCB = { myHits: 0, wasCaught: false };
+    {
+      const baseHitK = netOnHit;
+      netOnHit = function (id, d) {
+        const hp0 = survival.hp;
+        const r = baseHitK(id, d);
+        if (survival.hp < hp0 || caught) KCB.myHits = Math.min(4, KCB.myHits + 1);
+        return r;
+      };
+      const baseSEk = r67StateExtra;
+      r67StateExtra = function (d) { baseSEk(d); if (playerRole === 'survivor' && KCB.myHits) d.bh = KCB.myHits; };
+      const baseOSk = netOnState;
+      netOnState = function (id, d) { const r = baseOSk(id, d); const p = netPeers().get(id); if (p && p.st && d) p.st.bh = d.bh | 0; return r; };
+      const baseSetSm = setSmears;
+      setSmears = function (list, level) {
+        let hits = 0;
+        if (list && list === ownSmears) hits = playerRole === 'survivor' ? KCB.myHits : 0;
+        else if (list) for (const r of netPeers().values()) if (r.smears === list) { hits = Math.max(r.st ? r.st.bh | 0 : 0, r.kcPredHits && performance.now() < r.kcPredUntil ? r.kcPredHits : 0); break; }
+        return baseSetSm(list, Math.min(3, level + hits * 0.45));
+      };
+    }
+
+    // ---------- the rip / sever: kill-cam, burst, splatters, crunch, hit-stop, haptics ----------
+    {
+      const baseFx34 = goreRipFx;
+      goreRipFx = function (r, part, at, hold) {
+        const n0 = gorePieces.length, last0 = gorePieces[n0 - 1];
+        const out = baseFx34(r, part, at, hold);
+        try {
+          const pc = gorePieces[gorePieces.length - 1], mine = playerRole === 'monster' && (!hold || hold.local !== undefined);
+          const newPc = pc && pc !== last0 && pc.part === part ? pc : null;
+          if (newPc) kcStainPiece(newPc);
+          // which way the blood goes: the way it was pulled (or cut)
+          const B = r ? r.rig && r.rig.bones : (survivorRig && survivorRig.local && survivorRig.local.bones);
+          if (B && B.root) B.root.getWorldPosition(_kcB); else _kcB.copy(at).setY(at.y - 0.5);
+          _kcD.subVectors(at, _kcB);
+          if (hold && hold.local !== undefined && hands[hold.local]) _kcD.subVectors(hands[hold.local].last, _kcB);
+          kcBloodBurst(at, _kcD, 46, r ? r.id : 'self');
+          camera.getWorldPosition(_kcA);
+          kcAudio.crunch(_kcA.distanceTo(at), part === 'H' ? 1.1 : 1);
+          if (mine) {
+            killCam(r, newPc);
+            sv3HitStop(60);
+            controllers.forEach((c) => pulse(c, 1, 120));
+            if (hold && hold.local !== undefined && controllers[hold.local]) pulse(controllers[hold.local], 1, 200);
+          }
+        } catch (e) { console.warn('[KillCam] rip', e); }
+        return out;
+      };
+      // a fatal machete blow (or any of your hits): kill-cam on the kill, blotches where it landed
+      const baseDD = dealDamage;
+      dealDamage = function (peerId, dmg, dirX, dirZ) {
+        const out = baseDD(peerId, dmg, dirX, dirZ);
+        try {
+          const r = netPeers().get(peerId);
+          if (r && r.st && playerRole === 'monster') {
+            r.kcPredHits = Math.min(4, Math.max(r.st.bh | 0, r.kcPredHits && performance.now() < r.kcPredUntil ? r.kcPredHits : 0) + 1); r.kcPredUntil = performance.now() + 2500;
+            const fatal = (+r.st.hp || 0) - dmg <= 0;
+            _kcA.set(r.pos.x, r.pos.y - 0.35, r.pos.z);
+            kcBloodBurst(_kcA, _kcD.set(dirX || 0, 0, dirZ || 0), fatal ? 52 : 22, r.id);
+            if (fatal) {
+              killCam(r, null);
+              camera.getWorldPosition(_kcB); kcAudio.crunch(_kcB.distanceTo(_kcA), 1.15);
+              sv3HitStop(60);
+              controllers.forEach((c) => pulse(c, 1, 160));
+            }
+          }
+        } catch (e) { console.warn('[KillCam] hit', e); }
+        return out;
+      };
+    }
+    // ---------- the pull: the rumble builds in your hand, the limb shakes (read by the arm / head solver) ----------
+    {
+      const baseGG4 = updateGoreGrabs;
+      updateGoreGrabs = function (dt) {
+        goreHold.forEach((G, i) => {
+          if (!G) return;
+          const rr = netPeers().get(G.id);
+          if (!rr || !hands[i] || !partPos(rr, G.part, _kcA)) { G.tension = 0; return; }
+          const pull = _kcA.distanceTo(hands[i].last);
+          G.tension = THREE.MathUtils.clamp((pull - 0.08) / (0.35 - 0.08), 0, 1);
+          G.rumbleT = (G.rumbleT || 0) - dt;
+          if (G.rumbleT <= 0 && controllers[i]) { G.rumbleT = 0.045; pulse(controllers[i], 0.12 + 0.75 * G.tension * G.tension, 40); }
+        });
+        return baseGG4(dt);
+      };
+    }
+    // ---------- every frame ----------
+    {
+      const baseNetK = updateNet;
+      updateNet = function (dt) {
+        const r = baseNetK(dt);
+        try {
+          updateKillCam(); updateKcSplats(dt);
+          if (playerRole !== 'monster' && KC.t >= 0) { KC.t = -1; renderer.toneMappingExposure = 1; kcClearHulls(); }
+          // a fresh life: clean fur again
+          if (KCB.wasCaught && !caught) KCB.myHits = 0;
+          KCB.wasCaught = !!caught;
+        } catch (e) { if (!updateNet.kcWarned) { updateNet.kcWarned = true; console.warn('[KillCam]', e); } }
+        return r;
+      };
+      const baseArriveK = arrive;
+      arrive = function (id) { const r = baseArriveK(id); KCB.myHits = 0; if (KC.t >= 0) { KC.t = -1; renderer.toneMappingExposure = 1; kcClearHulls(); } return r; };
     }
 
     // ---------- XR session hooks ----------
