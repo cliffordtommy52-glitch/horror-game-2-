@@ -6293,6 +6293,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'FIX', date: '26/11/26', title: 'YOUR EYES STAY WITH YOU',
+        text: 'Fixed the black screen after PLAY and the view floating too high in the headset: your view had come loose from your body a few seconds after loading. It now always moves with you.' },
       { tag: 'FIX', date: '26/11/26', title: 'A ROOM OF ITS OWN',
         text: 'The start screen now waits in its own sealed dark room, and PLAY always takes you to the waiting room. The AI monster is back to 1.4x a survivor and keeps its feet on dry land.' },
       { tag: 'NEW MAP', date: '26/11/26', title: 'HALLOWCREEK',
@@ -18560,7 +18562,8 @@
         try { allow(f()); } catch (e) { }
       }
       const strays = [];
-      for (const root of [camera, playerRig]) for (const o of root.children) if (!allowed.has(o) && o !== camera) strays.push(o);
+      // (never a group that holds the camera: the monster's eye lift sits between the rig and the camera)
+      for (const root of [camera, playerRig]) for (const o of root.children) if (!allowed.has(o) && o !== camera && !o.getObjectById(camera.id)) strays.push(o);
       for (const o of strays) { scene.attach(o); console.warn('[Scene] moved off the player rig into the world:', o.name || o.type); }
       return strays.length;
     }
@@ -25615,6 +25618,9 @@
     let monLiftY = 0;
     function monViewLiftY() { return monLiftY; }
     function updateMonLift(dt) {
+      // the lift (and the camera in it) always stays on your rig: if anything has taken it off, it goes straight back
+      if (monLift.parent !== playerRig) { playerRig.add(monLift); monLift.position.set(0, 0, 0); monLift.rotation.set(0, 0, 0); monLift.scale.set(1, 1, 1); }
+      if (camera.parent !== monLift) monLift.add(camera);
       const want = playerRole === 'monster' && renderer.xr.isPresenting && !titleActive ? Math.max(0, MON_EYE_HEIGHT - SPAWN_HEAD_HEIGHT) : 0;
       monLiftY += (want - monLiftY) * Math.min(1, (dt || 0.016) * 5);
       if (Math.abs(want - monLiftY) < 1e-3) monLiftY = want;
@@ -26291,6 +26297,21 @@
     }
     // putting the headset on after PLAY: you start where the game is (the waiting room, or the map you're on)
     renderer.xr.addEventListener('sessionstart', () => { if (!titleActive) resetLocomotion(); });
+    // the lobby's fades can never be left covering your view once you're through PLAY
+    {
+      let fadeStuckT = 0;
+      const baseNetTF = updateNet;
+      updateNet = function (dt) {
+        const r = baseNetTF(dt);
+        try {
+          if (!titleActive && !titleTransition) {
+            if (titleFade.visible || titleFadeMat.opacity > 0) { titleFadeMat.opacity = 0; titleFade.visible = false; }
+            if (lobbyFadeEl.style.opacity === '1') { if ((fadeStuckT += dt) > 1.2) { lobbyFadeEl.style.opacity = '0'; fadeStuckT = 0; } } else fadeStuckT = 0;
+          }
+        } catch (e) { }
+        return r;
+      };
+    }
 
     // ---------- XR session hooks ----------
     renderer.xr.addEventListener('sessionstart', () => {
