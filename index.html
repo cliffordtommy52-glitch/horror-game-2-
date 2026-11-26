@@ -6293,6 +6293,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'FIX', date: '26/11/26', title: 'A ROOM OF ITS OWN',
+        text: 'The start screen now waits in its own sealed dark room, and PLAY always takes you to the waiting room. The AI monster is back to 1.4x a survivor and keeps its feet on dry land.' },
       { tag: 'NEW MAP', date: '26/11/26', title: 'HALLOWCREEK',
         text: 'A fourth map: Maple Lane on Halloween night. Misty street, maples, picket fences, streetlamps, jack-o-lanterns, skeletons, cobwebs, hay and string lights. Walk into five houses with stairs, bedrooms, closets and doors. Hidden: a locked closet with the shotgun and its key, a fire poker and a flashlight.' },
       { tag: 'FIX', date: '26/11/26', title: 'THE MONSTER STANDS TALL',
@@ -10253,6 +10255,38 @@
       desc: 'Halloween night on misty Maple Lane. Search the five houses: a closet key, the shotgun locked in an upstairs closet, a fire poker by a hearth and a flashlight.',
       spawn: { x: 38, z: HALLOW.z, yaw: Math.PI / 2 }, fog: [0x2a2333, 0.07], sky: 0x16121c, hemi: [0x7a6a8c, 0x140e0a, 0.44],
       desk: { cam: [44, 2.2, HALLOW.z + 0.6], target: [30, 1.0, HALLOW.z] } });
+    // =====================================================================
+    //  r89: the start screen is its own sealed dark chamber, far from every map
+    //  The lobby (GRIMAPE header, PLAY, the update log) used to stand in the camp's woods clearing with the camp
+    //  loaded round it. It now stands alone at START_CHAMBER, sealed in a black dome on a solid floor, and while
+    //  it's up no map is loaded except the waiting room (where PLAY takes you). The lobby itself is moved, not rebuilt:
+    //  its group, its panel colliders and its invisible walls are shifted as they are.
+    // =====================================================================
+    const START_CHAMBER = { x: 240, z: -240 };
+    {
+      const dx = START_CHAMBER.x - TITLE_POS.x, dz = START_CHAMBER.z - TITLE_POS.z, ox = TITLE_POS.x, oz = TITLE_POS.z;
+      // the lobby's own colliders (the solid panel curve and the four invisible walls) come with it
+      for (const c of colliders) {
+        const b = c.box;
+        const cx = (b.min.x + b.max.x) / 2 - ox, cz = (b.min.z + b.max.z) / 2 - oz;
+        const w = b.max.x - b.min.x, d = b.max.z - b.min.z, h = b.max.y - b.min.y;
+        const panel = Math.abs(w - 0.2) < 1e-6 && Math.abs(d - 0.2) < 1e-6 && Math.abs(h - (LOBBY_Y0 + LOBBY_H + 0.1)) < 1e-6 && Math.abs(Math.hypot(cx, cz) - (LOBBY_R + 0.15)) < 0.02;
+        const wall = Math.abs(h - 5) < 1e-6 && b.min.y === -1 && ((Math.abs(w - 5.4) < 1e-6 && Math.abs(d - 0.3) < 1e-6 && Math.abs(cx) < 1e-6 && Math.abs(Math.abs(cz) - 2.6) < 1e-6)
+          || (Math.abs(w - 0.3) < 1e-6 && Math.abs(d - 5.4) < 1e-6 && Math.abs(cz) < 1e-6 && Math.abs(Math.abs(cx) - 2.6) < 1e-6));
+        if (panel || wall) { b.min.x += dx; b.max.x += dx; b.min.z += dz; b.max.z += dz; }
+      }
+      TITLE_POS.set(START_CHAMBER.x, 0, START_CHAMBER.z);
+      titleGroup.position.copy(TITLE_POS);
+      // a solid floor to stand on, and a black dome round the whole chamber (nothing outside can ever show)
+      addBoxCollider(START_CHAMBER.x, -1, START_CHAMBER.z, 10, 1, 10);
+      const dome = new THREE.Mesh(new THREE.SphereGeometry(4.8, 32, 16), new THREE.MeshBasicMaterial({ color: 0x030405, side: THREE.BackSide, fog: false }));
+      dome.position.y = 0.5; titleGroup.add(dome);
+      const under = new THREE.Mesh(new THREE.CircleGeometry(4.9, 48), new THREE.MeshBasicMaterial({ color: 0x030405, fog: false }));
+      under.rotation.x = -Math.PI / 2; under.position.y = -0.02; titleGroup.add(under);
+      // you always face the screen when you arrive
+      const basePlace = placeAtTitle;
+      placeAtTitle = function () { const r = basePlace(); playerRig.rotation.set(0, 0, 0); return r; };
+    }
 
     // =====================================================================
     //  3D UI PANELS (map screen + settings menu), TURN MODES, PLAYER ROLE and the PLAYER-DRIVEN MONSTER
@@ -16257,7 +16291,7 @@
       }
       function wanted() {
         const w = new Set();
-        if (titleActive) w.add('camp');                  // the lobby sits in the camp's woods clearing
+        if (titleActive) { w.add('waiting'); return w; }   // the start chamber stands alone: only the waiting room (where PLAY takes you) is ready
         if (currentMap === 'waiting') { w.add('waiting'); w.add(mapSelected || 'camp'); }   // the room, plus the map on the big screen
         else w.add(currentMap);
         if (travel && travel.id) w.add(travel.id);       // the next map is already there while the screen fades
@@ -22725,9 +22759,10 @@
     // =====================================================================
     const MONSTER_GLB_URL = './monster.glb';
     const MON_EYE_HEIGHT = 1.8;             // the monster's eyes: 1.8 off the floor (yours too, in the MONSTER role)
-    const MON_AI_HEIGHT = MON_EYE_HEIGHT / 0.8475;   // its height (about 2.12): tall and imposing, still under the waiting room beams
+    const MON_PLAYER_HEIGHT = MON_EYE_HEIGHT / 0.8475;   // a player's monster (about 2.12): its eyes at MON_EYE_HEIGHT
+    const MON_AI_HEIGHT = 1.4 * SURVIVOR_GLB_HEIGHT * SURVIVOR_GLB_FIT;   // the AI monster: 1.4x a survivor's height (about 0.94)
     const MON_EYE_FRAC = 0.8475;            // its eyes, as a fraction of its height (the mask's eye holes, measured on the model)
-    const MON_REMOTE_MIN_H = MON_AI_HEIGHT; // another player's monster stands this tall too (your own is fitted to your eyes)
+    const MON_REMOTE_MIN_H = MON_PLAYER_HEIGHT; // another player's monster stands this tall too (your own is fitted to your eyes)
     const MONG = { ready: false, src: null, failed: false };
     // the grip in the right hand (model frame, from the machete the model was made holding): where the fist closes and
     // how the handle runs through it (Z along the handle, -Z the way the blade points, Y the back of the blade)
@@ -23160,9 +23195,9 @@
     function poseMonsterGlb(inst, dt, headPos, headQ, bodyYaw, map, grips, minH) {
       // the body stands under the head: feet on the floor, as tall as its eyes are high (it crouches with you)
       let fl = floorUnder(map, headPos.x, headPos.z);
-      let hTarget = THREE.MathUtils.clamp((headPos.y - fl) / MON_EYE_FRAC, 0.4, MON_AI_HEIGHT);
+      let hTarget = THREE.MathUtils.clamp((headPos.y - fl) / MON_EYE_FRAC, 0.4, MON_PLAYER_HEIGHT);
       inst.hMax = Math.max((inst.hMax || hTarget) - dt * 0.02, hTarget);    // its standing height: the tallest you've stood lately
-      const H = Math.max(minH || 0, Math.min(inst.hMax, MON_AI_HEIGHT));            // (others' monsters: never smaller than minH)
+      const H = Math.max(minH || 0, Math.min(inst.hMax, MON_PLAYER_HEIGHT));        // (others' monsters: never smaller than minH)
       if (headPos.y - fl > H * MON_EYE_FRAC + 0.25) fl = headPos.y - H * MON_EYE_FRAC;   // up off the floor (a boat, a jump): legs dangle under you
       const crouch = THREE.MathUtils.clamp(1 - (headPos.y - fl) / (H * MON_EYE_FRAC), 0, 0.6);
       monSetHeight(inst, H);
@@ -26203,6 +26238,59 @@
     }
     // (for the tests)
     window.__hallow = { HALLOW, HC_CHUNKS, HC_ROOMS, hcLock, hcKey, hcTorch, hcGun, hcPoker, hcCloset, hcUnlock, hcFloorAt, hcSeen, hcResetItems, objectiveLines: (m) => objectiveLines(m) };
+    // =====================================================================
+    //  r89: the AI monster stays on solid ground; entering VR after PLAY puts you where you are
+    //  - The AI monster (monster.glb) is drawn at 1.4x a survivor's height (MON_AI_HEIGHT, X27) and its feet are
+    //    kept exactly on the ground under it (groundY: terrain, cabin floors, the dock, the mine's decks and stairs).
+    //  - It never walks into lake water: a step that would take it into the water is undone, and if it's already in
+    //    the water (pushed or knocked there) it wades straight back to the nearest walkable ground. Not while it's
+    //    chained, being dragged or sinking: the Lake Chain victory still hauls it into the deep and down.
+    //  - If you pressed PLAY on the flat screen and then put the headset on, you start in the waiting room (or the
+    //    map you're on), not at the camp's origin.
+    // =====================================================================
+    const aiInWater = (map, x, z) => (map === 'camp' ? waterAt(x, z) : inAnyLake(map, x, z, 0));
+    const aiChainHeld = () => typeof LKC !== 'undefined' && (LKC.att === 'ai' || !!LKC.sink);
+    const _agPrev = new THREE.Vector3();
+    {
+      const baseUAI = updateAI;
+      updateAI = function (dt) {
+        _agPrev.copy(ai.pos);
+        const r = baseUAI(dt);
+        try {
+          if (!ai.active || !ai.map || aiChainHeld()) return r;
+          const map = ai.map, nav = NAV[map], fx = ai.pos.x, fz = ai.pos.z;
+          // keep off the water (whoever runs the AI decides where it walks; the others just draw it)
+          if (aiRole() !== 'puppet' && aiInWater(map, ai.pos.x, ai.pos.z)) {
+            if (!aiInWater(map, _agPrev.x, _agPrev.z)) { ai.pos.x = _agPrev.x; ai.pos.z = _agPrev.z; }
+            else if (nav) {
+              const n = nearestFree(nav, ai.pos.x, ai.pos.z);
+              if (n >= 0) {
+                const tx = nodeX(nav, n), tz = nodeZ(nav, n), dx = tx - ai.pos.x, dz = tz - ai.pos.z, d = Math.hypot(dx, dz);
+                const step = Math.min(d, 2.2 * dt); if (d > 1e-4) { ai.pos.x += dx / d * step; ai.pos.z += dz / d * step; }
+              }
+            }
+            if (ai.path && ai.path.length) ai.pathT = 0;            // plan again from solid ground
+          }
+          // feet on the ground: both bodies move by exactly the correction (sideways out of the water, and down or up
+          // by however far it was off the floor); the stunned fall's own offsets are kept
+          const mx = ai.pos.x - fx, mz = ai.pos.z - fz;
+          const g0 = groundY(map, ai.pos.x, ai.pos.z), off = ai.pos.y - g0;
+          if (Math.abs(off) > 1e-4 || Math.abs(mx) > 1e-6 || Math.abs(mz) > 1e-6) {
+            aiRoot.position.x += mx; aiRoot.position.z += mz; aiRoot.position.y -= off;
+            aiRoot.updateMatrixWorld(true);
+            if (typeof monAI !== 'undefined' && monAI && monAI.root.visible) {
+              monAI.root.position.x += mx; monAI.root.position.z += mz;
+              monAI.root.position.y = Math.max(monAI.root.position.y - Math.max(0, off), g0 - 0.02);
+              monAI.root.updateMatrixWorld(true);
+            }
+            ai.pos.y = g0;
+          }
+        } catch (e) { if (!updateAI.agWarned) { updateAI.agWarned = true; console.warn('[AI ground]', e); } }
+        return r;
+      };
+    }
+    // putting the headset on after PLAY: you start where the game is (the waiting room, or the map you're on)
+    renderer.xr.addEventListener('sessionstart', () => { if (!titleActive) resetLocomotion(); });
 
     // ---------- XR session hooks ----------
     renderer.xr.addEventListener('sessionstart', () => {
