@@ -6293,6 +6293,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'FIX', date: '26/11/26', title: 'MONSTER HANDS AND SIZE',
+        text: 'The monster is now about 1.4x a survivor with its nametag above its head, each controller closes only its own hand with the fingers curling inward, the machete sits in the fist with the blade out past the thumb, and looking down you only see your gloves and machete.' },
       { tag: 'FIX', date: '26/11/26', title: 'MONSTER LOADS AGAIN',
         text: 'Fixed the monster.glb load error (Cannot read properties of undefined): the new monster now loads and replaces the old one.' },
       { tag: 'FIX', date: '26/11/26', title: 'MONSTER LOAD CHECK',
@@ -21519,7 +21521,7 @@
     //  model's hands follow), and it's what you see if monster.glb can't be loaded.
     // =====================================================================
     const MONSTER_GLB_URL = './monster.glb';
-    const MON_AI_HEIGHT = 2.45;             // the AI monster's height (game units): an imposing 2.4-2.5
+    const MON_AI_HEIGHT = 1.6;              // the AI monster's height (game units): about 1.4x a survivor, clear of the ceilings
     const MON_EYE_FRAC = 0.8475;            // its eyes, as a fraction of its height (the mask's eye holes, measured on the model)
     const MON_REMOTE_MIN_H = MON_AI_HEIGHT; // another player's monster stands this tall too (your own is fitted to your eyes)
     const MONG = { ready: false, src: null, failed: false };
@@ -21527,16 +21529,17 @@
     // how the handle runs through it (Z along the handle, -Z the way the blade points, Y the back of the blade)
     // (measured on the re-rigged model: the hollow of each closed fist, the handle along the fingers' curl axis, the
     // blade out of the thumb side)
-    const MON_GRIP_R = { pos: new THREE.Vector3(-0.9140, -0.5322, 0.3552),
+    const MON_GRIP_R = { pos: new THREE.Vector3(-0.8413, -0.6301, 0.2838),
       z: new THREE.Vector3(-0.8500, -0.3327, -0.4083), y: new THREE.Vector3(0.0581, 0.7114, -0.7004) };
-    const MON_GRIP_L0 = { pos: new THREE.Vector3(0.7093, -0.6618, 0.2307),
+    const MON_GRIP_L0 = { pos: new THREE.Vector3(0.7094, -0.6817, 0.2420),
       z: new THREE.Vector3(0.7826, -0.3082, -0.5409), y: new THREE.Vector3(-0.1764, 0.7235, -0.6674) };
     const MON_MIRROR_X = -0.0745;          // the model's centre line (its spine)
     const MON_EYE = new THREE.Vector3(-0.0745, 0.552, -0.075);   // between the mask's eye holes (model units)
     // the fingers' curl axes (model frame = every bone's rest frame): the two big fingers, and the thumb stub
     const MON_CURL = {
-      Left: { finger: new THREE.Vector3(0.7826, -0.3082, -0.5409), thumb: new THREE.Vector3(0.5983, -0.0391, -0.8003) },
-      Right: { finger: new THREE.Vector3(-0.8500, -0.3327, -0.4083), thumb: new THREE.Vector3(-0.8820, -0.4598, -0.1034) },
+      // (checked: about these axes every fingertip closes towards the palm and the thumb tip towards the fingers)
+      Left: { finger: new THREE.Vector3(0.7826, -0.3082, -0.5409), thumb: new THREE.Vector3(0.5835, 0.7663, -0.2689) },
+      Right: { finger: new THREE.Vector3(0.8500, 0.3327, 0.4083), thumb: new THREE.Vector3(0.2950, -0.6715, -0.6797) },
     };
     function gripBasis(z, y) {
       const Z = z.clone().normalize(), Y = y.clone().addScaledVector(Z, -y.dot(Z)).normalize(), X = new THREE.Vector3().crossVectors(Y, Z);
@@ -21751,7 +21754,7 @@
         const ax = MON_CURL[file];
         for (const f of ['Thumb', 'Index', 'Middle', 'Ring', 'Pinky']) for (let k = 1; k <= 3; k++) {
           const b = byName[file + 'Hand' + f + k]; if (!b) continue;
-          inst.fingers[sd].push({ b, axis: (f === 'Thumb' ? ax.thumb : ax.finger).clone().normalize(), ang: f === 'Thumb' ? [0.42, 0.5, 0.42][k - 1] : [0.95, 1.15, 0.95][k - 1] });
+          inst.fingers[sd].push({ b, axis: (f === 'Thumb' ? ax.thumb : ax.finger).clone().normalize(), ang: f === 'Thumb' ? 0.5 : 0.85 });   // (inward only, 0..0.85 rad)
         }
       }
       return inst;
@@ -21775,7 +21778,7 @@
     }
     // aim a bone so the direction to its child (in rest) points along dirWorld
     const _aimQI = new THREE.Quaternion();
-    const MON_ARM_MAX = 0.6, MON_FORE_MAX = 0.7, MON_HAND_MAX = 0.8;        // (tighter: the auto-rigged sleeves tear into spikes past these)                        // the most the upper arm / forearm turn from rest (radians)
+    const MON_ARM_MAX = 1.15, MON_FORE_MAX = 1.5, MON_HAND_MAX = 1.35;      // (still clamped: no extreme shoulder angles)        // (tighter: the auto-rigged sleeves tear into spikes past these)                        // the most the upper arm / forearm turn from rest (radians)
     const _aimDir = new THREE.Vector3(), _aimC = new THREE.Vector3(), _aimR = new THREE.Vector3(), _aimQ = new THREE.Quaternion(), _aimQp = new THREE.Quaternion();
     function aimBone(bone, child, dirWorld, maxAngle) {
       _aimDir.copy(dirWorld).normalize();
@@ -21945,9 +21948,9 @@
     function poseMonsterGlb(inst, dt, headPos, headQ, bodyYaw, map, grips, minH) {
       // the body stands under the head: feet on the floor, as tall as its eyes are high (it crouches with you)
       let fl = floorUnder(map, headPos.x, headPos.z);
-      let hTarget = THREE.MathUtils.clamp((headPos.y - fl) / MON_EYE_FRAC, 0.4, 1.3);
+      let hTarget = THREE.MathUtils.clamp((headPos.y - fl) / MON_EYE_FRAC, 0.4, MON_AI_HEIGHT);
       inst.hMax = Math.max((inst.hMax || hTarget) - dt * 0.02, hTarget);    // its standing height: the tallest you've stood lately
-      const H = Math.max(minH || 0, Math.min(inst.hMax, 1.3));            // (others' monsters: never smaller than minH)
+      const H = Math.max(minH || 0, Math.min(inst.hMax, MON_AI_HEIGHT));            // (others' monsters: never smaller than minH)
       if (headPos.y - fl > H * MON_EYE_FRAC + 0.25) fl = headPos.y - H * MON_EYE_FRAC;   // up off the floor (a boat, a jump): legs dangle under you
       const crouch = THREE.MathUtils.clamp(1 - (headPos.y - fl) / (H * MON_EYE_FRAC), 0, 0.6);
       monSetHeight(inst, H);
@@ -21997,7 +22000,7 @@
         const c = inst.curlS[sd];
         for (const F of inst.fingers[sd]) {
           const r = F.b.userData.rest; if (!r) continue;
-          F.b.quaternion.copy(r.q).multiply(_mcQ.setFromAxisAngle(F.axis, F.ang * c));
+          F.b.quaternion.copy(r.q).multiply(_mcQ.setFromAxisAngle(F.axis, THREE.MathUtils.clamp(F.ang * c, 0, 0.85)));
         }
       }
     }
@@ -22020,7 +22023,8 @@
       }
       for (const sd of ['R', 'L']) {
         const c = controllers.find((cc) => cc.userData.inputSource?.handedness === (sd === 'R' ? 'right' : 'left'));
-        I.curlT[sd] = vr ? (c && btn(c, 1) ? 1 : 0) : (sd === 'R' && macheteInHand() ? 1 : 0);
+        const gb = c && c.userData.inputSource && c.userData.inputSource.gamepad && c.userData.inputSource.gamepad.buttons[1];
+        I.curlT[sd] = vr ? (gb ? (gb.value || (gb.pressed ? 1 : 0)) : 0) : (sd === 'R' && macheteInHand() ? 1 : 0);
       }
       poseMonsterGlb(I, dt, _mmHead, vr ? _mmQ : null, monsterYaw + Math.PI, currentMap, grips);
       // the machete at its usual size in your hand
@@ -22122,6 +22126,11 @@
           I.root.updateMatrixWorld(true);
         }
         remoteMachete(r, I, s);
+        // their nametag and HP bar: floating 0.25 above the top of the model
+        if (r.tag && r.tag.s) {
+          const top = I.root.position.y + (I.height || MON_REMOTE_MIN_H);
+          r.tag.s.position.set(I.root.position.x, top + 0.25 + (r.tag.s.scale.y || 0) * 0.5, I.root.position.z);
+        }
       }
     }
     {
@@ -23861,16 +23870,18 @@
           MONG.src && MONG.src.scene.traverse((o) => { if (!sk && o.isSkinnedMesh && o.geometry === geo) sk = o.skeleton; });
           const SI = geo.attributes.skinIndex, SW = geo.attributes.skinWeight, I = g.index;
           if (!sk || !SI || !SW || !I) return g;
-          const upper = new Set();
-          sk.bones.forEach((b, i) => { if (/^(mixamorig:?)?(spine1|spine2|neck|head|headtop_end|leftshoulder|rightshoulder)$/i.test(b.name)) upper.add(i); });
-          if (!upper.size) return g;
-          const hide = (v) => { let w = 0; for (let c = 0; c < 4; c++) if (upper.has(SI.getComponent(v, c))) w += SW.getComponent(v, c); return w > 0.45; };
+          // your own eyes see only your forearms, gloves, fingers and thumbs: never the coat, chest, collar, shoulders or
+          // head (from inside they're a hollow shell)
+          const arms = new Set();
+          sk.bones.forEach((b, i) => { if (/^(mixamorig:?)?(left|right)(forearm|hand.*)$/i.test(b.name)) arms.add(i); });
+          if (!arms.size) return g;
+          const hide = (v) => { let w = 0; for (let c = 0; c < 4; c++) if (arms.has(SI.getComponent(v, c))) w += SW.getComponent(v, c); return w < 0.5; };
           const out = [];
           for (let k = 0; k < I.count; k += 3) {
             const a = I.getX(k), b = I.getX(k + 1), e = I.getX(k + 2);
-            if ((hide(a) ? 1 : 0) + (hide(b) ? 1 : 0) + (hide(e) ? 1 : 0) < 2) out.push(a, b, e);
+            if (!hide(a) && !hide(b) && !hide(e)) out.push(a, b, e);
           }
-          console.log('[MonsterGLB] first-person body: upper chest left out (' + ((I.count - out.length) / 3) + ' more triangles)');
+          console.log('[MonsterGLB] first-person body: only the forearms and hands (' + (out.length / 3) + ' triangles)');
           g.setIndex(out);
         } catch (e) { console.warn('[MonsterGLB] first-person chest', e); }
         return g;
