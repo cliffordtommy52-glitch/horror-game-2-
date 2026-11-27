@@ -6293,6 +6293,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'FIX', date: '27/11/26', title: 'SHAPE ARMS, DOORS, CRUISERS',
+        text: "THE SHAPE has new arms: solid coverall arms with ball shoulders and elbows and pale fists, sealed at the shoulder, so his sleeves can never stretch into spikes, and his head turns within a real neck's limits. Every Hallowcreek door now fits its frame exactly, with a painted trim frame. The cruisers are rebuilt clean and closed in proper black-and-white livery, and the officer carries a real service pistol. Scenery behind you and outside your view isn't drawn, for smoother frame rates on Quest." },
       { tag: 'NEW', date: '27/11/26', title: 'THE POLICE ARRIVE',
         text: "When the countdown hits 0:00 on Hallowcreek, watch it happen: two cruisers pull up across Main Street, lights and sirens going, the survivors sprint for them with THE SHAPE right behind, and the officer, a proboscis monkey in a navy uniform, badge and peaked cap, steps out from behind his door and puts THE SHAPE on his back. Then YOU ESCAPED. Main Street now runs on out of town at both ends, without the dark pines standing across it." },
       { tag: 'FIX', date: '27/11/26', title: 'HALLOWCREEK HOUSES',
@@ -9598,10 +9600,21 @@
       const wallX = (mat, lz, a0, a1, y0, y1, holes = [], th = T, solid = true, tile = 1.2) => { for (const [s0, s1, b, t] of hcPieces(a0, a1, y0, y1, holes)) L(mat, s0, s1, b, t, lz - th / 2, lz + th / 2, solid, tile); };
       const wallZ = (mat, lx, a0, a1, y0, y1, holes = [], th = T, solid = true, tile = 1.2) => { for (const [s0, s1, b, t] of hcPieces(a0, a1, y0, y1, holes)) L(mat, lx - th / 2, lx + th / 2, b, t, s0, s1, solid, tile); };
       // doors: in a wall along local x (at lz = at, opening centred at lx = c) or along local z (at lx = at, centred at lz = c)
+      // (r101) each slab is cut to its opening: 2 cm narrower and 2 cm shorter than the hole in the wall (1 cm all round,
+      // in the world), hinged 1 cm in from the jamb, and the opening gets a painted trim frame (casing) on both faces
       const door = (axis, at, c, y, paint = doorPaint, o = {}) => {
-        const w = o.w || HC_DW;
-        const hl = axis === 'x' ? [c - w / 2, at] : [at, c + w / 2], yl = axis === 'x' ? 0 : Math.PI / 2;
-        const d = hcDoorAt(Fs.wx(hl[0], hl[1]), y * K, Fs.wz(hl[0], hl[1]), yl + F.ry, paint, { ...o, w: w * K, h: (o.h || HC_DH) * K }); doors.push(d); return d;
+        const ow = o.ow || 0.94, oh = o.oh || 2.0, gap = 0.01 / K;               // the opening (house units: the house is built at K)
+        const w = ow - 2 * gap, h = oh - 2 * gap;
+        const hl = axis === 'x' ? [c - ow / 2 + gap, at] : [at, c + ow / 2 - gap], yl = axis === 'x' ? 0 : Math.PI / 2;
+        const d = hcDoorAt(Fs.wx(hl[0], hl[1]), (y + gap) * K, Fs.wz(hl[0], hl[1]), yl + F.ry, paint, { ...o, w: w * K, h: h * K }); doors.push(d);
+        // the casing: 7 cm boards round the sides and head, standing 1.8 cm proud of each wall face
+        const front = axis === 'x' && at < T, th = front ? T : IT, faces = front ? [-th / 2, th / 2 + PT] : [-th / 2, th / 2], cw = 0.07, cd = 0.018;
+        for (const f of faces) {
+          const z0 = f < 0 ? at + f - cd : at + f, z1 = f < 0 ? at + f : at + f + cd;
+          const strips = [[c - ow / 2 - cw, c - ow / 2, y, y + oh + cw], [c + ow / 2, c + ow / 2 + cw, y, y + oh + cw], [c - ow / 2 - cw, c + ow / 2 + cw, y + oh, y + oh + cw]];
+          for (const [a0, a1, b0, b1] of strips) { if (axis === 'x') L(hcM.trim, a0, a1, b0, b1, z0, z1, false); else L(hcM.trim, z0, z1, b0, b1, a0, a1, false); }
+        }
+        return d;
       };
       const DOOR = (c) => ({ c, w: 0.94, b: FL, t: FL + 2.0 }), DOOR1 = (c) => ({ c, w: 0.94, b: F1, t: F1 + 2.0 });
       const WIN = (c, w = 1.2, up = false) => ({ c, w, b: (up ? F1 : FL) + 0.85, t: (up ? F1 : FL) + 2.0 });
@@ -9771,7 +9784,7 @@
         wallX(paper, 6.3, T, 1.35, F1, C1, [{ c: 0.74, w: 0.92, b: F1, t: F1 + 2.0 }], IT);
         wallZ(paper, 1.35, 6.3, D - T, F1, C1, [], IT);
         door('z', 3.6, 6.9, F1); door('z', 5.4, 1.25, F1); door('z', 5.4, 6.95, F1);
-        H.closet = door('x', 6.3, 0.74, F1, doorPaint, { w: 0.84, h: 1.95, slatted: true });
+        H.closet = door('x', 6.3, 0.74, F1, doorPaint, { ow: 0.92, oh: 2.0, slatted: true });
         L(hcM.ceil, T, W - T, C1, C1 + 0.1, T, D - T, true, 2);
         [['x', T / 2, 1.8, 1.3, -1, true], ['x', T / 2, 4.5, 0.9, -1], ['x', T / 2, 7.2, 1.3, -1, true], ['x', D - T / 2, 1.8, 1.1, 1], ['x', D - T / 2, 7.2, 0.8, 1], ['z', T / 2, 4.6, 1.1, -1], ['z', W - T / 2, 2.4, 1.1, 1]]
           .forEach(([ax, at, c, w, out, shut], k) => winAt(ax, at, c, w, F1 + 0.85, F1 + 2.0, (H.no * 3 + k) % 4 === 0, out, shut));
@@ -9779,7 +9792,7 @@
         L(hcM.ceil, T, W - T, FL + ST, FL + ST + 0.1, T, D - T, true, 2);
         wallX(paper, 6.3, T, 1.35, FL, C0, [{ c: 0.74, w: 0.92, b: FL, t: FL + 2.0 }], IT);
         wallZ(paper, 1.35, 6.3, D - T, FL, C0, [], IT);
-        H.closet = door('x', 6.3, 0.74, FL, doorPaint, { w: 0.84, h: 1.95, slatted: true });
+        H.closet = door('x', 6.3, 0.74, FL, doorPaint, { ow: 0.92, oh: 2.0, slatted: true });
       }
       // ---------- the roof: a pitched gable of shingles, eaves and fascia; the attic is solid ----------
       {
@@ -10967,21 +10980,75 @@
       hcPhoneCord(P);
     }
     // ---------- the police cruiser (black and white, a light bar, POLICE on its doors): parked out of sight ----------
+    // (r101) its own clean model: one closed, flush shell (bumper, nose, hood, cowl, rear deck, trunk) with a closed cabin
+    // on it, glass laid flush on the cabin, the black-and-white livery (white doors and roof, POLICE, HALLOWCREEK P.D.,
+    // the door seams and handles) painted on the sides, wheels with hubcaps, round headlights, grille, tail lights, chrome
+    // bumpers, and the red / blue light bar on the roof. Nothing on it opens or sticks out (only the driver's door, in
+    // the arrival scene, and that's its own piece). Its front is +Z, 5 m long, 1.86 m wide.
     const hcCruiser = (() => {
       const g = new THREE.Group(); g.visible = false; scene.add(g);
-      const G = hcCarGeo.sedan, black = new THREE.MeshStandardMaterial({ color: 0x0c0c10, roughness: 0.35, metalness: 0.4 }), white = new THREE.MeshStandardMaterial({ color: 0xe8e8e4, roughness: 0.35, metalness: 0.3 });
-      for (const [geo, mat] of [[G.body, black], [G.chrome, hcM.chrome], [G.glass, hcM.carGlass], [G.tire, hcM.tire], [G.lf, new THREE.MeshBasicMaterial({ color: 0xfff4d0 })], [G.lr, hcM.taillight]]) g.add(new THREE.Mesh(geo, mat));
-      const B = makeBatch();
-      for (const s of [-1, 1]) B.add(UNIT_BOX, white, s * 0.985, 0.66, 0.1, 0, 0, 0, 0.02, 0.4, 2.2);                                // white doors
-      B.add(UNIT_BOX, white, 0, 1.43, -0.15, 0, 0, 0, 1.74, 0.02, 2.2);                                                            // white roof
-      B.add(UNIT_BOX, hcM.black, 0, 1.52, -0.05, 0, 0, 0, 1.3, 0.12, 0.3);                                                         // the light bar
-      B.add(UNIT_BOX, hcM.iron, 0, 0.6, 2.72, 0, 0, 0, 1.3, 0.4, 0.06);                                                            // push bar
-      B.build(g, { castShadow: false });
+      const black = new THREE.MeshStandardMaterial({ color: 0x0c0c10, roughness: 0.35, metalness: 0.4 }), white = new THREE.MeshStandardMaterial({ color: 0xe8e8e4, roughness: 0.35, metalness: 0.3 });
+      const add = (geo, mat, x = 0, y = 0, z = 0) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = false; m.receiveShadow = false; g.add(m); return m; };
+      const shell = (pts, width, bevel) => {                                   // a side profile (z, y) extruded across the car, rounded at its edges
+        const sh = new THREE.Shape(); pts.forEach(([u, v], i) => (i ? sh.lineTo(u, v) : sh.moveTo(u, v))); sh.closePath();
+        return new THREE.ExtrudeGeometry(sh, { depth: width - 2 * bevel, bevelEnabled: true, bevelThickness: bevel, bevelSize: bevel, bevelSegments: 2, curveSegments: 4 })
+          .rotateY(-Math.PI / 2).translate((width - 2 * bevel) / 2, 0, 0);
+      };
+      // the body: bumper line to bumper line, the nose, a long flat hood, the cowl, the rear deck and a closed trunk
+      add(shell([[-2.46, 0.3], [2.46, 0.3], [2.46, 0.6], [2.4, 0.82], [1.25, 0.92], [-1.5, 0.93], [-2.38, 0.9], [-2.46, 0.66]], 1.86, 0.04), black);
+      // the cabin: windscreen slope, roof, rear window slope (closed)
+      const cab = [[1.18, 0.9], [0.45, 1.36], [-0.95, 1.36], [-1.5, 0.9]];
+      add(shell(cab, 1.6, 0.02), black);
+      add(new THREE.BoxGeometry(1.5, 0.006, 1.34), white, 0, 1.383, -0.25);                                     // the white roof
+      // the glass, flush on the cabin: windscreen and rear window along their slopes, the side windows (front and rear)
+      const glassOn = (a, b, w) => {
+        const A = new THREE.Vector3(0, a[1], a[0]), Bv = new THREE.Vector3(0, b[1], b[0]), d = Bv.clone().sub(A), L = d.length(); d.normalize();
+        const n = new THREE.Vector3(0, -d.z, d.y); if (n.y < 0) n.negate();
+        const m = add(new THREE.BoxGeometry(w, 0.006, L * 0.86), hcM.carGlass);
+        m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), d); m.position.copy(A).add(Bv).multiplyScalar(0.5).addScaledVector(n, 0.026);
+      };
+      glassOn(cab[0], cab[1], 1.44); glassOn(cab[3], cab[2], 1.44);
+      for (const pts of [[[1.04, 0.97], [0.5, 1.3], [-0.12, 1.3], [-0.12, 0.97]], [[-0.24, 0.97], [-0.24, 1.3], [-0.92, 1.3], [-1.36, 0.97]]]) {
+        const sh = new THREE.Shape(); pts.forEach(([u, v], i) => (i ? sh.lineTo(u, v) : sh.moveTo(u, v))); sh.closePath();
+        const geo = new THREE.ShapeGeometry(sh).rotateY(-Math.PI / 2);
+        for (const sd of [-1, 1]) { const m = add(geo, hcM.carGlass, sd * 0.806); if (sd > 0) m.scale.x = -1; }
+      }
+      // the livery on both sides: white doors with POLICE and HALLOWCREEK P.D., the door seams, the wheel arches
+      const liv = (() => {
+        const cv = document.createElement('canvas'); cv.width = 2048; cv.height = 276; const c = cv.getContext('2d');
+        const Wd = cv.width, Hd = cv.height, zx = (z) => ((z + 2.5) / 5.0) * Wd, yy = (y) => Hd - ((y - 0.26) / 0.72) * Hd;
+        c.clearRect(0, 0, Wd, Hd);
+        c.fillStyle = '#ecece8'; c.fillRect(zx(-1.48), yy(0.94), zx(0.96) - zx(-1.48), yy(0.33) - yy(0.94));          // the white doors
+        c.strokeStyle = '#2a2a2e'; c.lineWidth = 4;
+        for (const z of [-1.48, -0.18, 0.96]) { c.beginPath(); c.moveTo(zx(z), yy(0.94)); c.lineTo(zx(z), yy(0.33)); c.stroke(); }   // the door seams
+        c.fillStyle = '#0c0c10'; c.textAlign = 'center'; c.textBaseline = 'middle';
+        c.font = 'bold 118px Arial, sans-serif'; c.fillText('POLICE', zx(-0.26), yy(0.68));
+        c.font = 'bold 40px Arial, sans-serif'; c.fillText('HALLOWCREEK P.D.', zx(-0.26), yy(0.44));
+        c.fillStyle = '#060608';
+        for (const z of [-1.55, 1.55]) { c.beginPath(); c.arc(zx(z), yy(0.34), (0.42 / 5.0) * Wd, Math.PI, 2 * Math.PI); c.fill(); }   // the wheel arches
+        const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; return t;
+      })();
+      const livGeo = new THREE.PlaneGeometry(5.0, 0.72).rotateY(-Math.PI / 2);
+      const livMat = new THREE.MeshStandardMaterial({ map: liv, transparent: true, roughness: 0.4, metalness: 0.2, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+      for (const sd of [-1, 1]) { const m = add(livGeo, livMat, sd * 0.932, 0.62, 0); if (sd > 0) m.scale.x = -1; }
+      for (const sd of [-1, 1]) for (const z of [0.62, -0.62]) add(new THREE.BoxGeometry(0.02, 0.03, 0.16), hcM.chrome, sd * 0.94, 0.84, z);   // door handles
+      // wheels: tyres just proud of the body sides, chrome hubcaps
+      for (const sd of [-1, 1]) for (const z of [1.55, -1.55]) {
+        add(new THREE.CylinderGeometry(0.34, 0.34, 0.24, 20).rotateZ(Math.PI / 2), hcM.tire, sd * 0.84, 0.34, z);
+        add(new THREE.CylinderGeometry(0.19, 0.2, 0.02, 18).rotateZ(Math.PI / 2), hcM.chrome, sd * 0.965, 0.34, z);
+        add(new THREE.CylinderGeometry(0.05, 0.05, 0.03, 10).rotateZ(Math.PI / 2), black, sd * 0.97, 0.34, z);
+      }
+      // the front: grille, round headlights, chrome bumper; the back: tail lights, chrome bumper
+      add(new THREE.BoxGeometry(1.1, 0.2, 0.02), new THREE.MeshStandardMaterial({ color: 0x18181c, roughness: 0.6, metalness: 0.5 }), 0, 0.6, 2.505);
+      const headMat = new THREE.MeshBasicMaterial({ color: 0xfff4d0 });
+      for (const sd of [-1, 1]) { add(new THREE.CylinderGeometry(0.1, 0.1, 0.03, 16).rotateX(Math.PI / 2), headMat, sd * 0.68, 0.62, 2.5); add(new THREE.TorusGeometry(0.105, 0.012, 6, 18), hcM.chrome, sd * 0.68, 0.62, 2.515); }
+      for (const sd of [-1, 1]) add(new THREE.BoxGeometry(0.34, 0.13, 0.02), hcM.taillight, sd * 0.68, 0.72, -2.505);
+      for (const z of [2.53, -2.53]) add(new THREE.BoxGeometry(1.88, 0.12, 0.08), hcM.chrome, 0, 0.4, z);
+      // the light bar
+      add(new THREE.BoxGeometry(1.3, 0.08, 0.3), hcM.black, 0, 1.43, -0.1);
       const red = new THREE.MeshBasicMaterial({ color: 0xff1010, toneMapped: false }), blue = new THREE.MeshBasicMaterial({ color: 0x1030ff, toneMapped: false });
-      const lr = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.1, 0.26), red); lr.position.set(-0.36, 1.53, -0.05); g.add(lr);
-      const lb = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.1, 0.26), blue); lb.position.set(0.36, 1.53, -0.05); g.add(lb);
-      const tex = canvasTexture(256, (c, s) => { c.clearRect(0, 0, s, s); c.fillStyle = '#101018'; c.font = 'bold 64px Arial, sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('POLICE', s / 2, s / 2); c.font = 'bold 22px Arial, sans-serif'; c.fillText('HALLOWCREEK P.D.', s / 2, s / 2 + 52); }, 1);
-      for (const s of [-1, 1]) { const m = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 1.4), new THREE.MeshBasicMaterial({ map: tex, transparent: true })); m.position.set(s * 0.998, 0.66, 0.1); m.rotation.y = s * Math.PI / 2; g.add(m); }
+      const lr = add(new THREE.BoxGeometry(0.55, 0.1, 0.26), red, -0.36, 1.51, -0.1);
+      const lb = add(new THREE.BoxGeometry(0.55, 0.1, 0.26), blue, 0.36, 1.51, -0.1);
       const mkGlow = (col) => { const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: col, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, fog: false })); sp.scale.set(3.2, 3.2, 1); scene.add(sp); return sp; };
       return { group: g, red, blue, lr, lb, glowR: mkGlow(0xff2020), glowB: mkGlow(0x2040ff), farR: mkGlow(0xff2020), farB: mkGlow(0x2040ff) };
     })();
@@ -29632,25 +29699,40 @@
       const capBadge = new THREE.Mesh(new THREE.ExtrudeGeometry(shield, { depth: 0.01, bevelEnabled: false }), gold); capBadge.position.set(0, 0.075, 0.392); capBadge.rotation.x = -0.12; cap.add(capBadge);
       const badge = new THREE.Mesh(new THREE.ExtrudeGeometry(shield, { depth: 0.012, bevelEnabled: false }).scale(1.35, 1.35, 1), gold);
       for (const k of [0, 1]) { const st = new THREE.Mesh(new THREE.CircleGeometry(0.014, 5), new THREE.MeshBasicMaterial({ color: 0x6a4a10 })); st.position.set(0, k ? -0.012 : 0.022, 0.0125); badge.add(st); }
-      // the pistol: a short black service pistol, barrel along +Z (sized in metres, then to the model's units)
+      // the service pistol (r101): dark steel slide with its serrations, ejection port and sights, the barrel's muzzle,
+      // the frame with its dust cover, a trigger guard with the trigger inside it, a grip with black panels and the
+      // magazine base; barrel along +Z, the grip's centre at the origin (sized in metres, then to the model's units)
+      const steel = new THREE.MeshStandardMaterial({ color: 0x1b1d21, roughness: 0.32, metalness: 0.85 }), dark = new THREE.MeshStandardMaterial({ color: 0x0a0a0c, roughness: 0.6, metalness: 0.2 });
       const pistol = new THREE.Group();
-      const slide = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.026, 0.11), black); slide.position.set(0, 0.012, 0.035); pistol.add(slide);
-      const grip = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.06, 0.03).rotateX(0.25), black); grip.position.set(0, -0.022, -0.01); pistol.add(grip);
-      const tip = new THREE.Object3D(); tip.position.set(0, 0.014, 0.095); pistol.add(tip);
+      const P = (geo, mat, x, y, z, rx = 0) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.rotation.x = rx; pistol.add(m); return m; };
+      P(new THREE.BoxGeometry(0.028, 0.032, 0.19), steel, 0, 0.058, 0.055);                                 // the slide
+      for (let k = 0; k < 6; k++) P(new THREE.BoxGeometry(0.0285, 0.026, 0.003), dark, 0, 0.058, -0.03 + k * 0.006);   // rear serrations
+      P(new THREE.BoxGeometry(0.0012, 0.012, 0.04), dark, 0.0145, 0.064, 0.06);                             // the ejection port
+      P(new THREE.CylinderGeometry(0.0075, 0.0075, 0.012, 12).rotateX(Math.PI / 2), steel, 0, 0.054, 0.152); // the muzzle
+      P(new THREE.CylinderGeometry(0.0045, 0.0045, 0.013, 10).rotateX(Math.PI / 2), dark, 0, 0.054, 0.153); // its bore
+      P(new THREE.BoxGeometry(0.004, 0.008, 0.006), steel, 0, 0.078, 0.14);                                  // front sight
+      P(new THREE.BoxGeometry(0.018, 0.008, 0.006), steel, 0, 0.078, -0.03);                                 // rear sight
+      P(new THREE.BoxGeometry(0.026, 0.022, 0.13), steel, 0, 0.031, 0.075);                                  // the frame / dust cover
+      P(new THREE.TorusGeometry(0.022, 0.0035, 6, 16, Math.PI).rotateY(Math.PI / 2).rotateX(Math.PI), steel, 0, 0.022, 0.03);   // the trigger guard
+      P(new THREE.BoxGeometry(0.004, 0.02, 0.006), steel, 0, 0.012, 0.028, 0.35);                            // the trigger
+      P(new THREE.BoxGeometry(0.028, 0.1, 0.038), steel, 0, -0.03, -0.02, 0.22);                             // the grip
+      for (const sd of [-1, 1]) P(new THREE.BoxGeometry(0.003, 0.085, 0.03), dark, sd * 0.0155, -0.028, -0.021, 0.22);   // grip panels
+      P(new THREE.BoxGeometry(0.03, 0.008, 0.042), dark, 0, -0.08, -0.032, 0.22);                            // the magazine base
+      const tip = new THREE.Object3D(); tip.position.set(0, 0.054, 0.16); pistol.add(tip);
       if (fig.rig) {
         const B = survivorRig.bind, s = fig.s, head = fig.rig.bones.head, rootB = fig.rig.bones.root;
         cap.position.set(0.015 - SURVIVOR_NECK_PIVOT.x, 0.6 - SURVIVOR_NECK_PIVOT.y, 0.0 - SURVIVOR_NECK_PIVOT.z); head.add(cap);
         badge.position.set(0.2, -0.09, 0.135); badge.rotation.x = -0.15; badge.scale.setScalar(1.25); rootB.add(badge);
         const hand = fig.rig.bones.R.h, d0 = _hpcV1.copy(B.R.h).sub(B.R.u).normalize();
-        pistol.scale.setScalar(1.05 / s);                                    // (a monkey-sized pistol in the model's units)
+        pistol.scale.setScalar(0.6 / s);                                    // (a monkey-sized pistol in the model's units)
         pistol.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), d0);
-        pistol.position.copy(d0).multiplyScalar(0.07).add(new THREE.Vector3(0, -0.03, 0.02));
+        pistol.position.copy(d0).multiplyScalar(0.06).add(new THREE.Vector3(0, -0.03, 0.0));
         hand.add(pistol);
       } else {
         const r = fig.root;
         cap.scale.setScalar(0.24); cap.position.set(0, 0.49, 0); r.add(cap);
         badge.scale.setScalar(0.5); badge.position.set(0.06, 0.27, -0.145); badge.rotation.y = Math.PI; r.add(badge);
-        pistol.scale.setScalar(1 / r.scale.x * 1.2); pistol.position.set(0.08, 0.25, -0.2); pistol.rotation.y = Math.PI; r.add(pistol);
+        pistol.scale.setScalar(1 / r.scale.x * 0.8); pistol.position.set(0.08, 0.25, -0.2); pistol.rotation.y = Math.PI; r.add(pistol);
       }
       fig.pistol = pistol; fig.tip = tip;
     }
@@ -29721,18 +29803,20 @@
       HPC.carB = C.group.clone(true); HPC.carB.visible = false; scene.add(HPC.carB);
       const mkGlow = (col) => { const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: col, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, fog: false })); sp.scale.set(3.2, 3.2, 1); sp.visible = false; scene.add(sp); return sp; };
       HPC.glowB = [mkGlow(0xff2020), mkGlow(0x2040ff)];
-      // the driver's door (its left, local +X), hinged at its front edge: black, the white stripe, its window
-      const black = new THREE.MeshStandardMaterial({ color: 0x0c0c10, roughness: 0.35, metalness: 0.4 }), white = new THREE.MeshStandardMaterial({ color: 0xe8e8e4, roughness: 0.35, metalness: 0.3 });
-      const door = new THREE.Group(); door.position.set(0.99, 0, 0.92); door.visible = false; C.group.add(door);
-      const panel = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.6, 1.07), black); panel.position.set(0, 0.655, -0.535); door.add(panel);
-      const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.4, 1.0), white); stripe.position.set(0.028, 0.66, -0.535); door.add(stripe);
-      const inner = new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.56, 1.0), new THREE.MeshStandardMaterial({ color: 0x2a2a30, roughness: 0.9 })); inner.position.set(-0.028, 0.66, -0.535); door.add(inner);
-      const frame = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.03, 0.95), black); frame.position.set(-0.1, 1.37, -0.52); door.add(frame);
-      const post = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.42, 0.03), black); post.position.set(-0.08, 1.16, -1.02); door.add(post);
-      const glass = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.4, 0.93), hcM.carGlass); glass.position.set(-0.09, 1.16, -0.52); door.add(glass);
-      const handle = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.03, 0.18), hcM.chrome); handle.position.set(0.035, 0.74, -0.85); door.add(handle);
+      // the driver's door (its left, local +X), hinged at its front edge, cut to the painted door on the body: white
+      // (the livery), a black sill, its window frame and glass, the chrome handle. Shown only once it starts to open
+      const white = new THREE.MeshStandardMaterial({ color: 0xecece8, roughness: 0.35, metalness: 0.3 }), black = new THREE.MeshStandardMaterial({ color: 0x0c0c10, roughness: 0.35, metalness: 0.4 });
+      const door = new THREE.Group(); door.position.set(0.905, 0, 0.95); door.visible = false; C.group.add(door);
+      const DL = 1.12;
+      const panel = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.61, DL), white); panel.position.set(0, 0.635, -DL / 2); door.add(panel);
+      const sill = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.07, DL), black); sill.position.set(0, 0.295, -DL / 2); door.add(sill);
+      const inner = new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.6, DL - 0.04), new THREE.MeshStandardMaterial({ color: 0x2a2a30, roughness: 0.9 })); inner.position.set(-0.028, 0.63, -DL / 2); door.add(inner);
+      const frame = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.03, DL - 0.1), black); frame.position.set(-0.09, 1.3, -DL / 2 - 0.02); door.add(frame);
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.36, 0.03), black); post.position.set(-0.09, 1.13, -DL + 0.03); door.add(post);
+      const glass = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.33, DL - 0.14), hcM.carGlass); glass.position.set(-0.09, 1.13, -DL / 2 - 0.02); door.add(glass);
+      const handle = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.03, 0.16), hcM.chrome); handle.position.set(0.035, 0.84, -DL + 0.35); door.add(handle);
       HPC.door = door;
-      const gap = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.56, 1.05), new THREE.MeshBasicMaterial({ color: 0x050507 })); gap.position.set(1.004, 0.65, 0.39); gap.visible = false; C.group.add(gap);   // the open doorway (the dark cab)
+      const gap = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.6, DL), new THREE.MeshBasicMaterial({ color: 0x050507 })); gap.position.set(0.936, 0.635, 0.95 - DL / 2); gap.visible = false; C.group.add(gap);   // the open doorway (the dark cab)
       HPC.doorGap = gap;
       // the muzzle flash and the hit
       HPC.flash = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xffc070, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
@@ -29776,7 +29860,7 @@
       hcCruiser.cut = true; hcCruiser.group.visible = true;
       HPC.carA0 = { x: hcCruiser.group.position.x > 45 ? hcCruiser.group.position.x : HP_STOP_X, z: HALLOW.z + 1.6 };
       HPC.carB.visible = true; for (const g of HPC.glowB) g.visible = true;
-      HPC.door.visible = true; HPC.door.rotation.y = 0; HPC.doorGap.visible = false;
+      HPC.door.visible = false; HPC.door.rotation.y = 0; HPC.doorGap.visible = false;
       // the monster AI stops where it is (the victory sends it away, as before)
       HPC.aiWasVisible = !!(monAI && monAI.root.visible);
       try { chaseAudio.setTarget(0); } catch (e) { }
@@ -29889,7 +29973,7 @@
       { const g = HPC.glowB; g[0].position.set(B.position.x, 1.6, B.position.z - 0.36); g[1].position.set(B.position.x, 1.6, B.position.z + 0.36); g[0].material.opacity = flip ? 0.95 : 0.05; g[1].material.opacity = flip ? 0.05 : 0.95; }
       // the driver's door swings open
       const dOpen = hpcOut(hpcSeg(t, 2.0, 2.35));
-      HPC.door.rotation.y = -1.1 * dOpen; HPC.doorGap.visible = dOpen > 0.02;
+      HPC.door.rotation.y = -1.1 * dOpen; HPC.door.visible = dOpen > 0.001; HPC.doorGap.visible = dOpen > 0.02;
       // THE SHAPE: chasing down Main Street, shot, thrown over onto his back
       const sh = HPC.shape, H = sh.H;
       const run = hpcShapeRun(Math.min(t, HPC_SHOT[0]));
@@ -30004,6 +30088,320 @@
     }
     // (for the tests)
     window.__hpcut = { HPC, hpcStart, hpcFinish, hpcClear, hpcUpdate, hpcCanPlay, arrived: () => hpArrived() };
+    // =====================================================================
+    //  r101: THE SHAPE's arms and head
+    //  - His rigged arms are gone for good: the torso (Hips, Spine, Spine1, Spine2) stays in its rigid bind pose, every
+    //    triangle of the coverall that belonged to an arm (upper arm, forearm, fist, and the outer shoulder) is dropped
+    //    from the model, the few torso vertices that still carried a share of an arm bone are tied to the chest instead,
+    //    and the arm bones (LeftShoulder..LeftHand, RightShoulder..RightHand, and the leg bones the auto-rigger put on
+    //    his forearms and fists) are collapsed to 0.0001. Nothing can stretch any more, so no sleeve spikes, ever.
+    //  - Each shoulder socket is sealed with a dark charcoal-blue coverall cap, sized to the opening it covers.
+    //  - New arms: ball-and-socket gorilla arms in the same dark coverall (shoulder ball, upper arm, elbow ball,
+    //    forearm, cuff) and pale hands closed in a fist, solved shoulder -> elbow -> fist onto the same fist the old arms
+    //    followed: your controllers (you as the MONSTER), the other player's hands, or the AI's arms. The butcher knife
+    //    sits in that fist exactly as before.
+    //  - His Head turns within a real neck's limits, measured against his body: pitch +-0.55, yaw +-0.95, roll +-0.30
+    //    rad, eased so it turns smoothly instead of snapping or twisting sideways.
+    // =====================================================================
+    const SHAPE_ARM_BONES = /^(Left|Right)(Shoulder|Arm|ForeArm|Hand|Leg|Foot|ToeBase|Toe_End)$/;
+    const SHAPE_HEAD_LIM = { pitch: 0.55, yaw: 0.95, roll: 0.30 };
+    const shapeArmMat = new THREE.MeshStandardMaterial({ color: 0x2b3240, roughness: 0.88, metalness: 0.0 });      // the coverall: dark charcoal blue
+    const shapeHandMat = new THREE.MeshStandardMaterial({ color: 0xd8cfc2, roughness: 0.75, metalness: 0.0 });     // pale hands
+    const shapeSeamMat = new THREE.MeshStandardMaterial({ color: 0x1c212b, roughness: 0.9, metalness: 0.0 });      // the seams and cuffs
+    const SHAPE_ARMDIM = { cap: 0.09, upA: 0.058, upB: 0.05, elbow: 0.053, foA: 0.05, foB: 0.042, cuff: 0.047 };   // (in his height: he is 1 tall in his own frame)
+    // ---------- the model: arms out, sockets measured ----------
+    function shapeStripArms(skinned) {
+      const g = skinned.geometry, P = g.attributes.position, SI = g.attributes.skinIndex, SW = g.attributes.skinWeight, I = g.index;
+      if (!SI || !SW || !I) throw new Error('shape.glb: no skin weights to take the arms off');
+      const bones = skinned.skeleton.bones, armBone = bones.map((b) => SHAPE_ARM_BONES.test(b.name)), isShoulder = bones.map((b) => /^(Left|Right)Shoulder$/.test(b.name));
+      const sideOf = bones.map((b) => (/^Left/.test(b.name) ? 1 : /^Right/.test(b.name) ? -1 : 0));
+      const spine2 = bones.findIndex((b) => b.name === 'Spine2');
+      const bindPos = (name) => { const k = bones.findIndex((b) => b.name === name); return k < 0 ? null : new THREE.Vector3().setFromMatrixPosition(skinned.skeleton.boneInverses[k].clone().invert()); };
+      const hips = bindPos('Hips') || new THREE.Vector3(), jointL = bindPos('LeftArm'), jointR = bindPos('RightArm');
+      const latJ = { 1: jointL ? Math.abs(jointL.x - hips.x) : 0.22, [-1]: jointR ? Math.abs(jointR.x - hips.x) : 0.22 };
+      const n = P.count, wArm = new Float32Array(n), side = new Int8Array(n);
+      for (let i = 0; i < n; i++) {
+        let w = 0; const lat = Math.abs(P.getX(i) - hips.x);
+        for (let c = 0; c < 4; c++) {
+          const j = SI.getComponent(i, c), wt = SW.getComponent(i, c); if (!(wt > 0) || !armBone[j]) continue;
+          if (isShoulder[j] && lat < latJ[sideOf[j]] - 0.03) continue;                 // (the top of the shoulders, by the neck: that's torso)
+          w += wt;
+        }
+        wArm[i] = w; side[i] = P.getX(i) >= hips.x ? 1 : -1;               // (his left is +X)
+      }
+      // drop every triangle with an arm vertex; note the rim of what's left (the shoulder sockets)
+      const keep = [], dropped = new Uint8Array(n), kept = new Uint8Array(n);
+      for (let k = 0; k < I.count; k += 3) {
+        const a = I.getX(k), b = I.getX(k + 1), e = I.getX(k + 2);
+        if (wArm[a] > 0.5 || wArm[b] > 0.5 || wArm[e] > 0.5) { dropped[a] = dropped[b] = dropped[e] = 1; continue; }
+        keep.push(a, b, e); kept[a] = kept[b] = kept[e] = 1;
+      }
+      g.setIndex(keep);
+      // what stays is tied to the chest: any share of an arm bone moves to Spine2 (so it never moves with an arm)
+      if (spine2 >= 0) for (let i = 0; i < n; i++) {
+        let moved = 0;
+        for (let c = 0; c < 4; c++) { const j = SI.getComponent(i, c), wt = SW.getComponent(i, c); if (wt > 0 && armBone[j]) { moved += wt; SW.setComponent(i, c, 0); } }
+        if (moved > 0) {
+          let slot = -1; for (let c = 0; c < 4; c++) if (SI.getComponent(i, c) === spine2) slot = c;
+          if (slot < 0) for (let c = 0; c < 4; c++) if (!(SW.getComponent(i, c) > 0)) { slot = c; break; }
+          if (slot >= 0) { SI.setComponent(i, slot, spine2); SW.setComponent(i, slot, SW.getComponent(i, slot) + moved); }
+        }
+      }
+      SI.needsUpdate = true; SW.needsUpdate = true;
+      // the sockets: the rim vertices on each side (kept and dropped), their centre and reach
+      const sock = {};
+      for (const sd of [1, -1]) {
+        const c = new THREE.Vector3(), v = new THREE.Vector3(); let m = 0;
+        for (let i = 0; i < n; i++) if (kept[i] && dropped[i] && side[i] === sd && Math.abs(P.getX(i) - hips.x) > 0.06) { c.add(v.fromBufferAttribute(P, i)); m++; }
+        const joint = sd > 0 ? jointL : jointR;
+        if (m) c.multiplyScalar(1 / m); else if (joint) c.copy(joint);
+        let r = 0;
+        for (let i = 0; i < n; i++) if (kept[i] && dropped[i] && side[i] === sd && Math.abs(P.getX(i) - hips.x) > 0.06) r = Math.max(r, v.fromBufferAttribute(P, i).distanceTo(c));
+        sock[sd > 0 ? 'L' : 'R'] = { c, r, m, joint: joint ? joint.clone() : c.clone() };
+      }
+      console.log('[ShapeGLB] arms taken off the coverall: ' + ((I.count - keep.length) / 3) + ' triangles; shoulder sockets: L ' + sock.L.m + ' rim verts r ' + sock.L.r.toFixed(3) + ', R ' + sock.R.m + ' rim verts r ' + sock.R.r.toFixed(3));
+      return sock;
+    }
+    {
+      const basePrep = shapePrepare;
+      shapePrepare = function (gltf) {
+        const r = basePrep(gltf);
+        let skinned = null; gltf.scene.traverse((o) => { if (!skinned && o.isSkinnedMesh) skinned = o; });
+        const sock = shapeStripArms(skinned);
+        // the sockets and arm joints in his own 1-tall frame (as shapeInstance places the model)
+        const toRoot = (p) => new THREE.Vector3((p.x - SHAPE.cx) / SHAPE.height, (p.y - SHAPE.minY) / SHAPE.height, (p.z - SHAPE.cz) / SHAPE.height);
+        SHAPE.sockets = {};
+        for (const sd of ['L', 'R']) {
+          const s = sock[sd], fist = toRoot(SHAPE_FIST_MODEL[sd]);
+          const joint = toRoot(s.joint), c = toRoot(s.c), r = THREE.MathUtils.clamp(s.r / SHAPE.height + 0.012, 0.06, 0.16);
+          // the shoulder ball sits in the socket, a little out from its rim's centre towards the old joint
+          const ball = c.clone().lerp(joint, 0.35);
+          // arm lengths from the model's own arm at rest (shoulder -> elbow -> fist)
+          let elbow = null; const k = skinned.skeleton.bones.findIndex((b) => b.name === (sd === 'L' ? 'Left' : 'Right') + 'ForeArm');
+          if (k >= 0) elbow = toRoot(new THREE.Vector3().setFromMatrixPosition(skinned.skeleton.boneInverses[k].clone().invert()));
+          const la = elbow ? Math.max(0.2, ball.distanceTo(elbow)) : 0.38, lb = elbow ? Math.max(0.25, elbow.distanceTo(fist)) : 0.55;
+          SHAPE.sockets[sd] = { ball, cap: c, capR: Math.max(r, SHAPE_ARMDIM.cap), la, lb };
+        }
+        console.log('[ShapeGLB] new arms: L ' + SHAPE.sockets.L.la.toFixed(3) + ' + ' + SHAPE.sockets.L.lb.toFixed(3) + ', R ' + SHAPE.sockets.R.la.toFixed(3) + ' + ' + SHAPE.sockets.R.lb.toFixed(3) + ' (his height)');
+        SHAPE.fpGeo = shapeFirstPersonGeometry(skinned);                       // (your own copy, rebuilt without the arms too)
+        return r;
+      };
+    }
+    // ---------- each copy: arm bones collapsed, its own gorilla arms and caps ----------
+    const _shCyl = new THREE.CylinderGeometry(1, 1, 1, 14, 1), _shBall = new THREE.SphereGeometry(1, 16, 12), _shCap = new THREE.SphereGeometry(1, 20, 14);
+    function shapeBuildHand(sd) {
+      const h = new THREE.Group(), sg = sd === 'L' ? 1 : -1;
+      const palm = new THREE.Mesh(_shBall, shapeHandMat); palm.scale.set(0.05, 0.036, 0.052); palm.position.set(0, 0, -0.006); h.add(palm);
+      for (let f = 0; f < 4; f++) {                                            // four fingers folded into the palm (two knuckle rows)
+        const x = (-0.033 + f * 0.022) * sg;
+        const k1 = new THREE.Mesh(_shBall, shapeHandMat); k1.scale.set(0.0125, 0.0135, 0.016); k1.position.set(x, 0.006, 0.042); h.add(k1);
+        const k2 = new THREE.Mesh(_shBall, shapeHandMat); k2.scale.set(0.0115, 0.013, 0.0145); k2.position.set(x, -0.022, 0.038); h.add(k2);
+        const k3 = new THREE.Mesh(_shBall, shapeHandMat); k3.scale.set(0.011, 0.012, 0.012); k3.position.set(x, -0.032, 0.014); h.add(k3);
+      }
+      const th = new THREE.Mesh(_shCyl, shapeHandMat); th.scale.set(0.012, 0.05, 0.012); th.rotation.set(0.2, 0, sg * 1.15); th.position.set(-0.038 * sg, -0.012, 0.022); h.add(th);
+      const tt = new THREE.Mesh(_shBall, shapeHandMat); tt.scale.setScalar(0.0125); tt.position.set(-0.016 * sg, -0.03, 0.034); h.add(tt);
+      return h;
+    }
+    function shapeBuildArms(I) {
+      if (I.newArms || !SHAPE.sockets) return;
+      for (const b of Object.values(I.byName)) if (/^(Left|Right)(Shoulder|Arm|ForeArm|Hand)$/.test(b.name)) { b.scale.setScalar(0.0001); b.updateMatrixWorld(true); }   // (the rigged arms: collapsed)
+      I.arms = { L: null, R: null };                                           // (the old arm solver has nothing left to move)
+      const g = new THREE.Group(); g.name = 'shapeArms'; I.root.add(g);
+      const mk = (geo, mat) => { const m = new THREE.Mesh(geo, mat); m.castShadow = false; m.receiveShadow = false; m.frustumCulled = false; g.add(m); return m; };
+      I.newArms = {};
+      for (const sd of ['L', 'R']) {
+        const S = SHAPE.sockets[sd], D = SHAPE_ARMDIM;
+        const cap = mk(_shCap, shapeArmMat); cap.position.copy(S.cap); cap.scale.setScalar(S.capR);
+        const seam = mk(new THREE.TorusGeometry(1, 0.06, 6, 20), shapeSeamMat); seam.position.copy(S.cap); seam.scale.setScalar(S.capR * 0.98);
+        const ball = mk(_shBall, shapeArmMat); ball.position.copy(S.ball); ball.scale.setScalar(D.upA * 1.08);
+        const up = mk(new THREE.CylinderGeometry(D.upB, D.upA, 1, 14, 1, true).translate(0, 0.5, 0), shapeArmMat);
+        const elbow = mk(_shBall, shapeArmMat); elbow.scale.setScalar(D.elbow);
+        const fore = mk(new THREE.CylinderGeometry(D.foB, D.foA, 1, 14, 1, true).translate(0, 0.5, 0), shapeArmMat);
+        const cuff = mk(new THREE.CylinderGeometry(D.cuff, D.cuff, 0.03, 14), shapeSeamMat);
+        const hand = shapeBuildHand(sd); g.add(hand); hand.traverse((o) => { if (o.isMesh) { o.castShadow = false; o.frustumCulled = false; } });
+        // the seam ring faces out of the socket (towards the arm's side)
+        seam.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), new THREE.Vector3(sd === 'L' ? 1 : -1, 0.25, 0).normalize());
+        I.newArms[sd] = { S, cap, seam, ball, up, elbow, fore, cuff, hand, sign: sd === 'L' ? 1 : -1 };
+      }
+      if (I.fp) g.traverse((o) => { if (o.isMesh) o.layers.set(0); });         // (your own arms: seen by your eyes and by everyone)
+    }
+    {
+      const baseInst = shapeInstance;
+      shapeInstance = function (firstPerson) {
+        const I = baseInst(firstPerson);
+        try { shapeBuildArms(I); } catch (e) { console.warn('[ShapeGLB] new arms', e); }
+        return I;
+      };
+    }
+    // ---------- posing the new arms: shoulder ball -> elbow -> fist, in his own frame ----------
+    const _saT = new THREE.Vector3(), _saD = new THREE.Vector3(), _saE = new THREE.Vector3(), _saP = new THREE.Vector3(), _saU = new THREE.Vector3(), _saX = new THREE.Vector3(), _saQ = new THREE.Quaternion(), _saM = new THREE.Matrix4();
+    const _saY = new THREE.Vector3(0, 1, 0);
+    function shapeLimb(mesh, a, b) {                                           // a tube from a to b (its geometry runs 0..1 up Y)
+      _saD.subVectors(b, a); const l = _saD.length(); if (l < 1e-6) return;
+      mesh.position.copy(a); mesh.quaternion.setFromUnitVectors(_saY, _saD.multiplyScalar(1 / l)); mesh.scale.set(1, l, 1);
+    }
+    shapeArm = function (Sx, sd, target, upW) {
+      const A = Sx.newArms && Sx.newArms[sd]; if (!A) return;
+      Sx.root.updateMatrixWorld(true);
+      const T = Sx.root.worldToLocal(_saT.copy(target));                      // (his own frame: 1 tall, +Z his front)
+      const sh = A.S.ball, la = A.S.la, lb = A.S.lb;
+      // each fist stays on its own side of his body (the arms never cross in front of his face)
+      const lim = SHAPE_MIDLINE;
+      if (A.sign > 0 && T.x < -lim) T.x = -lim;
+      if (A.sign < 0 && T.x > lim) T.x = lim;
+      const d0 = _saD.subVectors(T, sh); let d = d0.length();
+      const maxD = (la + lb) * 0.999, minD = Math.abs(la - lb) * 1.02 + 1e-4;
+      if (d < 1e-6) { d0.set(0, -1, 0.2).normalize().multiplyScalar(la + lb * 0.5); d = d0.length(); }
+      if (d > maxD) { d0.multiplyScalar(maxD / d); d = maxD; } else if (d < minD) { d0.multiplyScalar(minD / d); d = minD; }
+      const fist = _saP.copy(sh).add(d0);
+      const dir = d0.clone().normalize();
+      const x = (la * la - lb * lb + d * d) / (2 * d), h = Math.sqrt(Math.max(0, la * la - x * x));
+      const pole = new THREE.Vector3(A.sign * 0.6, -1, -0.35); pole.addScaledVector(dir, -pole.dot(dir));
+      if (pole.lengthSq() < 1e-8) pole.set(A.sign, 0, 0);
+      pole.normalize();
+      const elbow = _saE.copy(sh).addScaledVector(dir, x).addScaledVector(pole, h);
+      shapeLimb(A.up, sh, elbow);
+      A.elbow.position.copy(elbow);
+      shapeLimb(A.fore, elbow, fist);
+      // the hand: its fingers along the forearm, the back of the hand up the grip (where the controller / knife says)
+      const z = new THREE.Vector3().subVectors(fist, elbow).normalize();
+      const up = upW ? _saU.copy(upW).applyQuaternion(Sx.root.getWorldQuaternion(_saQ).invert()) : _saU.set(0, 1, 0);
+      up.addScaledVector(z, -up.dot(z)); if (up.lengthSq() < 1e-6) up.set(0, 1, 0).addScaledVector(z, -z.y);
+      up.normalize();
+      const xa = _saX.crossVectors(up, z).normalize();
+      _saM.makeBasis(xa, up, z);
+      A.hand.quaternion.setFromRotationMatrix(_saM);
+      A.hand.position.copy(fist).addScaledVector(z, -0.03);
+      A.cuff.position.copy(fist).addScaledVector(z, -0.075); A.cuff.quaternion.setFromUnitVectors(_saY, z);
+    };
+    // ---------- the head: within a neck's limits, eased ----------
+    const _shQ1 = new THREE.Quaternion(), _shQ2 = new THREE.Quaternion(), _shQ3 = new THREE.Quaternion(), _shQ4 = new THREE.Quaternion(), _shE = new THREE.Euler();
+    function shapeHeadLimit(Sx) {
+      const H = Sx.head; if (!H || !H.parent || !H.userData.rest) return;
+      Sx.root.updateMatrixWorld(true);
+      Sx.root.getWorldQuaternion(_shQ1);                                       // his body
+      H.parent.getWorldQuaternion(_shQ2);                                      // the neck (at rest: the torso is locked)
+      const rest = _shQ3.copy(_shQ2).multiply(H.userData.rest.q);             // the head at rest, in the world
+      const want = H.getWorldQuaternion(_shQ4);                                // where it was turned to
+      // the turn from rest, in his body's frame (Y up, X across, Z forward): yaw, pitch, roll
+      const delta = want.multiply(rest.clone().invert());
+      const db = _shQ1.clone().invert().multiply(delta).multiply(_shQ1);
+      _shE.setFromQuaternion(db, 'YXZ');
+      const L = SHAPE_HEAD_LIM;
+      _shE.set(THREE.MathUtils.clamp(_shE.x, -L.pitch, L.pitch), THREE.MathUtils.clamp(_shE.y, -L.yaw, L.yaw), THREE.MathUtils.clamp(_shE.z, -L.roll, L.roll), 'YXZ');
+      const clamped = new THREE.Quaternion().setFromEuler(_shE);
+      // eased: it follows within those limits, never snapping
+      if (!Sx.headTurn) Sx.headTurn = clamped.clone();
+      else Sx.headTurn.slerp(clamped, 0.28);
+      const worldTurn = _shQ1.clone().multiply(Sx.headTurn).multiply(_shQ1.clone().invert());
+      const final = worldTurn.multiply(rest);
+      H.quaternion.copy(_shQ2.invert().multiply(final));
+      H.updateMatrixWorld(true);
+    }
+    {
+      const baseFollow = shapeFollow;
+      shapeFollow = function (Sx, I, mode, map) {
+        const r = baseFollow(Sx, I, mode, map);
+        try { shapeHeadLimit(Sx); } catch (e) { if (!shapeFollow.hW) { shapeFollow.hW = true; console.warn('[ShapeGLB] head', e); } }
+        return r;
+      };
+    }
+    // =====================================================================
+    //  r101: THE VIEW-CONE CULLER (Hallowcreek, the camp, the graveyard and the mine)
+    //  Every frame, just for the draw of your view: each house, interior, tree, fence, prop or decoration that is more
+    //  than 6 m away AND behind you or outside the forward cone (dot(forwardXZ, toObjectXZ) < 0.15, measured to the
+    //  nearest edge of the object, not its middle) is set visible = false, the view is drawn, and it's put straight back.
+    //  So nothing else in the game ever sees it hidden (pick-ups, the AI's eyes, the minimap, the POV monitor, the
+    //  shadows of your flashlight all carry on as before), and turning round shows it again on the very next frame.
+    //  - The cone is never narrower than what the headset actually shows: the edges of both eyes' views are measured
+    //    every frame, and if they reach wider than the cone (looking steeply up or down), the cone widens to match;
+    //    looking almost straight up or down it stands down for that frame.
+    //  - What it works on is gathered once each time you arrive on a map (a second after, when the map is loaded):
+    //    static scenery in pieces up to about house size; ground, roads and anything spanning the whole map are always
+    //    drawn; avatars, the monster and anything skinned are never touched; nor is anything you carry.
+    //  - The waiting room and the lobby (small, and all in view) are left alone.
+    // =====================================================================
+    const CULL = { list: [], map: null, wait: 0, hid: [], n: 0, culled: 0, on: true, limitCos: 0.15, near: 6, maxR: 14 };
+    const _cuV = new THREE.Vector3(), _cuF = new THREE.Vector3(), _cuB = new THREE.Box3(), _cuS = new THREE.Sphere(), _cuM = new THREE.Matrix4();
+    const CULL_CORNERS = [[-1, -1], [1, -1], [-1, 1], [1, 1], [0, 1], [0, -1], [-1, 0], [1, 0]].map(([x, y]) => new THREE.Vector3(x, y, 0.5));
+    function cullHasSkinned(o) { let f = false; o.traverse((c) => { if (c.isSkinnedMesh || c.isCamera) f = true; }); return f; }
+    function cullCollect(node, out) {
+      for (const ch of node.children) {
+        if (ch === playerRig || ch === camera || ch.isLight || ch.isCamera || (ch.userData && ch.userData.noCull)) continue;
+        if (!ch.visible) continue;                                              // (not part of this map right now)
+        if (cullHasSkinned(ch)) continue;                                       // (avatars, monsters: never)
+        _cuB.makeEmpty(); try { _cuB.setFromObject(ch); } catch (e) { continue; }
+        if (_cuB.isEmpty()) continue;
+        _cuB.getBoundingSphere(_cuS);
+        if (!Number.isFinite(_cuS.radius)) continue;
+        if (_cuS.radius > CULL.maxR) { if (ch.children.length) cullCollect(ch, out); continue; }   // (too big to judge as one: its parts, or always drawn)
+        ch.updateWorldMatrix(true, false);
+        const local = ch.worldToLocal(_cuS.center.clone());
+        const s = ch.matrixWorld.getMaxScaleOnAxis() || 1;
+        out.push({ o: ch, c: local, r: _cuS.radius / s });
+      }
+    }
+    function cullBuild() {
+      const out = [];
+      try { scene.updateMatrixWorld(true); cullCollect(scene, out); } catch (e) { console.warn('[cull] gather', e); }
+      CULL.list = out; CULL.map = currentMap;
+      console.log('[cull] ' + currentMap + ': ' + out.length + ' pieces of scenery watched');
+    }
+    // how far round the view reaches (both eyes in the headset), as the cosine to compare with
+    function cullViewLimit(fx, fz) {
+      let cams = null;
+      if (renderer.xr.isPresenting) { const xc = renderer.xr.getCamera(); cams = xc && xc.cameras && xc.cameras.length ? xc.cameras : [xc]; }
+      else cams = [camera];
+      let minCos = 1;
+      for (const c of cams) {
+        if (!c || !c.projectionMatrixInverse) continue;
+        for (const p of CULL_CORNERS) {
+          _cuV.copy(p).applyMatrix4(c.projectionMatrixInverse).normalize().transformDirection(c.matrixWorld);
+          const h = Math.hypot(_cuV.x, _cuV.z);
+          if (h < 0.2) return -2;                                               // (looking almost straight up or down: stand down)
+          const cs = (_cuV.x * fx + _cuV.z * fz) / h;
+          if (cs < minCos) minCos = cs;
+        }
+      }
+      // the cone: dot < 0.15 is culled, unless the view itself reaches wider (then 5 degrees past the view's edge)
+      const viewAng = Math.acos(THREE.MathUtils.clamp(minCos, -1, 1)) + 0.087;
+      return Math.min(CULL.limitCos, Math.cos(Math.min(Math.PI, viewAng)));
+    }
+    function cullApply() {
+      CULL.hid.length = 0; CULL.culled = 0;
+      if (!CULL.on || titleActive || currentMap === 'waiting') return;
+      if (CULL.map !== currentMap) { if ((CULL.wait += 1) < 60) return; CULL.wait = 0; cullBuild(); }   // (about a second after you arrive)
+      camera.getWorldPosition(_cuF); const px = _cuF.x, pz = _cuF.z;
+      camera.getWorldDirection(_cuV);
+      const fh = Math.hypot(_cuV.x, _cuV.z); if (fh < 0.2) return;
+      const fx = _cuV.x / fh, fz = _cuV.z / fh;
+      const lim = cullViewLimit(fx, fz); if (lim <= -1.5) return;
+      const limAng = Math.acos(THREE.MathUtils.clamp(lim, -1, 1));
+      for (const e of CULL.list) {
+        const o = e.o; if (!o.visible || !o.parent) continue;
+        _cuV.copy(e.c).applyMatrix4(o.matrixWorld);
+        const dx = _cuV.x - px, dz = _cuV.z - pz, d = Math.hypot(dx, dz), r = e.r * (o.matrixWorld.getMaxScaleOnAxis() || 1);
+        if (d - r <= CULL.near) continue;                                       // (within 6 m: always drawn)
+        const cs = (dx * fx + dz * fz) / d;
+        if (cs >= lim) continue;                                                // (in the cone)
+        const ang = Math.acos(THREE.MathUtils.clamp(cs, -1, 1)) - Math.asin(Math.min(1, r / d));
+        if (ang <= limAng) continue;                                            // (its near edge pokes into the cone)
+        o.visible = false; CULL.hid.push(o);
+      }
+      CULL.culled = CULL.hid.length;
+    }
+    function cullRestore() { for (const o of CULL.hid) o.visible = true; CULL.hid.length = 0; }
+    {
+      const baseRenderC = renderer.render.bind(renderer);
+      renderer.render = function (sc, cam) {
+        if (sc !== scene || cam !== camera) return baseRenderC(sc, cam);
+        try { cullApply(); } catch (e) { cullRestore(); if (!CULL.warned) { CULL.warned = true; console.warn('[cull]', e); } }
+        try { return baseRenderC(sc, cam); }
+        finally { cullRestore(); }
+      };
+    }
+    // (for the tests)
+    window.__cull = { CULL, rebuild: () => cullBuild(), apply: () => { cullApply(); const n = CULL.hid.length; cullRestore(); return n; } };
 
     // ---------- XR session hooks ----------
     renderer.xr.addEventListener('sessionstart', () => {
