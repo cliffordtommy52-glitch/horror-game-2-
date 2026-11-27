@@ -6293,6 +6293,10 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'NEW', date: '27/11/26', title: 'THE SHAPE',
+        text: "Hallowcreek's monster is now THE SHAPE (shape.glb): the AI when nobody plays the MONSTER, and you when you do. His arms follow your controllers, Grip holds the butcher knife and letting go drops it, and the finisher is his. The other maps keep their monster." },
+      { tag: 'FIX', date: '27/11/26', title: 'PLAYTEST FIXES',
+        text: "The monster's hands now stay on their own controllers (no more fists crossing in front of your face). Jack o' Harvest carries a clean steel butcher knife: Grip holds it, let go and it drops onto whatever is under it. One WELCOME TO HALLOWCREEK sign, and the HUNT text in the menu wraps with room to spare." },
       { tag: 'FIX', date: '26/11/26', title: 'HALLOWCREEK MONSTER FIXES',
         text: "Jack o' Harvest now hunts Hallowcreek whenever nobody is playing the MONSTER: he patrols the streets, yards and the ground floor of every house, shoves through doors, and goes after the nearest or noisiest survivor. Playing the MONSTER on Hallowcreek, you're now his size (about 1.4x a survivor) instead of towering over the doorways." },
       { tag: 'NEW', date: '26/11/26', title: "JACK O' HARVEST",
@@ -9312,7 +9316,7 @@
       g.fillStyle = 'rgba(120,10,6,0.85)'; g.font = 'bold 30px Georgia, serif'; g.save(); g.translate(s * 0.78, 98); g.rotate(-0.2); g.fillText('LEAVE', 0, 0); g.restore();
       for (let k = 0; k < 6; k++) { g.fillStyle = 'rgba(120,10,6,0.6)'; g.fillRect(s * 0.74 + k * 6, 114, 2, hr(10, 40)); }
     }, 1);
-    hcSignTex.repeat.set(1, 2);
+    hcSignTex.repeat.set(1, 0.5); hcSignTex.offset.set(0, 0.5);         // (the sign is drawn in the top half of the canvas: shown once, not tiled twice)
     const hcClosedTex = canvasTexture(256, (g, s) => {
       g.fillStyle = '#e8e2d0'; g.fillRect(0, 0, s, s);
       for (let k = -2; k < 8; k++) { g.fillStyle = '#c84a10'; g.beginPath(); g.moveTo(k * 40, 0); g.lineTo(k * 40 + 20, 0); g.lineTo(k * 40 + 20 + 64, s); g.lineTo(k * 40 + 64, s); g.closePath(); g.fill(); }
@@ -17688,7 +17692,10 @@
       g.fillStyle = '#c8b894'; g.font = `bold 24px ${UI_FONT}`; g.fillText(survivor ? 'OBJECTIVES' : 'HUNT', LX, y0 + 18);
       if (!survivor) {
         g.fillStyle = '#ff6a5a'; g.font = `19px ${UI_FONT}`;
-        ['You are the MONSTER.', "The survivors' objectives", 'and items stay hidden.', '', 'Stalk the generators and', 'the boat, slash their', 'repairs and catch them', 'before they escape.'].forEach((t, k) => g.fillText(t, LX, y0 + 62 + k * 30));
+        const maxW = LW - 60;                                              // (a clear margin before the map: never clips on the right)
+        const wrap = (text) => { const out = []; let line = ''; for (const w of text.split(' ')) { const t = line ? line + ' ' + w : w; if (line && g.measureText(t).width > maxW) { out.push(line); line = w; } else line = t; } if (line) out.push(line); return out; };
+        ['You are the MONSTER.', ...wrap("The survivors' objectives and items stay hidden."), '', ...wrap('Stalk the generators and the boat, slash their repairs and catch them before they escape.')]
+          .forEach((t, k) => g.fillText(t, LX, y0 + 62 + k * 30, maxW));
       } else if (ending) {
         g.fillStyle = '#6dff8a'; g.font = `bold 26px ${UI_FONT}`; g.fillText('YOU ESCAPED!', LX, y0 + 70);
       } else {
@@ -28253,14 +28260,14 @@
     //    with ember eyes and a fire-lit grin, a burlap collar cinched with rope, a patched red flannel shirt with straw
     //    spilling from the collar, the cuffs, the seams and a tear in the belly, a rope belt, a straw skirt, crude
     //    leather gloves with twig fingers, the broken stake he was nailed to still lashed up his back (the crossbar
-    //    behind his shoulders, the splintered post where his legs should be) and a RUSTY SICKLE.
+    //    behind his shoulders, the splintered post where his legs should be) and a clean KITCHEN BUTCHER KNIFE.
     //  - He's fitted to the monster's skeleton, so every existing animation drives him: the AI, you in the MONSTER
     //    role (your arms on your controllers, the legless gorilla knuckle-walk), and other players' monsters. The
-    //    machete becomes the sickle with the same grip and hit checks: Grip holds it, letting go drops it.
-    //  - The AI Jack knuckle-walks: hunched forward on the stake, his fists (sickle in the right) planting on the
+    //    machete becomes the knife with the same grip and hit checks: Grip holds it, letting go drops it.
+    //  - The AI Jack knuckle-walks: hunched forward on the stake, his fists (knife in the right) planting on the
     //    ground in turn; his pumpkin glows orange in the fog as he comes.
     //  - The same 2-escape struggle. Out of escapes: his FINISHER. He grabs you by the collar and lifts you off your
-    //    feet to his face, the grin blazing, holds you there, then drives the sickle in: the sting, a hard jolt, the
+    //    feet to his face, the grin blazing, holds you there, then drives the knife in: the sting, a hard jolt, the
     //    red flash, and YOU WERE ELIMINATED.
     //  - Everywhere else nothing changes: the camp, the graveyard and the mine keep monster.glb and the machete.
     // =====================================================================
@@ -28534,32 +28541,42 @@
       J.on = on;
       for (const m of J.parts) m.visible = on;
     }
-    // ---------- the rusty sickle: the machete reskinned (same grip, same hit checks) ----------
-    const jkSickleGeo = (() => {
-      // in the machete's frame: the handle along Z (pommel at +Z), the blade out along -Z, its edge down (-Y)
-      const parts = [];
-      const h = new THREE.CylinderGeometry(0.017, 0.02, 0.15, 10).rotateX(Math.PI / 2); h.translate(0, 0, 0.0); parts.push(h);
-      const knob = new THREE.SphereGeometry(0.021, 10, 8); knob.translate(0, 0, 0.078); parts.push(knob);
-      const handle = jkMerge(parts);
-      const fer = new THREE.CylinderGeometry(0.021, 0.021, 0.022, 10).rotateX(Math.PI / 2); fer.translate(0, 0, -0.07);
-      // the crescent: (s = out along the blade, w = up), round a centre ahead of and below the handle
-      const cs = 0.24, cw = -0.15, Ro = Math.hypot(cs - 0.07, cw), a0 = Math.atan2(-cw, 0.07 - cs), a1 = -0.75, N = 28;
-      const sh = new THREE.Shape();
-      for (let k = 0; k <= N; k++) { const a = a0 + (a1 - a0) * (k / N), r = Ro; const x = cs + Math.cos(a) * r, y = cw + Math.sin(a) * r; if (k === 0) sh.moveTo(x, y); else sh.lineTo(x, y); }
-      for (let k = N; k >= 0; k--) { const f = k / N, a = a0 + (a1 - a0) * f, r = Ro - 0.045 * Math.pow(1 - f, 0.8) - 0.002; sh.lineTo(cs + 0.012 + Math.cos(a) * r, cw - 0.012 + Math.sin(a) * r); }
-      const blade = new THREE.ExtrudeGeometry(sh, { depth: 0.004, bevelEnabled: true, bevelThickness: 0.0012, bevelSize: 0.0018, bevelSegments: 1, curveSegments: 4 });
-      const p = blade.attributes.position, uv = blade.attributes.uv;
-      for (let i = 0; i < p.count; i++) uv.setXY(i, p.getX(i) / 0.5, (p.getY(i) + 0.32) / 0.42);
-      blade.rotateY(Math.PI / 2); blade.translate(-0.002, 0, 0);
-      const tang = new THREE.BoxGeometry(0.008, 0.016, 0.03); tang.translate(0, 0, -0.08);
-      return { handle, metal: jkMerge([fer, tang]), blade };
+    // ---------- the butcher knife: the machete reskinned (same grip, same hit checks) ----------
+    // (r96: a clean, straight kitchen butcher knife: riveted wooden handle, steel bolster, a wide flat polished blade
+    //  with a straight spine and a gently curving edge up to the point; it replaces the old knife. Same frame and length
+    //  as the machete it stands in for, so the grip, the hits and the wall contact line up with what you see.)
+    const jkKnifeGeo = (() => {
+      // in the machete's frame: the handle along Z (butt at +Z), the blade out along -Z, its edge down (-Y), flat in YZ
+      const handle = [];
+      { const g = new THREE.BoxGeometry(0.024, 0.034, 0.15, 1, 1, 4); const p = g.attributes.position;          // a slightly swelled, rounded grip
+        for (let i = 0; i < p.count; i++) { const z = p.getZ(i), sw = 1 + 0.12 * Math.cos((z / 0.075) * Math.PI / 2); p.setY(i, p.getY(i) * sw - 0.002); }
+        g.computeVertexNormals(); g.translate(0, 0, 0.003); handle.push(g); }
+      { const g = new THREE.BoxGeometry(0.026, 0.038, 0.012); g.translate(0, -0.002, 0.081); handle.push(g); }   // the butt cap
+      const rivets = [];
+      for (const z of [-0.045, 0.005, 0.05]) for (const s of [-1, 1]) { const g = new THREE.CylinderGeometry(0.0055, 0.0055, 0.004, 10).rotateZ(Math.PI / 2); g.translate(s * 0.0125, -0.001, z); rivets.push(g); }
+      { const g = new THREE.BoxGeometry(0.026, 0.04, 0.016); g.translate(0, -0.004, -0.08); rivets.push(g); }     // the steel bolster
+      // the blade: (s = out along -Z, w = up). Straight spine at the top, a straight edge that sweeps up to the point
+      const sh = new THREE.Shape(), S0 = 0.086, TIP = 0.555, TOP = 0.014, BOT = -0.088;
+      sh.moveTo(S0, TOP); sh.lineTo(TIP - 0.05, TOP); sh.quadraticCurveTo(TIP - 0.012, TOP - 0.002, TIP, TOP - 0.012);
+      sh.quadraticCurveTo(TIP - 0.03, BOT * 0.55, TIP - 0.14, BOT * 0.93); sh.lineTo(S0 + 0.012, BOT); sh.quadraticCurveTo(S0, BOT, S0, BOT + 0.012); sh.lineTo(S0, TOP);
+      const blade = new THREE.ExtrudeGeometry(sh, { depth: 0.0026, bevelEnabled: true, bevelThickness: 0.0009, bevelSize: 0.0016, bevelSegments: 1, curveSegments: 10 });
+      blade.translate(0, 0, -0.0013); blade.rotateY(Math.PI / 2);
+      // the honed edge: a bright narrow band along the bottom
+      const eg = new THREE.Shape(); eg.moveTo(S0 + 0.01, BOT + 0.0005); eg.lineTo(TIP - 0.14, BOT * 0.93 + 0.0005); eg.quadraticCurveTo(TIP - 0.03, BOT * 0.55, TIP - 0.004, TOP - 0.014);
+      eg.lineTo(TIP - 0.012, TOP - 0.016); eg.quadraticCurveTo(TIP - 0.036, BOT * 0.5, TIP - 0.142, BOT * 0.93 + 0.009); eg.lineTo(S0 + 0.012, BOT + 0.009); eg.lineTo(S0 + 0.01, BOT + 0.0005);
+      const edge = new THREE.ExtrudeGeometry(eg, { depth: 0.0046, bevelEnabled: false, curveSegments: 10 }); edge.translate(0, 0, -0.0023); edge.rotateY(Math.PI / 2);
+      return { handle: jkMerge(handle), metal: jkMerge(rivets), blade, edge };
     })();
+    jkM.knifeWood = new THREE.MeshStandardMaterial({ color: 0x5a3820, roughness: 0.62 });
+    jkM.knifeSteel = new THREE.MeshStandardMaterial({ color: 0xc9ced3, roughness: 0.2, metalness: 0.95 });
+    jkM.knifeEdge = new THREE.MeshStandardMaterial({ color: 0xf2f4f6, roughness: 0.12, metalness: 1 });
+    jkM.knifeRivet = new THREE.MeshStandardMaterial({ color: 0xb8bcc0, roughness: 0.3, metalness: 0.9 });
     function jkSickleFor(machete) {
       if (!machete) return null;
       if (machete.userData.jkSickle) return machete.userData.jkSickle;
       const orig = []; machete.traverse((o) => { if ((o.isMesh || o.isSprite) && o !== machete) orig.push(o); });
-      const g = new THREE.Group(); g.name = 'jackSickle';
-      for (const [geo, mat] of [[jkSickleGeo.handle, jkM.handle], [jkSickleGeo.metal, jkM.rust], [jkSickleGeo.blade, jkM.rust]]) { const m = new THREE.Mesh(geo, mat); m.castShadow = true; m.frustumCulled = false; g.add(m); }
+      const g = new THREE.Group(); g.name = 'jackKnife';
+      for (const [geo, mat] of [[jkKnifeGeo.handle, jkM.knifeWood], [jkKnifeGeo.metal, jkM.knifeRivet], [jkKnifeGeo.blade, jkM.knifeSteel], [jkKnifeGeo.edge, jkM.knifeEdge]]) { const m = new THREE.Mesh(geo, mat); m.castShadow = true; m.frustumCulled = false; g.add(m); }
       g.visible = false; machete.add(g);
       const S = { g, orig, on: null };
       machete.userData.jkSickle = S;
@@ -28579,22 +28596,22 @@
       const t = performance.now() * 0.001;
       jkM.pumpkin.emissiveIntensity = (jkFin.glare || 1) * (1.15 + 0.25 * Math.sin(t * 11) * Math.sin(t * 3.3) + 0.15 * Math.random());
       // the AI
-      const aiJack = !!(monAI && ai.map === JACK_MAP);
-      jkSet(monAI, aiJack);
+      const aiJack = !!(monAI && ai.map === JACK_MAP), shp = shapeReady();      // (r97: THE SHAPE, once shape.glb is in, replaces Jack; the knife stays)
+      jkSet(monAI, aiJack && !shp);
       if (typeof aiMacheteClone !== 'undefined' && aiMacheteClone) jkSickleSet(aiMacheteClone, aiJack);
       // you as the monster (and your machete wherever it lies)
       const meJack = !!(monMe && currentMap === JACK_MAP);
-      jkSet(monMe, meJack);
+      jkSet(monMe, meJack && !shp);
       jkSickleSet(mMachete, currentMap === JACK_MAP);
       // other players' monsters on Hallowcreek
       for (const r of netPeers().values()) {
         if (!r.monGlb) continue;
         const on = !!(r.st && r.st.m === JACK_MAP);
-        jkSet(r.monGlb, on);
+        jkSet(r.monGlb, on && !shp);
         if (r.monGlbMachete) jkSickleSet(r.monGlbMachete, on);
       }
       // his pumpkin lights the fog round him
-      const want = aiJack && monAI.root.visible && currentMap === JACK_MAP && !titleActive;
+      const want = aiJack && !shp && monAI.root.visible && currentMap === JACK_MAP && !titleActive;
       if (want && !jkLit) { lightSources.push(jkLight); jkLit = true; }
       if (!want && jkLit) { const i = lightSources.indexOf(jkLight); if (i >= 0) lightSources.splice(i, 1); jkLit = false; }
       if (jkLit) {
@@ -28633,7 +28650,7 @@
           const amt = moving ? THREE.MathUtils.clamp(I.speed / 1.2, 0.35, 1) : 0;
           for (const sd of ['R', 'L']) {
             const C = I.bones[sd]; if (!C || !C.u) continue;
-            if (sd === 'R' && ai.slash) {                                      // the sickle's slash: as before, from the hunched body
+            if (sd === 'R' && ai.slash) {                                      // the knife's slash: as before, from the hunched body
               aiParts.arms[0].hand.getWorldPosition(_jkT);
               _jkQ.copy(aiRoot.quaternion).multiply(aiParts.arms[0].hand.quaternion);
               monArmIK(I, 'R', _jkT, _jkQ, 0.9);
@@ -28653,7 +28670,7 @@
     }
 
     // =====================================================================
-    //  THE FINISHER: lifted by the collar, the sickle, YOU WERE ELIMINATED
+    //  THE FINISHER: lifted by the collar, the knife, YOU WERE ELIMINATED
     // =====================================================================
     const JK_T = { lift0: 0.2, lift1: 0.95, stab: 1.8, overlay: 2.65 };
     const jkFin = { glare: 1 };
@@ -28662,12 +28679,12 @@
       beginCatch = function () {
         const had = !!caught;
         const r = baseBC();
-        if (!had && caught && caught.quick && !caught.pvp && ai.map === JACK_MAP && currentMap === JACK_MAP && monAI && monAI.jack && !monAI.jack.failed) {
+        if (!had && caught && caught.quick && !caught.pvp && ai.map === JACK_MAP && currentMap === JACK_MAP && monAI && (shapeReady() || (monAI.jack && !monAI.jack.failed))) {
           caught.jack = { stabbed: false, rig0: playerRig.position.clone(), shake: 0, growled: false };
           redFlash.material.opacity = 0.6;
           try { flashEl.style.transition = 'none'; flashEl.style.opacity = 0.5; } catch (e) { }
           ai.state = 'catch'; ai.slash = null;
-          showToast('JACK O\' HARVEST HAS YOU', '');
+          showToast(hcMonsterName().toUpperCase() + ' HAS YOU', '');
         }
         return r;
       };
@@ -28684,7 +28701,7 @@
       // left fist: your collar
       _jkT.copy(_jkH).add(new THREE.Vector3(0, -0.13, 0)).addScaledVector(_jkF.set(ai.pos.x - _jkH.x, 0, ai.pos.z - _jkH.z).normalize(), 0.06);
       jkArm(I, 'L', _jkT, -0.2);
-      // right: the sickle raised high and back... then driven in
+      // right: the knife raised high and back... then driven in
       const C2 = I.bones.R; if (C2 && C2.u) C2.u.getWorldPosition(_jkS);
       const back = _jkF.set(Math.sin(ai.heading), 0, Math.cos(ai.heading));
       const raised = _jkS.clone().add(new THREE.Vector3(0, 0.22 * Hw, 0)).addScaledVector(back, -0.12 * Hw);
@@ -28725,7 +28742,7 @@
           if (!J.growled && t > JK_T.lift1 - 0.2) { J.growled = true; try { gameAudio.growl(); } catch (e) { } try { chaseAudio.heartbeat?.(1); } catch (e) { } }
           if (vr && Math.random() < dt * 10) for (const c of controllers) pulse(c, 0.15 + 0.25 * (t / JK_T.stab), 25);
         } else if (!J.stabbed) {
-          // the sickle
+          // the knife
           J.stabbed = true; J.shake = 0.5; jkFin.glare = 2.8;
           try { chaseAudio.sting(); } catch (e) { }
           try { gameAudio.smash(1.5); } catch (e) { }
@@ -28749,14 +28766,14 @@
         if (caughtGroup.visible) placeCaughtPanel(false);
       };
     }
-    // the caught screen's words on Hallowcreek: YOU WERE ELIMINATED (by the AI's sickle, or by a player's)
+    // the caught screen's words on Hallowcreek: YOU WERE ELIMINATED (by the AI's knife, or by a player's)
     const jkTitleSaved = { t: null, s: null };
     function jkTitles(on) {
       const t = caughtEl.querySelector('.c-title'), s = caughtEl.querySelector('.c-sub'); if (!t || !s) return;
       if (on) {
         if (jkTitleSaved.t === null) { jkTitleSaved.t = t.textContent; jkTitleSaved.s = s.textContent; }
         t.textContent = 'YOU WERE ELIMINATED';
-        if (!(caught && caught.pvp)) s.textContent = "Jack o' Harvest got you.";
+        if (!(caught && caught.pvp)) s.textContent = (hcMonsterName() + ' got you.');
       } else if (jkTitleSaved.t !== null) { t.textContent = jkTitleSaved.t; if (!(caught && caught.pvp)) s.textContent = jkTitleSaved.s; jkTitleSaved.t = null; }
     }
     {
@@ -28766,7 +28783,7 @@
         const fill = g.fillText;
         g.fillText = function (text, x, y, maxW) {
           if (text === 'YOU WERE CAUGHT') return fill.call(this, 'YOU WERE ELIMINATED', x, y, p.cw - 70);
-          if (text === 'The monster got you.') return fill.call(this, "Jack o' Harvest got you.", x, y, maxW);
+          if (text === 'The monster got you.') return fill.call(this, (hcMonsterName() + ' got you.'), x, y, maxW);
           return maxW === undefined ? fill.call(this, text, x, y) : fill.call(this, text, x, y, maxW);
         };
         try { return baseDraw.call(this, g, p); } finally { g.fillText = fill; }
@@ -28931,6 +28948,390 @@
       reach: (ax, az, bx, bz) => { const n = NAV.hallowcreek; const p = findPath(n, nearestFree(n, ax, az), nearestFree(n, bx, bz)); if (!p || !p.length) return null; const e = p[p.length - 1]; return { len: p.length, end: [e.x, e.z], dist: Math.hypot(e.x - bx, e.z - bz) }; },
       dist: (ax, az) => { const n = NAV.hallowcreek; const d = walkDistances(n, nearestFree(n, ax, az)); let reach = 0; for (let k = 0; k < d.length; k++) if (d[k] >= 0) reach++; return reach; },
       nodeFree: (x, z) => { const n = NAV.hallowcreek; return n.free[Math.round((x - n.D.x0) / n.D.step) * n.nz + Math.round((z - n.D.z0) / n.D.step)]; } };
+    // =====================================================================
+    //  r96: the monster's hands on their own controllers, and the knife that drops cleanly
+    //  - THE HANDS: on this monster model the fist (where it holds the blade, and where your controller is) sits a long way
+    //    past the wrist. The arm solver turns the hand to your controller's angle, but limits how far a wrist may twist
+    //    (past that the rigged sleeve tears into spikes); whenever that limit kicked in (hands up in front of your face,
+    //    controllers turned inwards), the long hand swung round on the clamped wrist and its fist ended up far from your
+    //    controller: the two fists crossed and overlapped in front of you. Now, after solving, each fist is measured where
+    //    it actually is, and the arm is re-aimed by the difference (a few quick passes) until the fist is on its own
+    //    controller. Rotation still follows the controller as far as the wrist allows. Every monster: you, others' (from
+    //    their tracked hands) and the AI's slashes; every map.
+    //  - THE KNIFE (Hallowcreek's butcher knife, the machete elsewhere) dropped on Hallowcreek lands on whatever is really
+    //    under it: the upstairs floor, a table, a porch, the road (before, it could drop through to the floor below, or
+    //    sink under a house floor out of reach). It has no collider, held or dropped, so it never gets in your way.
+    //  - On Hallowcreek the monster's messages say KNIFE, not MACHETE.
+    // =====================================================================
+    const MON_IK_PASSES = 3, MON_IK_TOL = 0.006;
+    const _r96A = new THREE.Vector3(), _r96T = new THREE.Vector3(), _r96E = new THREE.Vector3();
+    {
+      const baseIK = monArmIK;
+      monArmIK = function (inst, side, gripPos, gripQ, elbowOut) {
+        baseIK(inst, side, gripPos, gripQ, elbowOut);
+        const C = inst && inst.bones && inst.bones[side], G = MON_GRIP[side];
+        if (!C || !C.h || !C.h.userData.restW || !G || !gripPos) return;
+        _r96T.copy(gripPos);
+        for (let k = 0; k < MON_IK_PASSES; k++) {
+          // where the fist really is now (the grip, carried by the hand bone as it ended up)
+          C.h.updateMatrixWorld(true);
+          C.h.localToWorld(_r96A.copy(G.pos).sub(C.h.userData.restW));
+          _r96E.subVectors(gripPos, _r96A);
+          if (!(_r96E.lengthSq() > MON_IK_TOL * MON_IK_TOL)) break;              // (on its controller: done; NaN-safe)
+          _r96T.add(_r96E);                                                       // aim the arm further by what's missing
+          baseIK(inst, side, _r96T, gripQ, elbowOut);
+        }
+      };
+    }
+    // ---------- the dropped knife on Hallowcreek: lands on the real surface below it ----------
+    {
+      const baseUDM = updateDroppedMachete;
+      updateDroppedMachete = function (dt) {
+        if (currentMap !== 'hallowcreek' || MCH.state !== 'world' || MCH.landed) return baseUDM(dt);
+        const m = mMachete, prevY = m.position.y;
+        MCH.vel.y -= 9.8 * dt;
+        m.position.addScaledVector(MCH.vel, dt);
+        m.rotation.x += MCH.spin.x * dt; m.rotation.y += MCH.spin.y * dt; m.rotation.z += MCH.spin.z * dt;
+        let fl = 0; try { fl = hcFloorAt(m.position.x, m.position.z, prevY + 0.05); } catch (e) { try { fl = groundY(currentMap, m.position.x, m.position.z) || 0; } catch (e2) { } }
+        if (!Number.isFinite(fl)) fl = 0;
+        if (m.position.y < fl + 0.03) {
+          m.position.y = fl + 0.03;
+          _mcFwd.set(0, 0, -1).applyQuaternion(m.quaternion);
+          MCH.yaw = Math.atan2(-_mcFwd.x, -_mcFwd.z);
+          m.quaternion.setFromEuler(new THREE.Euler(0, MCH.yaw, Math.PI / 2, 'YXZ'));   // blade flat on the surface
+          MCH.landed = true; MCH.vel.set(0, 0, 0);
+          try { gameAudio.clink(1); } catch (e) { }
+          netSendState(true);
+        }
+      };
+    }
+    // ---------- KNIFE, not MACHETE, for Hallowcreek's monster ----------
+    {
+      const baseToast = showToast;
+      showToast = function (a, b) {
+        if (currentMap === 'hallowcreek' && playerRole === 'monster') {
+          const fix = (t) => (typeof t === 'string' ? t.replace(/MACHETE/g, 'KNIFE').replace(/Machete/g, 'Knife').replace(/machete/g, 'knife') : t);
+          a = fix(a); b = fix(b);
+        }
+        return baseToast(a, b);
+      };
+    }
+    // (for the tests)
+    window.__r96 = { ikPasses: MON_IK_PASSES, toast: (a, b) => showToast(a, b) };
+    // =====================================================================
+    //  r97: THE SHAPE: Hallowcreek's own monster, your rigged ./shape.glb
+    //  - Loaded from ./shape.glb?v=<now> with GLTFLoader, next to ./survivor.glb and ./monster.glb (nothing embedded).
+    //    Colour textures sRGB, never frustum-culled, no shadows. It has no animation clips (gltf.animations is
+    //    undefined): only ever looked at behind a guard; he's posed in code. A status line on screen says it's loading,
+    //    loaded, or SHAPE GLB FAILED: <why> (and in the headset, a toast). Until it loads (or if it can't), Hallowcreek
+    //    keeps Jack o' Harvest; once it loads, Jack is never built or shown again.
+    //  - The file: its bones carry no rest pose, so it's rebuilt from the bind matrices (as monster.glb's was). The
+    //    auto-rigger found no legs on this legless figure, so it put the LEG bones on his ARMS: LeftLeg / RightLeg
+    //    carry the forearms, LeftFoot / RightFoot the fists, LeftToeBase / RightToeBase the knuckles; the coverall hem
+    //    is on Hips. So the leg bones are never animated (locked, as asked), and each leg chain is carried on its
+    //    arm (hung from that side's ForeArm at load, exactly where it rests) so the forearm and fist go with the arm as one
+    //    piece instead of tearing off it. LeftUpLeg / RightUpLeg (the sides of his chest) stay on the hips.
+    //  - Scaled to Hallowcreek's monster height (JK_HEIGHT: about 1.43x a survivor, through every doorway), centred on
+    //    his hips, his hem on the floor, facing the way the game's monster faces.
+    //  - On Hallowcreek (and only there), for the AI and for anyone in the MONSTER role (you and other players over
+    //    Trystero), monster.glb is hidden and THE SHAPE stands in its place. The monster.glb skeleton keeps running
+    //    unseen underneath, so everything it drives stays exactly as it is: the AI's patrols, knuckle-walk, slashes,
+    //    the 2-escape struggle and the lift-and-stab finisher; your arms on your controllers; the butcher knife (Grip
+    //    holds it, letting go drops it, picked up from 0.45 m, no collider ever). THE SHAPE's body follows it: his
+    //    hips at its feet, his eyes on yours (you as the MONSTER), his head turning with its head, and each arm solved
+    //    shoulder -> elbow -> fist onto its fist (where the knife is), elbow down and out, the shoulder kept within
+    //    natural limits and neither fist crossing to the other side of his body, so the sleeves don't spike or cross
+    //    in front of the face; the forearm rolls with your controller as far as a forearm can.
+    //  - Your own copy: his Head and Neck are left out of what your headset sees (the whole of him for everyone else,
+    //    the POV monitor and the desktop view), so looking down never puts the mask in your face.
+    //  - Camp, the graveyard and the mine keep monster.glb.
+    // =====================================================================
+    const SHAPE_GLB_URL = './shape.glb';
+    const SHAPE_EYE_MODEL = new THREE.Vector3(-0.046, 0.33, 0.0);       // (measured: just behind the mask's eye holes)
+    const SHAPE_FIST_MODEL = { L: new THREE.Vector3(0.812, -0.357, 0.266), R: new THREE.Vector3(-0.826, -0.377, 0.266) };   // (measured: fist centres)
+    const SHAPE_SHOULDER_MAX = 2.3, SHAPE_ROLL_MAX = 1.2, SHAPE_HEAD_MAX = 1.0, SHAPE_MIDLINE = 0.05;
+    const SHAPE = { ready: false, failed: false, src: null, height: 1, minY: 0, cx: 0, cz: 0, fpGeo: null, status: { el: null, text: '', kind: 'wait' } };
+    function shapeReady() { return !!(shapeReady.ok); }                  // (hoisted: Jack's module asks)
+    function hcMonsterName() { return shapeReady() ? 'THE SHAPE' : "Jack o' Harvest"; }
+    // ---------- the status line ----------
+    function shapeStatus(text, kind) {
+      SHAPE.status.text = text; SHAPE.status.kind = kind;
+      try {
+        let el = SHAPE.status.el;
+        if (!el) { el = SHAPE.status.el = document.createElement('div'); el.style.cssText = 'position:fixed;left:10px;bottom:44px;z-index:99999;font:bold 13px monospace;padding:6px 10px;border-radius:6px;pointer-events:none;max-width:80vw;word-break:break-all;'; document.body.appendChild(el); }
+        el.textContent = text;
+        el.style.background = kind === 'ok' ? 'rgba(10,60,20,0.85)' : kind === 'bad' ? 'rgba(110,0,0,0.92)' : 'rgba(40,40,40,0.8)';
+        el.style.color = kind === 'ok' ? '#8f8' : kind === 'bad' ? '#fff' : '#ddd';
+        el.style.display = 'block';
+        if (kind === 'ok') setTimeout(() => { if (SHAPE.status.kind === 'ok') el.style.display = 'none'; }, 12000);
+      } catch (e) { }
+      if (kind === 'bad') { try { showToast('SHAPE GLB FAILED', text.replace('SHAPE GLB FAILED: ', '').slice(0, 90)); } catch (e) { } }
+    }
+    // ---------- loading ----------
+    function shapeLoad() {
+      const url = SHAPE_GLB_URL + '?v=' + Date.now();
+      let resolved = url; try { resolved = new URL(url, location.href).href; } catch (e) { }
+      shapeStatus('SHAPE GLB: LOADING ' + resolved, 'wait');
+      new GLTFLoader().load(url, (gltf) => {
+        try { shapePrepare(gltf); shapeStatus('SHAPE GLB: LOADED (THE SHAPE hunts Hallowcreek)', 'ok'); }
+        catch (e) { SHAPE.failed = true; console.error('[ShapeGLB] could not set up shape.glb', e); shapeStatus('SHAPE GLB FAILED: ' + ((e && e.message) || e) + '  (' + resolved + ')', 'bad'); }
+      }, undefined, (err) => {
+        SHAPE.failed = true;
+        const msg = (err && (err.message || (err.target && err.target.status ? 'HTTP ' + err.target.status : ''))) || String(err);
+        console.warn('[ShapeGLB] shape.glb not loaded:', msg, resolved);
+        shapeStatus('SHAPE GLB FAILED: ' + msg + '  (' + resolved + ')', 'bad');
+      });
+    }
+    function shapePrepare(gltf) {
+      const sc = gltf.scene;
+      if (!sc) throw new Error('shape.glb has no scene');
+      if (gltf.animations && gltf.animations.length > 0) console.log('[ShapeGLB] ' + gltf.animations.length + ' animation clip(s) in the file: not needed (posed in code)');
+      else console.log('[ShapeGLB] no animation clips (fine: posed in code)');
+      let skinned = null;
+      sc.traverse((o) => {
+        if (o.isMesh) {
+          o.frustumCulled = false; o.castShadow = false; o.receiveShadow = false;
+          for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+            if (m.map) { m.map.colorSpace = THREE.SRGBColorSpace; m.map.anisotropy = 4; m.map.needsUpdate = true; }
+            m.needsUpdate = true;
+          }
+          if (o.isSkinnedMesh && !skinned) skinned = o;
+        }
+      });
+      if (!skinned) throw new Error('no skinned mesh in shape.glb');
+      monRepairRestPose(skinned);                                          // (its bones all sit at the origin: rest pose from the bind matrices)
+      sc.updateMatrixWorld(true);
+      // the leg chains ride on the arms (they're painted on the forearms and fists): hung from each ForeArm where they rest
+      const byName = {}; sc.traverse((o) => { if (o.isBone) byName[o.name] = o; });
+      for (const side of ['Left', 'Right']) {
+        const leg = byName[side + 'Leg'], fore = byName[side + 'ForeArm'];
+        if (leg && fore) fore.attach(leg);
+      }
+      sc.updateMatrixWorld(true);
+      // size and centre: from the mesh at rest
+      const geo = skinned.geometry; geo.computeBoundingBox();
+      const bb = new THREE.Box3().setFromObject(skinned), box = bb.isEmpty() ? geo.boundingBox : bb;
+      const hips = byName.Hips, centre = hips ? hips.getWorldPosition(new THREE.Vector3()) : box.getCenter(new THREE.Vector3());
+      SHAPE.src = gltf; SHAPE.height = box.max.y - box.min.y; SHAPE.minY = box.min.y; SHAPE.cx = centre.x; SHAPE.cz = centre.z;
+      console.log('[ShapeGLB] size', box.getSize(new THREE.Vector3()).toArray().map((v) => v.toFixed(3)).join(' x '), 'hips at', centre.toArray().map((v) => v.toFixed(3)).join(', '));
+      // the copy your headset sees: everything but the Head and Neck (and its top end)
+      SHAPE.fpGeo = shapeFirstPersonGeometry(skinned);
+      SHAPE.ready = true; shapeReady.ok = true;
+    }
+    function shapeFirstPersonGeometry(skinned) {
+      const geo = skinned.geometry, I = geo.index, J = geo.attributes.skinIndex, W = geo.attributes.skinWeight, bones = skinned.skeleton.bones;
+      const hide = new Set(); bones.forEach((b, i) => { if (/^(Head|Neck|HeadTop_End)$/.test(b.name)) hide.add(i); });
+      const n = geo.attributes.position.count, isHead = new Uint8Array(n);
+      for (let v = 0; v < n; v++) { let best = -1, bw = -1; for (let c = 0; c < 4; c++) { const w = W.getComponent(v, c); if (w > bw) { bw = w; best = J.getComponent(v, c); } } isHead[v] = hide.has(best) ? 1 : 0; }
+      const out = [];
+      if (I) { for (let k = 0; k < I.count; k += 3) { const a = I.getX(k), b = I.getX(k + 1), c = I.getX(k + 2); if (!(isHead[a] || isHead[b] || isHead[c])) out.push(a, b, c); } }
+      else { for (let k = 0; k < n; k += 3) if (!(isHead[k] || isHead[k + 1] || isHead[k + 2])) out.push(k, k + 1, k + 2); }
+      const g = geo.clone(); g.setIndex(out);
+      return g;
+    }
+    // ---------- one copy of THE SHAPE: root (placed by the game) -> fit (1 tall, hips over the root, hem at 0) -> scene ----------
+    function shapeInstance(firstPerson) {
+      const scene0 = skeletonClone(SHAPE.src.scene);
+      const root = new THREE.Group(), fit = new THREE.Group();
+      root.add(fit); fit.add(scene0);
+      const unit = 1 / SHAPE.height;
+      fit.scale.setScalar(unit);
+      fit.position.set(-SHAPE.cx * unit, -SHAPE.minY * unit, -SHAPE.cz * unit);
+      let mesh = null; const byName = {};
+      scene0.traverse((o) => { if (o.isBone) byName[o.name] = o; if (o.isSkinnedMesh && !mesh) mesh = o; if (o.isMesh) { o.frustumCulled = false; o.castShadow = false; o.receiveShadow = false; } });
+      root.updateMatrixWorld(true);
+      for (const b of Object.values(byName)) b.userData.rest = { p: b.position.clone(), q: b.quaternion.clone() };
+      const toWorld = (p) => scene0.localToWorld(p.clone());
+      const arm = (side, sd) => {
+        const U = byName[side + 'Arm'], F = byName[side + 'ForeArm']; if (!U || !F) return null;
+        const g = F.worldToLocal(toWorld(SHAPE_FIST_MODEL[sd]));             // the fist, carried by the forearm
+        const qF = F.getWorldQuaternion(new THREE.Quaternion()).invert();
+        return { U, F, gLocal: g, upLocal: new THREE.Vector3(0, 1, 0).applyQuaternion(qF), sign: sd === 'R' ? -1 : 1 };
+      };
+      const eyeRoot = new THREE.Vector3(SHAPE_EYE_MODEL.x - SHAPE.cx, SHAPE_EYE_MODEL.y - SHAPE.minY, SHAPE_EYE_MODEL.z - SHAPE.cz).multiplyScalar(unit);   // (in the 1-tall root frame)
+      let fp = null;
+      if (firstPerson && SHAPE.fpGeo) {
+        fp = new THREE.SkinnedMesh(SHAPE.fpGeo, mesh.material); fp.frustumCulled = false; fp.castShadow = false;
+        mesh.add(fp); fp.bind(mesh.skeleton, mesh.bindMatrix);
+        mesh.layers.set(SURVIVOR_BODY_LAYER); fp.layers.set(SURVIVOR_ARMS_LAYER);   // (your eyes: the copy without head and neck)
+      }
+      root.visible = false; scene.add(root);
+      return { root, fit, scene0, mesh, fp, byName, head: byName.Head || null, arms: { L: arm('Left', 'L'), R: arm('Right', 'R') }, eyeRoot, height: 1 };
+    }
+    // ---------- posing ----------
+    const _sV1 = new THREE.Vector3(), _sV2 = new THREE.Vector3(), _sV3 = new THREE.Vector3(), _sV4 = new THREE.Vector3(), _sS = new THREE.Vector3(), _sE = new THREE.Vector3(), _sG = new THREE.Vector3(), _sT = new THREE.Vector3();
+    const _sQ1 = new THREE.Quaternion(), _sQ2 = new THREE.Quaternion(), _sQ3 = new THREE.Quaternion(), _sQr = new THREE.Quaternion(), _sEu = new THREE.Euler(), _sX = new THREE.Vector3(1, 0, 0), _sY = new THREE.Vector3(0, 1, 0);
+    function shapeAim(bone, cur, des, maxFromRest) {                      // turn a bone so cur (world) points along des (world)
+      if (cur.lengthSq() < 1e-10 || des.lengthSq() < 1e-10) return;
+      _sQ1.setFromUnitVectors(_sV3.copy(cur).normalize(), _sV4.copy(des).normalize());
+      bone.getWorldQuaternion(_sQ2); bone.parent.getWorldQuaternion(_sQ3);
+      bone.quaternion.copy(_sQ3.invert().multiply(_sQ1).multiply(_sQ2));
+      if (maxFromRest) { const r = bone.userData.rest.q, ang = 2 * Math.acos(Math.min(1, Math.abs(r.dot(bone.quaternion)))); if (ang > maxFromRest) bone.quaternion.slerp(r, 1 - maxFromRest / ang); }
+      bone.updateMatrixWorld(true);
+    }
+    function shapeArm(S, sd, target, upW) {
+      const A = S.arms[sd]; if (!A) return;
+      _sT.copy(target);
+      // never across the middle of his body (each fist stays on its own side, so the sleeves never cross in front of the face)
+      _sV1.subVectors(_sT, S.root.position); _sV2.set(1, 0, 0).applyQuaternion(S.root.quaternion); _sV2.y = 0; _sV2.normalize();
+      const lat = _sV1.dot(_sV2), lim = SHAPE_MIDLINE * S.height;
+      if (A.sign > 0 && lat < -lim) _sT.addScaledVector(_sV2, -lim - lat);
+      if (A.sign < 0 && lat > lim) _sT.addScaledVector(_sV2, lim - lat);
+      A.U.getWorldPosition(_sS); A.F.getWorldPosition(_sE); _sG.copy(A.gLocal); A.F.localToWorld(_sG);
+      const la = _sS.distanceTo(_sE), lb = _sE.distanceTo(_sG);
+      const d0 = _sV1.subVectors(_sT, _sS); let d = d0.length();
+      const maxD = (la + lb) * 0.999, minD = Math.abs(la - lb) * 1.02 + 1e-4;
+      if (d < 1e-6) return;
+      if (d > maxD) { d0.multiplyScalar(maxD / d); d = maxD; } else if (d < minD) { d0.multiplyScalar(minD / d); d = minD; }
+      const dir = _sV2.copy(d0).normalize();
+      const x = (la * la - lb * lb + d * d) / (2 * d), h = Math.sqrt(Math.max(0, la * la - x * x));
+      // the elbow: down, out to its own side and a little back
+      const pole = new THREE.Vector3(A.sign * 0.6, -1, -0.35).applyQuaternion(S.root.quaternion);
+      pole.addScaledVector(dir, -pole.dot(dir)).normalize();
+      const elbow = _sS.clone().addScaledVector(dir, x).addScaledVector(pole, h);
+      shapeAim(A.U, _sV3.subVectors(_sE, _sS).clone(), elbow.sub(_sS), SHAPE_SHOULDER_MAX);
+      A.F.getWorldPosition(_sE); _sG.copy(A.gLocal); A.F.localToWorld(_sG);
+      const fistWant = _sS.clone().add(d0);
+      shapeAim(A.F, _sV3.subVectors(_sG, _sE).clone(), fistWant.sub(_sE), 0);
+      // the forearm rolls with the controller (the fist's top towards the grip's top), as far as a forearm can
+      if (upW) {
+        A.F.getWorldPosition(_sE); _sG.copy(A.gLocal); A.F.localToWorld(_sG);
+        const axis = _sV1.subVectors(_sG, _sE).normalize();
+        A.F.getWorldQuaternion(_sQ2);
+        const cur = _sV3.copy(A.upLocal).applyQuaternion(_sQ2); cur.addScaledVector(axis, -cur.dot(axis));
+        const want = _sV4.copy(upW); want.addScaledVector(axis, -want.dot(axis));
+        if (cur.lengthSq() > 1e-6 && want.lengthSq() > 1e-6) {
+          cur.normalize(); want.normalize();
+          let ang = Math.acos(THREE.MathUtils.clamp(cur.dot(want), -1, 1)); if (_sV1.clone().crossVectors(cur, want).dot(axis) < 0) ang = -ang;
+          ang = THREE.MathUtils.clamp(ang, -SHAPE_ROLL_MAX, SHAPE_ROLL_MAX);
+          _sQr.setFromAxisAngle(axis, ang);
+          A.F.parent.getWorldQuaternion(_sQ3);
+          A.F.quaternion.copy(_sQ3.invert().multiply(_sQr).multiply(_sQ2)); A.F.updateMatrixWorld(true);
+        }
+      }
+    }
+    // the fist of the (hidden) monster.glb copy it follows, and the top of its grip
+    function srcFist(I, sd, out) {
+      const C = I.bones[sd]; if (!C || !C.h || !C.h.userData.restW) return null;
+      return C.h.localToWorld(out.copy(MON_GRIP[sd].pos).sub(C.h.userData.restW));
+    }
+    function srcGripUp(I, sd, out) {
+      const C = I.bones[sd]; if (!C || !C.h) return null;
+      C.h.getWorldQuaternion(_sQ1).multiply(MON_GRIP[sd].q);
+      return out.set(0, 1, 0).applyQuaternion(_sQ1);
+    }
+    const _fL = new THREE.Vector3(), _fR = new THREE.Vector3(), _uL = new THREE.Vector3(), _uR = new THREE.Vector3();
+    // pose a copy of THE SHAPE on a monster.glb copy: mode 'eyes' (a player: his eyes on theirs) or 'feet' (the AI)
+    function shapeFollow(S, I, mode, map) {
+      for (const b of Object.values(S.byName)) if (b.userData.rest && !/(Leg|Foot|ToeBase|Toe_End)$/.test(b.name)) { b.quaternion.copy(b.userData.rest.q); }   // (the leg bones are never touched)
+      const H = JK_HEIGHT; S.height = H; S.root.scale.setScalar(H);
+      I.root.updateMatrixWorld(true);
+      _sEu.setFromQuaternion(I.root.quaternion, 'YXZ'); const yaw = _sEu.y;
+      S.root.rotation.set(0, yaw, 0, 'YXZ');
+      if (mode === 'eyes' && I.eye) {
+        I.eye.getWorldPosition(_sV1);
+        const off = _sV2.copy(S.eyeRoot).multiplyScalar(H).applyQuaternion(S.root.quaternion);
+        S.root.position.subVectors(_sV1, off);
+        const fl = floorUnder(map, S.root.position.x, S.root.position.z);
+        if (S.root.position.y < fl) {                                          // (crouching: he bows forward from the hem instead of sinking)
+          const lean = THREE.MathUtils.clamp((fl - S.root.position.y) / (0.6 * H), 0, 0.7);
+          S.root.position.y = fl; S.root.rotation.set(lean, yaw, 0, 'YXZ');
+        }
+      } else {
+        const fl = groundY(map, I.root.position.x, I.root.position.z);
+        S.root.position.set(I.root.position.x, I === monAI ? Math.max(fl, ai.pos.y) : fl, I.root.position.z);   // (his hem on the floor, however low its body crouches)
+      }
+      S.root.updateMatrixWorld(true);
+      // the head turns as its head turns
+      if (S.head && I.bones.head) {
+        I.bones.head.getWorldQuaternion(_sQ1); S.head.parent.getWorldQuaternion(_sQ2);
+        // (both models' rest frames face the same way: their world turns map straight across, measured from the bodies)
+        _sQ3.copy(I.root.quaternion).invert().multiply(_sQ1);                 // its head, relative to its body
+        S.root.getWorldQuaternion(_sQ1).multiply(_sQ3);                       // the same, on his body
+        S.head.quaternion.copy(_sQ2.invert().multiply(_sQ1));
+        const r = S.head.userData.rest.q, ang = 2 * Math.acos(Math.min(1, Math.abs(r.dot(S.head.quaternion))));
+        if (ang > SHAPE_HEAD_MAX) S.head.quaternion.slerp(r, 1 - SHAPE_HEAD_MAX / ang);
+        S.head.updateMatrixWorld(true);
+      }
+      // the arms onto its fists (where the knife is held)
+      const fl = srcFist(I, 'L', _fL), fr = srcFist(I, 'R', _fR);
+      if (fl) shapeArm(S, 'L', fl, srcGripUp(I, 'L', _uL));
+      if (fr) shapeArm(S, 'R', fr, srcGripUp(I, 'R', _uR));
+      S.root.updateMatrixWorld(true);
+    }
+    // ---------- which monsters are THE SHAPE, every frame ----------
+    const shapeCopies = { ai: null, me: null };
+    function glbHide(I, hide) {                                            // (shows again only what it hid itself)
+      if (!I || (!hide && !I.shapeHidden)) return;
+      const list = [I.mesh, ...(I.eye ? I.eye.children : [])].filter(Boolean);
+      if (hide) { if (!I.shapeHidden) I.shapeHidden = list.filter((o) => o.visible); for (const o of list) o.visible = false; }
+      else { for (const o of I.shapeHidden) o.visible = true; I.shapeHidden = null; }
+    }
+    function shapeUpdate() {
+      if (!SHAPE.ready || !MONG.ready) return;
+      const here = currentMap === 'hallowcreek' && !titleActive;
+      // the AI
+      if (monAI) {
+        const on = ai.map === 'hallowcreek' && monAI.root.visible;
+        glbHide(monAI, on);
+        if (on && !shapeCopies.ai) { shapeCopies.ai = shapeInstance(false); monAI.shapeTwin = shapeCopies.ai; }
+        if (shapeCopies.ai) { shapeCopies.ai.root.visible = on; if (on) shapeFollow(shapeCopies.ai, monAI, 'feet', ai.map); }
+      }
+      // you as the MONSTER
+      if (monMe) {
+        const on = here && playerRole === 'monster' && monMe.root.visible;
+        glbHide(monMe, on);
+        if (on && !shapeCopies.me) { shapeCopies.me = shapeInstance(true); monMe.shapeTwin = shapeCopies.me; }
+        if (shapeCopies.me) { shapeCopies.me.root.visible = on; if (on) shapeFollow(shapeCopies.me, monMe, 'eyes', currentMap); }
+      }
+      // other players' monsters (their own state says which map they're on)
+      for (const r of netPeers().values()) {
+        const I = r.monGlb; if (!I) continue;
+        const on = !!(r.st && r.st.m === 'hallowcreek' && here && I.root.visible);
+        glbHide(I, on);
+        if (on && !r.shapeGlb) { r.shapeGlb = shapeInstance(false); I.shapeTwin = r.shapeGlb; }
+        if (r.shapeGlb) { r.shapeGlb.root.visible = on; if (on) shapeFollow(r.shapeGlb, I, 'eyes', r.st.m); }
+      }
+    }
+    // leaving: a peer's copy goes with them
+    {
+      const baseRR = removeRemote;
+      removeRemote = function (r) {
+        try { if (r.shapeGlb) { scene.remove(r.shapeGlb.root); r.shapeGlb = null; } } catch (e) { }
+        return baseRR(r);
+      };
+    }
+    // the headset's eyes: your copy without the head (the same layers your monster.glb copy uses); the POV monitor:
+    // his head shrunk away for its one view, as the old monster's was
+    {
+      const baseRender3 = renderer.render.bind(renderer);
+      renderer.render = function (sc, cam) {
+        let hb = null;
+        if (sc === scene && SHAPE.ready) {
+          if (cam === camera && shapeCopies.me && shapeCopies.me.root.visible) survivorHideBodyFromEyes(renderer.xr.isPresenting);
+          if (cam === monsterPovCamera && povState.src && povState.src.inst && povState.src.inst.shapeTwin && povState.src.inst.shapeTwin.root.visible) hb = povState.src.inst.shapeTwin.head;
+        }
+        if (hb) { hb.scale.setScalar(0.001); hb.updateMatrixWorld(true); }
+        try { return baseRender3(sc, cam); }
+        finally { if (hb) { hb.scale.set(1, 1, 1); hb.updateMatrixWorld(true); } }
+      };
+    }
+    {
+      const baseNet = updateNet;
+      updateNet = function (dt) {
+        const r = baseNet(dt);
+        try { shapeUpdate(); } catch (e) { if (!updateNet.shW) { updateNet.shW = true; console.warn('[ShapeGLB] update', e); } }
+        // becoming the MONSTER on Hallowcreek: say which monster you are (and if shape.glb failed, why)
+        try {
+          const key = playerRole + '|' + currentMap;
+          if (key !== updateNet.shKey) { updateNet.shKey = key; if (playerRole === 'monster' && currentMap === 'hallowcreek') { if (SHAPE.failed) shapeStatus(SHAPE.status.text, 'bad'); else if (SHAPE.ready) showToast('YOU ARE THE SHAPE', 'Grip holds the knife, let go to drop it'); } }
+        } catch (e) { }
+        return r;
+      };
+    }
+    shapeLoad();
+    // (for the tests)
+    window.__shape = { S: SHAPE, ready: () => shapeReady(), name: () => hcMonsterName(), copies: shapeCopies, status: () => SHAPE.status.text };
 
     // ---------- XR session hooks ----------
     renderer.xr.addEventListener('sessionstart', () => {
