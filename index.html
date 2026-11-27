@@ -6293,6 +6293,12 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'NEW', date: '27/11/26', title: 'THE POLICE ARRIVE',
+        text: "When the countdown hits 0:00 on Hallowcreek, watch it happen: two cruisers pull up across Main Street, lights and sirens going, the survivors sprint for them with THE SHAPE right behind, and the officer, a proboscis monkey in a navy uniform, badge and peaked cap, steps out from behind his door and puts THE SHAPE on his back. Then YOU ESCAPED. Main Street now runs on out of town at both ends, without the dark pines standing across it." },
+      { tag: 'FIX', date: '27/11/26', title: 'HALLOWCREEK HOUSES',
+        text: "The houses of Hallowcreek and everything inside them are built at a cosier size, and the AI still finds its way through every room. Every window is real glass you can smash. The bathrooms have a proper porcelain toilet, the jack-o'-lantern faces sit flush on the pumpkins, the walkie-talkies are smaller, and more WELCOME TO HALLOWCREEK signs stand at the edges of town." },
+      { tag: 'FIX', date: '27/11/26', title: 'MONSTER FIXES',
+        text: "THE SHAPE stands reared up on his knuckles, his sleeves bend at the shoulder instead of spiking, and his mask and hair no longer glare in the flashlight. The monster is about 1.4x a survivor on every map, its mask never squishes, and looking down as the MONSTER never shows the inside of the coat." },
       { tag: 'NEW', date: '27/11/26', title: 'THE SHAPE',
         text: "Hallowcreek's monster is now THE SHAPE (shape.glb): the AI when nobody plays the MONSTER, and you when you do. His arms follow your controllers, Grip holds the butcher knife and letting go drops it, and the finisher is his. The other maps keep their monster." },
       { tag: 'FIX', date: '27/11/26', title: 'PLAYTEST FIXES',
@@ -9184,7 +9190,7 @@
     //  street; colliders are the same boxes turned into the world (quarter turns keep them boxes). Repeats are
     //  InstancedMeshes split into 24 m cells; houses and cells are the culling chunks (X37).
     // =====================================================================
-    const HALLOW = { x: 0, z: 150, roadHW: 3, curb: 0.15, walk: 1.8, yard: 5, W: 9, D: 8, FL: 0.45, ST: 2.6, SLAB: 0.22, UP: 2.5, T: 0.15,
+    const HALLOW = { x: 0, z: 150, roadHW: 3, curb: 0.15, walk: 1.8, yard: 5, W: 9, D: 8, FL: 0.45, ST: 2.6, SLAB: 0.22, UP: 2.5, T: 0.15, HK: 0.78,
       x0: -50, x1: 48, z0: 92, z1: 196 };
     HALLOW.F1 = HALLOW.FL + HALLOW.ST + HALLOW.SLAB;               // the upstairs floor (top)
     HALLOW.edge = HALLOW.roadHW + HALLOW.curb + HALLOW.walk;        // road centre to the sidewalk's outer edge
@@ -9538,6 +9544,7 @@
     });
     hcM.panel = new THREE.MeshStandardMaterial({ map: hcWoodPanelTex, roughness: 0.6 });
     hcM.oven = new THREE.MeshStandardMaterial({ color: 0x101010, roughness: 0.15, metalness: 0.4, transparent: true, opacity: 0.85 });
+    hcM.water = new THREE.MeshStandardMaterial({ color: 0x9fb4b8, roughness: 0.05, metalness: 0.1, transparent: true, opacity: 0.7, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });   // (r99) the toilet's standing water
     hcM.screen = new THREE.MeshStandardMaterial({ color: 0x1a2020, roughness: 0.15, metalness: 0.3 });
     hcM.clock = new THREE.MeshBasicMaterial({ map: hcClockTex, color: 0xb0a890 });
     hcM.stone = new THREE.MeshStandardMaterial({ map: hcStoneTex, roughness: 0.95 });
@@ -9547,22 +9554,35 @@
     // =====================================================================
     //  THE HOUSES
     // =====================================================================
+    // (r99) a house window's glass as one of the game's own breakable panes (a punch, a thrown thing or a blade shatters it,
+    // leaving the opening empty; a new match puts it back). Placed in the world from the house's scaled frame.
+    const hcPaneGroup = new THREE.Group(); hcPaneGroup.name = 'hcPanes'; hcPaneGroup.position.set(HALLOW.x, 0, HALLOW.z); scene.add(hcPaneGroup);   // (inside the town: loaded and unloaded with it)
+    function hcPaneAt(Fs, yaw, lx, y, lz, w, h, K) {
+      const th = HALLOW.T * K, hx = Fs.wx(lx, lz) + Math.sin(yaw) * th / 2, hz = Fs.wz(lx, lz) + Math.cos(yaw) * th / 2;   // (its collider fills the wall's thickness)
+      return makePane(hcPaneGroup, { x: hx - HALLOW.x, y: y * K, z: hz - HALLOW.z, ry: yaw, w: w * K, h: h * K, thick: th, bars: true });
+    }
     function hcHouse(H) {
       const { FL, ST, SLAB, UP, T, W, D } = HALLOW;
       const F = hcFrame(H.fc[0], H.fc[1], H.face, W), F1 = HALLOW.F1, two = H.floors === 2;
+      // (r99) the house itself (walls, porch, rooms, furniture, doors, stairs, roof) is built at HALLOW.HK (0.78) about
+      // the middle of its front wall, so its doorways, stairs, counters and appliances suit the survivors; the yard round it
+      // (fences, the front walk, the driveway, the mailbox) stays where it was. Fs is the house's (scaled) frame.
+      const K = HALLOW.HK || 1, pcx = H.fc[0], pcz = H.fc[1];
+      const Fs = { ...F, k: K, ox: pcx + K * (F.ox - pcx), oz: pcz + K * (F.oz - pcz), wx: (lx, lz) => pcx + K * (F.wx(lx, lz) - pcx), wz: (lx, lz) => pcz + K * (F.wz(lx, lz) - pcz) };
       const EAVE = two ? F1 + UP + 0.1 : FL + ST + 0.1, PITCH = H.pitch || 0.62, RISE = (D / 2) * Math.tan(PITCH), yard = H.yard || HALLOW.yard;
-      const group = new THREE.Group(); group.position.set(F.ox, 0, F.oz); group.rotation.y = F.ry; scene.add(group);
-      const B = makeBatch(), glassB = makeBatch(), doors = [];
+      const group = new THREE.Group(); group.position.set(Fs.ox, 0, Fs.oz); group.rotation.y = F.ry; group.scale.setScalar(K); scene.add(group);
+      const yardGroup = new THREE.Group(); yardGroup.position.set(F.ox, 0, F.oz); yardGroup.rotation.y = F.ry; scene.add(yardGroup);
+      const B = makeBatch(), glassB = makeBatch(), yardB = makeBatch(), doors = [];
       const siding = new THREE.MeshStandardMaterial({ map: hcSidingTex, color: H.siding, roughness: 0.85 });
       const paper = hcM.paper[H.paper % hcM.paper.length], doorPaint = new THREE.MeshStandardMaterial({ color: 0xd4ccb8, roughness: 0.6 });
       const frontPaint = new THREE.MeshStandardMaterial({ color: H.door, roughness: 0.5 }), shutter = hcShutterMat(H.shutter || 0x2a2a2a);
       const roofM = new THREE.MeshStandardMaterial({ map: hcRoofTex, color: H.roof, roughness: 0.95 });
-      const lp = (lx, y, lz) => new THREE.Vector3(F.wx(lx, lz), y, F.wz(lx, lz));
+      const lp = (lx, y, lz) => new THREE.Vector3(Fs.wx(lx, lz), y * K, Fs.wz(lx, lz));
       // a collider from a local box (a quarter turn keeps it a box)
       const col = (lx0, lx1, y0, y1, lz0, lz1) => {
-        const xa = F.wx(lx0, lz0), xb = F.wx(lx1, lz1), za = F.wz(lx0, lz0), zb = F.wz(lx1, lz1);
+        const xa = Fs.wx(lx0, lz0), xb = Fs.wx(lx1, lz1), za = Fs.wz(lx0, lz0), zb = Fs.wz(lx1, lz1);
         const x0 = Math.min(xa, xb), x1 = Math.max(xa, xb), z0 = Math.min(za, zb), z1 = Math.max(za, zb);
-        if (x1 - x0 > 0.001 && z1 - z0 > 0.001 && y1 - y0 > 0.001) addBoxCollider((x0 + x1) / 2, y0, (z0 + z1) / 2, x1 - x0, y1 - y0, z1 - z0);
+        if (x1 - x0 > 0.001 && z1 - z0 > 0.001 && y1 - y0 > 0.001) addBoxCollider((x0 + x1) / 2, y0 * K, (z0 + z1) / 2, x1 - x0, (y1 - y0) * K, z1 - z0);
       };
       // a local box: visible (tiled texture) and solid unless told otherwise
       const L = (mat, lx0, lx1, y0, y1, lz0, lz1, solid = true, tile = 1) => {
@@ -9572,6 +9592,8 @@
         if (solid) col(a, b, y0, y1, c0, c1);
       };
       const G = (geo, mat, lx, y, lz, rx = 0, ry = 0, rz = 0) => { B.add(geo, mat, lx, y, lz, rx, ry, rz); };   // any geometry, in local space
+      const LY = (mat, lx0, lx1, y0, y1, lz0, lz1, tile = 1) => { const g = hcTiledBox(lx1 - lx0, y1 - y0, lz1 - lz0, tile); yardB.add(g, mat, (lx0 + lx1) / 2, (y0 + y1) / 2, (lz0 + lz1) / 2); g.dispose(); };   // (r99) the yard, at full size
+      const ylx = (lx) => W / 2 + K * (lx - W / 2), ylz = (lz) => K * lz;                // (r99) where a point of the (scaled) house lands in the yard's frame
       const ramp = (lx0, lx1, lz0, lz1, y0, y1, n = 26) => { for (let i = 0; i < n; i++) col(lx0, lx1, y0, Math.max(y0 + 0.01, y0 + (y1 - y0) * (i + 0.5) / n), lz0 + (lz1 - lz0) * i / n, lz1); };
       const wallX = (mat, lz, a0, a1, y0, y1, holes = [], th = T, solid = true, tile = 1.2) => { for (const [s0, s1, b, t] of hcPieces(a0, a1, y0, y1, holes)) L(mat, s0, s1, b, t, lz - th / 2, lz + th / 2, solid, tile); };
       const wallZ = (mat, lx, a0, a1, y0, y1, holes = [], th = T, solid = true, tile = 1.2) => { for (const [s0, s1, b, t] of hcPieces(a0, a1, y0, y1, holes)) L(mat, lx - th / 2, lx + th / 2, b, t, s0, s1, solid, tile); };
@@ -9579,7 +9601,7 @@
       const door = (axis, at, c, y, paint = doorPaint, o = {}) => {
         const w = o.w || HC_DW;
         const hl = axis === 'x' ? [c - w / 2, at] : [at, c + w / 2], yl = axis === 'x' ? 0 : Math.PI / 2;
-        const d = hcDoorAt(F.wx(hl[0], hl[1]), y, F.wz(hl[0], hl[1]), yl + F.ry, paint, o); doors.push(d); return d;
+        const d = hcDoorAt(Fs.wx(hl[0], hl[1]), y * K, Fs.wz(hl[0], hl[1]), yl + F.ry, paint, { ...o, w: w * K, h: (o.h || HC_DH) * K }); doors.push(d); return d;
       };
       const DOOR = (c) => ({ c, w: 0.94, b: FL, t: FL + 2.0 }), DOOR1 = (c) => ({ c, w: 0.94, b: F1, t: F1 + 2.0 });
       const WIN = (c, w = 1.2, up = false) => ({ c, w, b: (up ? F1 : FL) + 0.85, t: (up ? F1 : FL) + 2.0 });
@@ -9630,9 +9652,9 @@
         HC_SPOTS[`bench${H.no}`] = lp(bx, FL + 0.46, -0.4);
       }
       // the front walk to the sidewalk, the driveway down the side, the mailbox at the curb
-      L(hcM.concrete, doorX - 0.6, doorX + 0.6, 0.004, 0.02, -PD - 0.9, -yard - 0.3, false, 1.2);
-      L(hcM.gravel, W + 0.6, W + 2.8, 0.003, 0.016, D - 1, -yard - 0.3, false, 2);
-      { const m = lp(W + 0.35, 0, -yard + 0.15); hcMailbox(m.x, m.z, F.ry); }
+      LY(hcM.concrete, ylx(doorX) - 0.6, ylx(doorX) + 0.6, 0.004, 0.02, -yard - 0.3, ylz(-PD - 0.9), 1.2);
+      LY(hcM.gravel, W + 0.6, W + 2.8, 0.003, 0.016, -yard - 0.3, D - 1, 2);
+      hcMailbox(F.wx(W + 0.35, -yard + 0.15), F.wz(W + 0.35, -yard + 0.15), F.ry);
       // the front picket fence (gaps for the walk and the driveway), and the side / back board fences
       {
         const z = -(yard - 0.3), a = -3, b = W + 3;
@@ -9677,9 +9699,7 @@
           L(hcM.trim, c - w / 2 - 0.06, c + w / 2 + 0.06, t, t + 0.08, at + o - 0.03, at + o + 0.03, false);
           L(hcM.trim, c - w / 2 - 0.08, c + w / 2 + 0.08, b - 0.06, b, at + o * 1.6 - 0.05, at + o * 1.6 + 0.05, false);
           for (const s of [-1, 1]) L(hcM.trim, c + s * (w / 2 + 0.03) - 0.03, c + s * (w / 2 + 0.03) + 0.03, b, t, at + o - 0.03, at + o + 0.03, false);
-          L(hcM.trim, c - 0.02, c + 0.02, b, t, at - 0.02, at + 0.02, false); L(hcM.trim, c - w / 2, c + w / 2, (b + t) / 2 - 0.02, (b + t) / 2 + 0.02, at - 0.02, at + 0.02, false);
-          const g = new THREE.PlaneGeometry(w, t - b); glassB.add(g, hcM.glass, c, (b + t) / 2, at); g.dispose();
-          col(c - w / 2, c + w / 2, b, t, at - 0.02, at + 0.02);
+          hcPaneAt(Fs, F.ry, c, (b + t) / 2, at, w, t - b, K);                              // (r99) real glass: it shatters when hit
           if (lit) { const g2 = new THREE.PlaneGeometry(w * 0.96, (t - b) * 0.96); glassB.add(g2, hcM.curtain, c, (b + t) / 2, at - outward * (T / 2 + 0.05)); g2.dispose(); }
           if (shut) for (const s of [-1, 1]) {                                                                   // louvred shutters either side
             const sx = c + s * (w / 2 + 0.06 + 0.22);
@@ -9690,9 +9710,7 @@
           L(hcM.trim, at + o - 0.03, at + o + 0.03, t, t + 0.08, c - w / 2 - 0.06, c + w / 2 + 0.06, false);
           L(hcM.trim, at + o * 1.6 - 0.05, at + o * 1.6 + 0.05, b - 0.06, b, c - w / 2 - 0.08, c + w / 2 + 0.08, false);
           for (const s of [-1, 1]) L(hcM.trim, at + o - 0.03, at + o + 0.03, b, t, c + s * (w / 2 + 0.03) - 0.03, c + s * (w / 2 + 0.03) + 0.03, false);
-          L(hcM.trim, at - 0.02, at + 0.02, b, t, c - 0.02, c + 0.02, false); L(hcM.trim, at - 0.02, at + 0.02, (b + t) / 2 - 0.02, (b + t) / 2 + 0.02, c - w / 2, c + w / 2, false);
-          const g = new THREE.PlaneGeometry(w, t - b).rotateY(Math.PI / 2); glassB.add(g, hcM.glass, at, (b + t) / 2, c); g.dispose();
-          col(at - 0.02, at + 0.02, b, t, c - w / 2, c + w / 2);
+          hcPaneAt(Fs, F.ry + Math.PI / 2, at, (b + t) / 2, c, w, t - b, K);                // (r99) real glass: it shatters when hit
           if (lit) { const g2 = new THREE.PlaneGeometry(w * 0.96, (t - b) * 0.96).rotateY(Math.PI / 2); glassB.add(g2, hcM.curtain, at - outward * (T / 2 + 0.05), (b + t) / 2, c); g2.dispose(); }
         }
       };
@@ -9707,11 +9725,8 @@
         L(hcM.trim, x0 - 0.05, x1 + 0.05, t, t + 0.1, z0 - 0.05, 0, true);                                      // the head
         { const g = hcTiledBox(x1 - x0 + 0.2, 0.08, Math.abs(z0) + 0.3, 1); G(g, roofM, (x0 + x1) / 2, t + 0.2, z0 / 2 - 0.05, -0.32, 0, 0); g.dispose(); }
         for (const [a, c] of [[x0, z0], [x1, z0]]) L(hcM.trim, a - 0.05, a + 0.05, b, t, c - 0.05, c + 0.05, false);   // corner posts
-        const fg = new THREE.PlaneGeometry(x1 - x0 - 0.1, t - b - 0.05); glassB.add(fg, hcM.glass, (x0 + x1) / 2, (b + t) / 2, z0); fg.dispose();
-        col(x0, x1, b, t, z0 - 0.02, z0 + 0.02);
-        for (const a of [x0, x1]) { const sg = new THREE.PlaneGeometry(Math.abs(z0) - 0.05, t - b - 0.05).rotateY(Math.PI / 2); glassB.add(sg, hcM.glass, a, (b + t) / 2, z0 / 2); sg.dispose(); col(a - 0.02, a + 0.02, b, t, z0, 0); }
-        for (const f of [0.33, 0.66]) L(hcM.trim, x0 + (x1 - x0) * f - 0.02, x0 + (x1 - x0) * f + 0.02, b, t, z0 - 0.02, z0 + 0.02, false);
-        L(hcM.trim, x0, x1, (b + t) / 2 - 0.02, (b + t) / 2 + 0.02, z0 - 0.02, z0 + 0.02, false);
+        hcPaneAt(Fs, F.ry, (x0 + x1) / 2, (b + t) / 2, z0, x1 - x0 - 0.1, t - b - 0.05, K);      // (r99) its three panes: real glass
+        for (const a of [x0, x1]) hcPaneAt(Fs, F.ry + Math.PI / 2, a, (b + t) / 2, z0 / 2, Math.abs(z0) - 0.05, t - b - 0.05, K);
         L(hcM.fabricR, x0 + 0.05, x1 - 0.05, b, b + 0.08, z0 + 0.05, 0.1, false);                                // the seat cushion
         for (const s of [-1, 1]) { const g = hcTiledBox(0.3, 0.26, 0.1, 1); G(g, hcM.fabricY, (x0 + x1) / 2 + s * 0.5, b + 0.2, z0 + 0.2, -0.3, s * 0.3, 0); g.dispose(); }
         // its shutters stand either side of it
@@ -9792,21 +9807,24 @@
         }
       }
       // ---------- the rooms ----------
-      const furnish = hcFurnish(H, { L, G, lp, col, two, B, doorX, F, glassB });
-      const fx = [F.wx(0, 0), F.wx(W, D)], fz = [F.wz(0, 0), F.wz(W, D)];
-      HC_ROOMS.push({ H, F, x0: Math.min(...fx), x1: Math.max(...fx), z0: Math.min(...fz), z1: Math.max(...fz), doorAt: lp(doorX, 0, -PD - 1.2), two, furnish });
+      const furnish = hcFurnish(H, { L, G, lp, col, two, B, doorX, F: Fs, glassB });
+      const fx = [Fs.wx(0, 0), Fs.wx(W, D)], fz = [Fs.wz(0, 0), Fs.wz(W, D)];
+      HC_ROOMS.push({ H, F: Fs, x0: Math.min(...fx), x1: Math.max(...fx), z0: Math.min(...fz), z1: Math.max(...fz), doorAt: lp(doorX, 0, -PD - 1.2), two, furnish });
       B.build(group, { castShadow: false });
       glassB.build(group, { castShadow: false, receiveShadow: false });
-      H.group = group; H.doors = doors; H.lp = lp; H.F = F; H.PR = PR; H.P0 = P0; H.P1 = P1;
+      yardB.build(yardGroup, { castShadow: false });
+      H.group = group; H.doors = doors; H.lp = lp; H.F = F; H.Fs = Fs; H.K = K; H.PR = PR; H.P0 = P0; H.P1 = P1;   // (H.F: the yard's frame; H.Fs and H.lp: the house's)
       hcChunk(group, doors);
     }
     // the boarded-up houses: solid shells, boards nailed over the windows and the door, a sagging porch, a sign
     function hcDeadHouse(H) {
-      const { FL, W, D } = HALLOW, F = hcFrame(H.fc[0], H.fc[1], H.face, W), EAVE = FL + 5.4, PITCH = 0.62, RISE = (D / 2) * Math.tan(PITCH);
-      const group = new THREE.Group(); group.position.set(F.ox, 0, F.oz); group.rotation.y = F.ry; scene.add(group);
+      const { FL, W, D } = HALLOW, F0 = hcFrame(H.fc[0], H.fc[1], H.face, W), EAVE = FL + 5.4, PITCH = 0.62, RISE = (D / 2) * Math.tan(PITCH);
+      const K = HALLOW.HK || 1, pcx = H.fc[0], pcz = H.fc[1];                                        // (r99: at the same scale as the others)
+      const F = { ...F0, ox: pcx + K * (F0.ox - pcx), oz: pcz + K * (F0.oz - pcz), wx: (lx, lz) => pcx + K * (F0.wx(lx, lz) - pcx), wz: (lx, lz) => pcz + K * (F0.wz(lx, lz) - pcz) };
+      const group = new THREE.Group(); group.position.set(F.ox, 0, F.oz); group.rotation.y = F.ry; group.scale.setScalar(K); scene.add(group);
       const B = makeBatch(), siding = new THREE.MeshStandardMaterial({ map: hcSidingTex, color: H.siding, roughness: 0.95 });
       const roofM = new THREE.MeshStandardMaterial({ map: hcRoofTex, color: 0x262222, roughness: 1 });
-      const col = (lx0, lx1, y0, y1, lz0, lz1) => { const xa = F.wx(lx0, lz0), xb = F.wx(lx1, lz1), za = F.wz(lx0, lz0), zb = F.wz(lx1, lz1); addBoxCollider((xa + xb) / 2, y0, (za + zb) / 2, Math.abs(xb - xa), y1 - y0, Math.abs(zb - za)); };
+      const col = (lx0, lx1, y0, y1, lz0, lz1) => { const xa = F.wx(lx0, lz0), xb = F.wx(lx1, lz1), za = F.wz(lx0, lz0), zb = F.wz(lx1, lz1); addBoxCollider((xa + xb) / 2, y0 * K, (za + zb) / 2, Math.abs(xb - xa), (y1 - y0) * K, Math.abs(zb - za)); };
       const L = (mat, a, b, y0, y1, c0, c1, solid = true, tile = 1) => { const g = hcTiledBox(b - a, y1 - y0, c1 - c0, tile); B.add(g, mat, (a + b) / 2, (y0 + y1) / 2, (c0 + c1) / 2); g.dispose(); if (solid) col(a, b, y0, y1, c0, c1); };
       L(hcM.brick, 0, W, 0, FL, 0, D, true, 1.2);
       L(siding, 0, W, FL, EAVE, 0, D, true, 1.6);
@@ -10112,13 +10130,27 @@
       for (const u of [-0.75, 0.75]) for (const v of [-0.28, 0.28]) P.at(new THREE.SphereGeometry(0.05, 8, 6), hcM.brass, u, y + 0.06, v);
       P.at(new THREE.CylinderGeometry(0.015, 0.015, 0.3, 6), hcM.chrome, -0.82, y + 0.75, 0);
       P.at(new THREE.TorusGeometry(0.06, 0.012, 6, 10, Math.PI), hcM.chrome, -0.78, y + 0.9, 0);
-      // the toilet: bowl, seat, lid, tank
-      const T = hcPiece(C, 8.6, 5.55, '-x');
-      T.at(new THREE.CylinderGeometry(0.17, 0.12, 0.4, 14), hcM.porcelain, 0, y + 0.2, 0.05);
-      T.at(new THREE.TorusGeometry(0.16, 0.025, 6, 16).rotateX(Math.PI / 2), hcM.porcelain, 0, y + 0.42, 0.05);
-      T.box(hcM.porcelain, -0.2, 0.2, y + 0.42, y + 0.8, -0.22, -0.08, true); T.box(hcM.porcelain, -0.21, 0.21, y + 0.8, y + 0.83, -0.23, -0.07);
-      T.box(hcM.chrome, 0.12, 0.17, y + 0.73, y + 0.75, -0.08, -0.06);
-      T.col(-0.2, 0.2, y, y + 0.42, -0.15, 0.22);
+      // the toilet (r99): a proper porcelain toilet built from parts - a flared pedestal, an elongated bowl with a rolled rim and
+      // standing water, a white seat on chrome hinges, the lid raised against the tank, the tank with its own lid, a chrome
+      // flush lever, bolt caps at the foot and the supply line with its shut-off valve running down to the floor
+      const T = hcPiece(C, 8.6, 5.55, '-x'), EL = 1.25, bv = 0.07;                                         // EL: the bowl's elongation (front to back)
+      const lathe = (pts) => new THREE.LatheGeometry(pts.map(([r, h]) => new THREE.Vector2(r, h)), 24).scale(1, 1, EL);
+      T.at(lathe([[0, 0], [0.125, 0], [0.13, 0.012], [0.105, 0.05], [0.088, 0.14], [0.09, 0.24], [0.11, 0.3]]), hcM.porcelain, 0, y, bv);           // the pedestal
+      T.at(lathe([[0.11, 0.3], [0.155, 0.35], [0.183, 0.395], [0.192, 0.418], [0.186, 0.432], [0.165, 0.43], [0.15, 0.405], [0.11, 0.37], [0.07, 0.338], [0, 0.33]]), hcM.porcelain, 0, y, bv);   // the bowl, its rolled rim and the inner basin
+      T.at(new THREE.CircleGeometry(0.075, 20).rotateX(-Math.PI / 2).scale(1, 1, EL), hcM.water, 0, y + 0.345, bv + 0.01);          // the standing water
+      for (const u of [-0.1, 0.1]) T.at(new THREE.SphereGeometry(0.018, 8, 6, 0, Math.PI * 2, 0, Math.PI / 2), hcM.porcelain, u, y + 0.012, bv + 0.03);   // bolt caps
+      T.at(new THREE.TorusGeometry(0.152, 0.026, 8, 28).rotateX(Math.PI / 2).scale(1, 0.55, EL), hcM.cream, 0, y + 0.448, bv + 0.005);   // the seat
+      for (const u of [-0.07, 0.07]) T.at(new THREE.CylinderGeometry(0.012, 0.012, 0.035, 8).rotateZ(Math.PI / 2), hcM.chrome, u, y + 0.452, -0.115);   // seat hinges
+      T.at(new THREE.CylinderGeometry(0.175, 0.175, 0.018, 28).scale(1, 1, EL).rotateX(-Math.PI / 2 + 0.13), hcM.cream, 0, y + 0.66, -0.055);         // the lid, raised against the tank
+      T.box(hcM.porcelain, -0.2, 0.2, y + 0.43, y + 0.79, -0.235, -0.085, true);                         // the tank
+      T.box(hcM.porcelain, -0.215, 0.215, y + 0.79, y + 0.825, -0.245, -0.075);                          // the tank lid
+      T.box(hcM.porcelain, -0.19, 0.19, y + 0.4, y + 0.43, -0.22, -0.1);                                 // the tank's foot on the bowl
+      T.at(new THREE.CylinderGeometry(0.016, 0.016, 0.012, 12).rotateX(Math.PI / 2), hcM.chrome, 0.14, y + 0.735, -0.079);          // the lever's escutcheon
+      T.at(new THREE.CylinderGeometry(0.007, 0.006, 0.085, 6).rotateZ(Math.PI / 2), hcM.chrome, 0.1, y + 0.735, -0.074);            // the flush lever
+      T.at(new THREE.CylinderGeometry(0.006, 0.006, 0.38, 6), hcM.chrome, -0.13, y + 0.21, -0.2);         // the supply line
+      T.at(new THREE.CylinderGeometry(0.018, 0.018, 0.03, 8).rotateX(Math.PI / 2), hcM.chrome, -0.13, y + 0.12, -0.225);            // its shut-off valve
+      T.col(-0.2, 0.2, y, y + 0.45, -0.17, 0.32);
+      T.col(-0.2, 0.2, y + 0.43, y + 0.83, -0.245, -0.075);
       // a pedestal sink and a mirrored cabinet
       const S = hcPiece(C, 5.85, 7.62, '-z');
       S.at(new THREE.CylinderGeometry(0.07, 0.11, 0.75, 12), hcM.porcelain, 0, y + 0.375, 0);
@@ -10309,7 +10341,23 @@
       g.computeVertexNormals(); return g;
     })();
     const hcStemGeo = new THREE.CylinderGeometry(0.06, 0.1, 0.28, 6).translate(0, 0.14, 0);
-    const hcFaceGeo = new THREE.PlaneGeometry(1, 1);
+    // (r99) the carved face: a patch of the pumpkin's own ribbed surface (radius 1, its front at +z), lying on the skin
+    // (the old flat square floated in front of the curve at its edges)
+    const hcFaceGeo = (() => {
+      const NU = 16, NV = 12, pos = [], uv = [], idx = [];
+      for (let j = 0; j <= NV; j++) for (let i = 0; i <= NU; i++) {
+        const u = i / NU, v = j / NV, phi = (u - 0.5) * 1.45, yl = 0.02 + (v - 0.5) * 1.2;
+        const ys = Math.max(-0.985, Math.min(0.985, yl / 0.74)), st = Math.sqrt(1 - ys * ys);
+        let x = Math.sin(phi) * st, z = Math.cos(phi) * st, y = ys * 0.74;
+        const k = 1 - 0.07 * Math.pow(Math.abs(Math.sin(Math.atan2(z, x) * 4)), 0.6); x *= k; z *= k;
+        if (y > 0.6) y -= 0.12 * (1 - Math.hypot(x, z));
+        pos.push(x * 1.006, y * 1.006, z * 1.006); uv.push(u, v);
+      }
+      for (let j = 0; j < NV; j++) for (let i = 0; i < NU; i++) { const a = j * (NU + 1) + i, b = a + 1, c = a + NU + 1, d = c + 1; idx.push(a, b, d, a, d, c); }
+      const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setIndex(idx); g.computeVertexNormals();
+      return g;
+    })();
+    hcM.face.polygonOffset = true; hcM.face.polygonOffsetFactor = -2; hcM.face.polygonOffsetUnits = -4;   // (drawn on the skin, never flickering through it)
     const hcPumpkinLit = new THREE.MeshStandardMaterial({ color: 0xe0701e, roughness: 0.55, emissive: 0x6a2000, emissiveIntensity: 1 });
     // a pumpkin at (x, y = the surface it sits on, z), radius r, its face (if carved) turned to yaw (the face's +z)
     function hcPumpkin(x, y, z, r, yaw, carved = true, light = false) {
@@ -10317,7 +10365,7 @@
       hcPut(carved ? 'pumpkinLit' : 'pumpkin', hcPumpkinGeo, carved ? hcPumpkinLit : hcM.pumpkin, x, y + r * 0.72, z, 0, ry, 0, r, r, r);
       hcPut('stem', hcStemGeo, hcM.stem, x, y + r * 1.3, z, hr(-0.2, 0.2), hr(0, 3), hr(-0.2, 0.2), r, r, r);
       if (carved) {
-        hcPut('face', hcFaceGeo, hcM.face, x + Math.sin(ry) * r * 0.99, y + r * 0.74, z + Math.cos(ry) * r * 0.99, 0, ry, 0, r * 1.45, r * 1.2, 1);
+        hcPut('face', hcFaceGeo, hcM.face, x, y + r * 0.72, z, 0, ry, 0, r, r, r);        // (r99: on the pumpkin's surface, turned with it)
         if (light) lightSources.push({ x: x + Math.sin(ry) * r * 1.5, y: y + r, z: z + Math.cos(ry) * r * 1.5, color: 0xff7a1a, intensity: 1.6, distance: 3.2, weight: 0.6, fire: true });
       }
     }
@@ -10474,6 +10522,12 @@
         m.position.set((x0 + x1) / 2, y, (z0 + z1) / 2); m.receiveShadow = true; hcStreet.add(m); HC_ROADS.push({ x0, x1, z0, z1 });
       };
       road(HALLOW.x0 - 2, HALLOW.x1 + 2, Z - rw, Z + rw, 0.012);
+      // (r100) and on out of town both ways (beyond the barricade to the west; to the east, the way the police come)
+      for (const [a0, a1] of [[HALLOW.x1 + 2, HALLOW.x1 + 34], [HALLOW.x0 - 34, HALLOW.x0 - 2]]) {
+        const m = new THREE.Mesh(new THREE.PlaneGeometry(a1 - a0, 2 * rw).rotateX(-Math.PI / 2), hcM.asphalt.clone());
+        m.material.map = hcAsphaltTex.clone(); m.material.map.needsUpdate = true; m.material.map.repeat.set((a1 - a0) / 4.5, 2 * rw / 4.5);
+        m.position.set((a0 + a1) / 2, 0.012, Z); m.receiveShadow = true; hcStreet.add(m);
+      }
       road(ex - rw, ex + rw, HALLOW.z0 - 2, HALLOW.z1 + 2, 0.0125);
       road(mx - rw, mx + rw, bl.z, Z - rw, 0.013);
       { const m = new THREE.Mesh(new THREE.CircleGeometry(bl.r, 40).rotateX(-Math.PI / 2), hcM.asphalt); m.position.set(bl.x, 0.0135, bl.z); hcStreet.add(m); HC_ROADS.push({ circle: true, x: bl.x, z: bl.z, r: bl.r }); }
@@ -10522,6 +10576,22 @@
         const sign = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 1.2), hcM.sign); sign.position.set(sx, 1.55, sz + 0.075); hcStreet.add(sign);
         hcBox(hcSB, hcM.furnDark, sx - 1.25, sx + 1.25, 0.9, 2.2, sz - 0.06, sz + 0.06, true);
         HC_SPOTS.sign = new THREE.Vector3(sx, 0, sz);
+      }
+      // (r99) the same welcome sign at the town's other entrances: the west end of Main Street and both ends of Elm Lane,
+      // beside the road on the sidewalk, facing the road
+      {
+        const sign = (cx, cz, face) => {
+          const alongX = face === '+z' || face === '-z', yaw = { '+z': 0, '-z': Math.PI, '+x': Math.PI / 2, '-x': -Math.PI / 2 }[face];
+          const box = (a0, a1, y0, y1, t0, t1) => alongX ? hcBox(hcSB, hcM.furnDark, cx + a0, cx + a1, y0, y1, cz + t0, cz + t1, true) : hcBox(hcSB, hcM.furnDark, cx + t0, cx + t1, y0, y1, cz + a0, cz + a1, true);
+          for (const d of [-1.05, 1.05]) box(d - 0.07, d + 0.07, 0, 2.3, -0.07, 0.07);
+          box(-1.25, 1.25, 0.9, 2.2, -0.06, 0.06);
+          const m = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 1.2), hcM.sign); m.rotation.y = yaw;
+          m.position.set(cx + Math.sin(yaw) * 0.075, 1.55, cz + Math.cos(yaw) * 0.075); hcStreet.add(m);
+          (HC_SPOTS.signs = HC_SPOTS.signs || []).push(new THREE.Vector3(cx, 0, cz));
+        };
+        sign(HALLOW.x0 + 5.5, Z + rw + 0.9, '-z');                                  // the west end of Main Street
+        sign(ex + rw + 0.9, HALLOW.z0 + 5.5, '-x');                                 // the north end of Elm Lane
+        sign(ex - rw - 0.9, HALLOW.z1 - 5.5, '+x');                                 // the south end of Elm Lane
       }
       hcSB.build(hcStreet, { castShadow: false });
     }
@@ -10889,8 +10959,8 @@
       if (!H || !s) continue;
       let p = s;
       if (where === 'hall') {                                       // (the hall table's pumpkin is in the middle: the phone goes at its far end)
-        const c = H.lp(3.8, s.y, 0.62), dx = s.x - c.x, dz = s.z - c.z, l = Math.hypot(dx, dz) || 1;
-        p = new THREE.Vector3(c.x + dx / l * 0.175, s.y, c.z + dz / l * 0.175);
+        const c = H.lp(3.8, 0, 0.62), dx = s.x - c.x, dz = s.z - c.z, l = Math.hypot(dx, dz) || 1;   // (r99: the spot is already in the world; only its direction matters)
+        p = new THREE.Vector3(c.x + dx / l * 0.175 * (H.K || 1), s.y, c.z + dz / l * 0.175 * (H.K || 1));
       }
       const P = hcPhone(HC_PHONES.length, p, H.F.ry + turn);
       P.house = no; P.where = where;
@@ -10927,6 +10997,7 @@
         || HC_CARS.some((c) => Math.hypot(x - c.x, z - c.z) < 3.2)
         || (HALLOW.gazebo && Math.hypot(x - HALLOW.gazebo.x, z - HALLOW.gazebo.z) < HALLOW.gazebo.r + 2)
         || HC_RESERVED.some((Q) => x > Q.x0 - r && x < Q.x1 + r && z > Q.z0 - r && z < Q.z1 + r)
+        || (HC_SPOTS.signs || []).some((q) => Math.hypot(x - q.x, z - q.z) < 1.8 + r)
         || (x > HALLOW.park.x0 - 0.5 && x < HALLOW.park.x1 + 0.5 && (Math.abs(x - (HALLOW.park.x0 + HALLOW.park.x1) / 2) < 2 || Math.abs(z - (HALLOW.park.z0 + HALLOW.park.z1) / 2) < 2) && z > HALLOW.park.z0 - 0.5 && z < HALLOW.park.z1 + 0.5);
       const tree = (x, z, s = 1, bare = false) => {
         if (blocked(x, z, 0.4 * s)) return false;
@@ -10968,7 +11039,7 @@
         RB.add(UNIT_BOX, hcM.furn, sp.x, FL + 0.77, sp.z + 0.24, 0, 0, 0, 0.5, 0.7, 0.04);
         for (const s of [-1, 1]) RB.add(UNIT_BOX, hcM.furn, sp.x + s * 0.22, FL + 0.05, sp.z, 0, 0, 0, 0.04, 0.08, 0.8);
         RB.build(H.group, { castShadow: false });
-        const a = lp(P0 + 0.95, 0, -1.25), b = lp(P0 + 1.45, 0, -0.75); addBoxCollider((a.x + b.x) / 2, FL, (a.z + b.z) / 2, Math.abs(b.x - a.x), 0.46, Math.abs(b.z - a.z));
+        const a = lp(P0 + 0.95, 0, -1.25), b = lp(P0 + 1.45, 0, -0.75), hk = H.K || 1; addBoxCollider((a.x + b.x) / 2, FL * hk, (a.z + b.z) / 2, Math.abs(b.x - a.x), 0.46 * hk, Math.abs(b.z - a.z));
       } else if (H.no === 2 || H.no === 3) { const p = lp(doorX + 0.25, FL * 2 / 3, -PD - 0.55); hcPut('skelSit', hcSkel.sit, hcM.bone, p.x, p.y - 0.42, p.z, 0, out, 0, 1, 1, 1); }
       // cobweb clusters in the porch corners (two or three webs each)
       for (const [lx, dx] of [[P0 + 0.12, 1], [P1 - 0.12, -1]]) for (let k = 0; k < 2; k++) { const p = lp(lx, PR - 0.02 - k * 0.1, -PD + 0.12 + k * 0.1), ddx = dx * F.c + 1 * F.s, ddz = -dx * F.s + 1 * F.c; hcWeb(p, ddx, ddz, 0.75 - k * 0.2); }
@@ -10985,7 +11056,7 @@
     }
     // hanging skeletons in a few of the front-yard maples
     for (const no of [13, 14, 3]) {
-      const H = HC_HOUSES.find((h) => h.no === no), p = H.lp(1.2, 0, -(H.yard || 5) + 1.4);
+      const H = HC_HOUSES.find((h) => h.no === no), p = { x: H.F.wx(1.2, -(H.yard || 5) + 1.4), z: H.F.wz(1.2, -(H.yard || 5) + 1.4) };   // (r99: the yard's frame, where the tree is)
       const T = HC_TREES.find((t) => Math.hypot(t.x - p.x, t.z - p.z) < 0.5); if (!T) continue;
       hcPut('skelHang', hcSkel.hang, hcM.bone, T.x + 1.1 * T.s, T.H * 0.92, T.z + 0.2, 0, hr(0, 6), 0, 1, 1, 1);
     }
@@ -11001,6 +11072,7 @@
     for (let k = 0; k < 18; k++) {
       const x = hr(HALLOW.x0 + 3, HALLOW.x1 - 3), z = hr(HALLOW.z0 + 3, HALLOW.z1 - 3), r = hr(0.7, 1.1);
       if (HC_RESERVED.some((Q) => x > Q.x0 && x < Q.x1 && z > Q.z0 && z < Q.z1)) continue;
+      if ((HC_SPOTS.signs || []).some((q) => Math.hypot(x - q.x, z - q.z) < 1.6)) continue;
       if (HC_ROOMS.some((R) => x > R.x0 - 1 && x < R.x1 + 1 && z > R.z0 - 3 && z < R.z1 + 1) || HC_ROADS.some((Q) => !Q.circle && x > Q.x0 - 2.5 && x < Q.x1 + 2.5 && z > Q.z0 - 2.5 && z < Q.z1 + 2.5)) continue;
       hcPut('pile', hcPileGeo, hcM.canopy, x, 0, z, 0, hr(0, 6), 0, r * 1.2, r * 0.32, r, [0xa83a14, 0xc86418, 0x8a3010][(hr(0, 3)) | 0]);
     }
@@ -11042,17 +11114,21 @@
     }
     // ---------- beyond the edge of town: dark rooftops with a lit window or two, black pines ----------
     {
-      const BG = makeBatch();
+      const BG = makeBatch(), BGall = BG;
       const tri = new THREE.Shape(); tri.moveTo(-4, 0); tri.lineTo(4, 0); tri.lineTo(0, 2.6); tri.closePath();
+      // (r100) Main Street runs on out of town at both ends: no rooftops or pines standing across it (they were the dark
+      // spikes at the end of the street), so you can see the cruisers come up it
+      const mainOpen = (x, z, half) => (x > HALLOW.x1 || x < HALLOW.x0) && Math.abs(z - HALLOW.z) < HALLOW.edge + 2.5 + half;
       const roofline = (x, z, along) => {
         const w = hr(7, 10), h = hr(4.5, 7);
+        const BG = mainOpen(x, z, along ? 3.5 : w / 2) ? { add() { } } : BGall;   // (its random draws still happen, so the rest of the skyline stays put)
         BG.add(UNIT_BOX, hcM.silhouette, x, h / 2, z, 0, along ? 0 : Math.PI / 2, 0, w, h, 7);
         const g = new THREE.ExtrudeGeometry(tri, { depth: w, bevelEnabled: false }).rotateY(along ? Math.PI / 2 : 0); BG.add(g, hcM.silhouette, along ? x - w / 2 : x, h, along ? z : z - w / 2); g.dispose();
         for (let k = 0; k < 2; k++) if (_hcR() < 0.55) { const o = hr(-w / 3, w / 3), wy = hr(1.5, h - 1); BG.add(new THREE.PlaneGeometry(0.8, 1.0), hcM.farWin, along ? x + o : x + (x < 0 ? 3.51 : -3.51), wy, along ? z + (z < 150 ? 3.51 : -3.51) : z + o, 0, along ? (z < 150 ? 0 : Math.PI) : (x < 0 ? Math.PI / 2 : -Math.PI / 2), 0); }
       };
       for (let x = -46; x <= 44; x += hr(10, 14)) roofline(x, 203, true);
       for (let z = 100; z <= 196; z += hr(10, 14)) { roofline(-57, z, false); roofline(55, z, false); }
-      for (let k = 0; k < 60; k++) { const side = k % 3, h = hr(6, 12); const x = side === 0 ? hr(-60, 58) : side === 1 ? hr(-62, -52) : hr(51, 60), z = side === 0 ? hr(86.5, 89.5) : hr(92, 204); BG.add(new THREE.ConeGeometry(h * 0.28, h, 6), hcM.silhouette, x, h / 2, z); }
+      for (let k = 0; k < 60; k++) { const side = k % 3, h = hr(6, 12); const x = side === 0 ? hr(-60, 58) : side === 1 ? hr(-62, -52) : hr(51, 60), z = side === 0 ? hr(86.5, 89.5) : hr(92, 204); if (!mainOpen(x, z, h * 0.28)) BG.add(new THREE.ConeGeometry(h * 0.28, h, 6), hcM.silhouette, x, h / 2, z); }
       const bg = new THREE.Group(); scene.add(bg); BG.build(bg, { castShadow: false, receiveShadow: false });
     }
     // ---------- low mist banks drifting through the streets, and the harvest moon (kept low behind you by X37) ----------
@@ -13575,7 +13651,7 @@
         return true;
       }
       // window panes shatter
-      if (currentMap === 'camp') for (const pn of panes) {
+      if (currentMap === 'camp' || currentMap === 'hallowcreek') for (const pn of panes) {   // (r99: Hallowcreek's house windows too)
         if (pn.broken) continue;
         _hl.subVectors(p, pn.center);
         if (Math.abs(_hl.dot(pn.normal)) > 0.06 || Math.abs(_hl.dot(pn.right)) > pn.w / 2 || Math.abs(_hl.y) > pn.h / 2) continue;
@@ -27241,6 +27317,18 @@
           tone(t, 95, 0.4 * a, 0.45, 'sawtooth'); tone(t, 190, 0.25 * a, 0.4, 'square');
         },
         breaker(dist) { if (!ok()) return; const t = ctx.currentTime + 0.005, a = att(dist); tone(t, 85, 0.8 * a, 0.18, 'square'); burst(t, 900, 140, 0.8 * a, 0.16, 'lowpass'); tone(t + 0.12, 60, 0.3 * a, 1.2, 'sawtooth', 0.4); },
+        yelp() {                                       // (r100) the "yelp" as the cruisers pull up: a fast rising and falling whoop
+          if (!ok()) return; const t = ctx.currentTime + 0.01;
+          for (let k = 0; k < 3; k++) { const o = ctx.createOscillator(); o.type = 'sawtooth'; const g = ctx.createGain(); const t0 = t + k * 0.16;
+            o.frequency.setValueAtTime(650, t0); o.frequency.linearRampToValueAtTime(1500, t0 + 0.08); o.frequency.linearRampToValueAtTime(700, t0 + 0.15);
+            g.gain.setValueAtTime(0.0001, t0); g.gain.linearRampToValueAtTime(0.22, t0 + 0.02); g.gain.linearRampToValueAtTime(0.0001, t0 + 0.155);
+            o.connect(g); g.connect(out); o.start(t0); o.stop(t0 + 0.2); }
+        },
+        pistol(dist) {                                 // (r100) a pistol shot: a sharp crack, the boom and its echo down the street
+          if (!ok()) return; const t = ctx.currentTime + 0.005, a = Math.max(0.35, att(dist * 0.4));
+          burst(t, 7000, 1200, 0.95 * a, 0.09, 'highpass'); burst(t, 900, 120, 0.9 * a, 0.35, 'lowpass'); tone(t, 70, 0.6 * a, 0.18, 'sine', 0.002);
+          burst(t + 0.22, 1400, 300, 0.18 * a, 0.5, 'bandpass', 0.7);
+        },
         setHum(v) { if (!ok()) return; hum.gain.setTargetAtTime(Math.min(0.35, fin(v)), ctx.currentTime, 0.15); },
         setSiren(v, open) { if (!ok()) return; siren.gain.setTargetAtTime(Math.min(0.5, fin(v)), ctx.currentTime, 0.25); siren.filter.frequency.setTargetAtTime(400 + 3600 * Math.min(1, fin(open)), ctx.currentTime, 0.3); },
       };
@@ -27657,7 +27745,7 @@
       hpAudio.setSiren(active || (HPQ.won && here) ? 0.04 + 0.4 * near * near : 0, near);
       const showCar = here && (HPQ.called || HPQ.won) && rem < 14;
       C.group.visible = showCar;
-      if (showCar) {
+      if (showCar && !C.cut) {                                               // (r100: during and after the arrival scene, it drives itself)
         const f = rem / 14, x = HP_STOP_X + 62 * f * f;
         C.group.position.set(x, 0, HALLOW.z + 1.6); C.group.rotation.y = -Math.PI / 2;
         if (rem < 0.5) C.group.rotation.z = Math.sin(t * 20) * 0.004 * rem;                               // the nose dips as it stops
@@ -27935,7 +28023,7 @@
       const disp = new THREE.Mesh(new THREE.PlaneGeometry(0.036, 0.009), dispMat); disp.position.set(0, -0.042, 0.0218); g.add(disp);
       const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xff2010, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
       glow.scale.set(0.05, 0.05, 1); glow.position.copy(led.position); g.add(glow);
-      g.scale.setScalar(1.25);                                       // (chunky in the hand, easy to spot on a table)
+      g.scale.setScalar(0.75);                                       // (r99: 0.6x its old size: it fits a survivor's hand)
       return { g, ledMat, dispMat, glow };
     }
     const WK = [];
@@ -28856,7 +28944,7 @@
         hcNavGround(0, 0);                                                    // (the floors first)
         try { mapLoad.withColliders('hallowcreek', hcRegisterStepUps); } catch (e) { console.warn('[Hallowcreek] step-ups', e); }
         const nav = baseBN(map);
-        try { mapLoad.withColliders('hallowcreek', () => hcCarveDoorways(nav)); } catch (e) { console.warn('[Hallowcreek] doorways', e); }
+        try { mapLoad.withColliders('hallowcreek', () => { hcIndoorCells(nav); hcCarveDoorways(nav); }); } catch (e) { console.warn('[Hallowcreek] doorways', e); }
         return nav;
       };
     }
@@ -28876,6 +28964,20 @@
       hcRegisterStepUps.count = n;
       return n;
     }
+    // (r99) inside the houses (built at 0.78 now) the rooms are planned with a slimmer margin (0.2 instead of 0.32): it
+    // still clears the furniture and walls, and it slides past door frames as it walks (its body is 0.27)
+    function hcIndoorCells(nav) {
+      const D = nav.D, rooms = HC_ROOMS.filter((R) => !R.dead);
+      let n = 0;
+      for (let i = 0; i < nav.nx; i++) for (let j = 0; j < nav.nz; j++) {
+        const k = i * nav.nz + j; if (nav.free[k]) continue;
+        const x = D.x0 + i * D.step, z = D.z0 + j * D.step;
+        if (!rooms.some((R) => x > R.x0 - 0.3 && x < R.x1 + 0.3 && z > R.z0 - 0.3 && z < R.z1 + 0.3)) continue;
+        if (circleFree(nav, x, z, 0.2, nav.ys[k], true)) { nav.free[k] = 1; n++; }
+      }
+      nav.hcIndoor = n;
+      return n;
+    }
     // the doorways: a 0.86 m gap is wider than the monster (0.54) but narrower than the grid's clearance check, so the
     // cells right in each gap are opened if they clear the jambs by a thinner margin (it slides through them as it walks)
     function hcCarveDoorways(nav) {
@@ -28892,8 +28994,8 @@
           if (i < 0 || j < 0 || i >= nav.nx || j >= nav.nz) continue;
           const k = i * nav.nz + j; if (nav.free[k]) continue;
           const px = D.x0 + i * D.step, pz = D.z0 + j * D.step;
-          if (Math.abs(alongX ? px - cx : pz - cz) > half - 0.12) continue;       // (only cells actually in line with the gap)
-          if (circleFree(nav, px, pz, 0.14, nav.ys[k], true)) { nav.free[k] = 1; opened++; }
+          if (Math.abs(alongX ? px - cx : pz - cz) > Math.max(half - 0.12, HC_NAV_STEP / 2 + 0.01)) continue;   // (cells in line with the gap: at least the nearest row, however narrow the door)
+          if (circleFree(nav, px, pz, 0.05, nav.ys[k], true)) { nav.free[k] = 1; opened++; }   // (it slides between the jambs as it walks)
         }
       }
       nav.hcDoorCells = opened;
@@ -28913,29 +29015,34 @@
     // =====================================================================
     //  2. YOUR SIZE AS HALLOWCREEK'S MONSTER
     // =====================================================================
-    const hcMonHere = () => currentMap === 'hallowcreek';
-    // your eyes: lifted to his eyes there (the same lift as before, to a different height)
+        // your eyes: lifted to his eyes there (the same lift as before, to a different height)
+    // (r98) every map: the monster is about 1.4x a survivor (MON_GLB_CAP: never up into the waiting room's ceiling);
+    // Hallowcreek keeps its JK_HEIGHT, and with THE SHAPE loaded your eyes are his, reared up on his knuckles
+    const MON_GLB_CAP = 0.94;
+    const monCapFor = (map) => (map === 'hallowcreek' ? JK_HEIGHT : MON_GLB_CAP);
+    const monEyeFor = (map) => (map === 'hallowcreek' ? (shapeReady() ? shapeEyeHeight() : HC_MON_EYE) : MON_GLB_CAP * MON_EYE_FRAC);
+    // your eyes: lifted to the monster's eyes (the same lift as before, to its new height)
     updateMonLift = function (dt) {
       if (monLift.parent !== playerRig) { playerRig.add(monLift); monLift.position.set(0, 0, 0); monLift.rotation.set(0, 0, 0); monLift.scale.set(1, 1, 1); }
       if (camera.parent !== monLift) monLift.add(camera);
-      const eye = hcMonHere() ? HC_MON_EYE : MON_EYE_HEIGHT;
+      const eye = monEyeFor(currentMap);
       const want = playerRole === 'monster' && renderer.xr.isPresenting && !titleActive ? Math.max(0, eye - SPAWN_HEAD_HEIGHT) : 0;
       monLiftY += (want - monLiftY) * Math.min(1, (dt || 0.016) * 5);
       if (Math.abs(want - monLiftY) < 1e-3) monLiftY = want;
       monLift.position.y = monLiftY / (playerRig.scale.y || 1);
     };
-    // your body, and everyone else's monster on Hallowcreek: never taller than Jack (and its "tallest lately" memory
-    // forgets the other maps' height straight away)
+    // your body, and everyone else's monster: never taller than the cap for that map (and its "tallest lately" memory
+    // forgets another map's height straight away)
     {
       const basePMG = poseMonsterGlb;
       poseMonsterGlb = function (inst, dt, headPos, headQ, bodyYaw, map, grips, minH) {
-        if (map !== 'hallowcreek') { inst.hcSized = false; return basePMG(inst, dt, headPos, headQ, bodyYaw, map, grips, minH); }
-        if (!inst.hcSized || (inst.hMax || 0) > JK_HEIGHT) { inst.hMax = Math.min(inst.hMax || JK_HEIGHT, JK_HEIGHT); inst.hcSized = true; }
-        const r = basePMG(inst, dt, headPos, headQ, bodyYaw, map, grips, Math.min(minH || 0, JK_HEIGHT));
-        if (inst.height > JK_HEIGHT + 1e-3) {                                  // (belt and braces: scaled to Jack's height under the same head)
+        const cap = monCapFor(map);
+        if (inst.sizedFor !== map || (inst.hMax || 0) > cap) { inst.hMax = Math.min(inst.hMax || cap, cap); inst.sizedFor = map; }
+        const r = basePMG(inst, dt, headPos, headQ, bodyYaw, map, grips, Math.min(minH || 0, cap));
+        if (inst.height > cap + 1e-3) {                                        // (belt and braces: scaled to the cap under the same head)
           const top = inst.root.position.y + inst.height * MON_EYE_FRAC;
-          monSetHeight(inst, JK_HEIGHT);
-          inst.root.position.y = Math.max(floorUnder(map, headPos.x, headPos.z), top - JK_HEIGHT * MON_EYE_FRAC);
+          monSetHeight(inst, cap);
+          inst.root.position.y = Math.max(floorUnder(map, headPos.x, headPos.z), top - cap * MON_EYE_FRAC);
           inst.root.updateMatrixWorld(true);
         }
         return r;
@@ -29049,7 +29156,8 @@
     const SHAPE_GLB_URL = './shape.glb';
     const SHAPE_EYE_MODEL = new THREE.Vector3(-0.046, 0.33, 0.0);       // (measured: just behind the mask's eye holes)
     const SHAPE_FIST_MODEL = { L: new THREE.Vector3(0.812, -0.357, 0.266), R: new THREE.Vector3(-0.826, -0.377, 0.266) };   // (measured: fist centres)
-    const SHAPE_SHOULDER_MAX = 2.3, SHAPE_ROLL_MAX = 1.2, SHAPE_HEAD_MAX = 1.0, SHAPE_MIDLINE = 0.05;
+    const SHAPE_SHOULDER_MAX = 1.3, SHAPE_ELBOW_MAX = 1.7, SHAPE_ROLL_MAX = 0.9, SHAPE_HEAD_MAX = 0.9, SHAPE_MIDLINE = 0.05;   // (r98: tighter: the sleeves bend, never spike)
+    const SHAPE_REAR = 0.1;                 // (r98: he stands reared up on his knuckles: his hem this far (fraction of his height) off the floor)
     const SHAPE = { ready: false, failed: false, src: null, height: 1, minY: 0, cx: 0, cz: 0, fpGeo: null, status: { el: null, text: '', kind: 'wait' } };
     function shapeReady() { return !!(shapeReady.ok); }                  // (hoisted: Jack's module asks)
     function hcMonsterName() { return shapeReady() ? 'THE SHAPE' : "Jack o' Harvest"; }
@@ -29093,6 +29201,8 @@
           o.frustumCulled = false; o.castShadow = false; o.receiveShadow = false;
           for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
             if (m.map) { m.map.colorSpace = THREE.SRGBColorSpace; m.map.anisotropy = 4; m.map.needsUpdate = true; }
+            if ('roughness' in m) m.roughness = 0.75;                        // (r98: matte: the hair and the pale mask never glare under the flashlight)
+            if ('metalness' in m) m.metalness = 0.0;
             m.needsUpdate = true;
           }
           if (o.isSkinnedMesh && !skinned) skinned = o;
@@ -29101,6 +29211,7 @@
       if (!skinned) throw new Error('no skinned mesh in shape.glb');
       monRepairRestPose(skinned);                                          // (its bones all sit at the origin: rest pose from the bind matrices)
       sc.updateMatrixWorld(true);
+      shapeReweightSleeves(skinned);                                       // (r98: the sleeves follow the arms, not the hips)
       // the leg chains ride on the arms (they're painted on the forearms and fists): hung from each ForeArm where they rest
       const byName = {}; sc.traverse((o) => { if (o.isBone) byName[o.name] = o; });
       for (const side of ['Left', 'Right']) {
@@ -29118,6 +29229,37 @@
       SHAPE.fpGeo = shapeFirstPersonGeometry(skinned);
       SHAPE.ready = true; shapeReady.ok = true;
     }
+    // (r98) arm vertices the auto-rigger partly tied to the hips / lower spine (about 36,000 of them, all down both
+    // arms): at the shoulder and armpit seam that share moves to the upper chest; beyond the edge of the torso it moves
+    // to whichever arm bone already drives that vertex most (upper arm, forearm or fist). So lifting an arm bends the
+    // sleeve at the shoulder and the elbow instead of dragging it back towards the hips into long dark spikes
+    function shapeReweightSleeves(skinned) {
+      const geo = skinned.geometry, P = geo.attributes.position, J = geo.attributes.skinIndex, W = geo.attributes.skinWeight, bones = skinned.skeleton.bones;
+      const id = (n) => bones.findIndex((b) => b.name === n);
+      const hips = bones.find((b) => b.name === 'Hips'), cx = hips ? hips.getWorldPosition(new THREE.Vector3()).x : 0;
+      const spine2 = id('Spine2'), torso = new Set(['Hips', 'Spine', 'Spine1', 'LeftUpLeg', 'RightUpLeg'].map(id).filter((i) => i >= 0));
+      const sides = [['Left', 1], ['Right', -1]].map(([n, sg]) => ({ sg, arm: id(n + 'Arm'), chain: new Set([n + 'Arm', n + 'ForeArm', n + 'Hand', n + 'Leg', n + 'Foot', n + 'ToeBase'].map(id).filter((i) => i >= 0)) }));
+      let moved = 0;
+      for (let v = 0; v < P.count; v++) {
+        for (const S of sides) {
+          let armW = 0, torW = 0, dom = -1, domW = -1;
+          for (let c = 0; c < 4; c++) { const j = J.getComponent(v, c), w = W.getComponent(v, c); if (S.chain.has(j)) { armW += w; if (w > domW) { domW = w; dom = j; } } else if (torso.has(j)) torW += w; }
+          if (armW < 0.12 || torW <= 0) continue;
+          const out = (P.getX(v) - cx) * S.sg;
+          if (out < 0.15) continue;                                         // (inside the torso: left as it is)
+          const to = out > 0.26 || spine2 < 0 ? dom : spine2;               // (beyond the torso: the arm bone that already drives it most; at the seam: the upper chest)
+          if (to < 0) continue;
+          for (let c = 0; c < 4; c++) if (torso.has(J.getComponent(v, c))) { J.setComponent(v, c, to); }
+          // (the same bone may now sit in two slots: that's fine, the weights add up the same)
+          moved++;
+          break;
+        }
+      }
+      J.needsUpdate = true;
+      console.log('[ShapeGLB] sleeves: ' + moved + ' seam vertices re-tied (hips / lower spine -> upper chest / arm)');
+    }
+    // (r98) your eyes as THE SHAPE: his eyes, with him reared up (how high the MONSTER view is lifted on Hallowcreek)
+    function shapeEyeHeight() { return (((SHAPE_EYE_MODEL.y - SHAPE.minY) / (SHAPE.height || 1)) + SHAPE_REAR) * JK_HEIGHT; }
     function shapeFirstPersonGeometry(skinned) {
       const geo = skinned.geometry, I = geo.index, J = geo.attributes.skinIndex, W = geo.attributes.skinWeight, bones = skinned.skeleton.bones;
       const hide = new Set(); bones.forEach((b, i) => { if (/^(Head|Neck|HeadTop_End)$/.test(b.name)) hide.add(i); });
@@ -29151,7 +29293,8 @@
       const eyeRoot = new THREE.Vector3(SHAPE_EYE_MODEL.x - SHAPE.cx, SHAPE_EYE_MODEL.y - SHAPE.minY, SHAPE_EYE_MODEL.z - SHAPE.cz).multiplyScalar(unit);   // (in the 1-tall root frame)
       let fp = null;
       if (firstPerson && SHAPE.fpGeo) {
-        fp = new THREE.SkinnedMesh(SHAPE.fpGeo, mesh.material); fp.frustumCulled = false; fp.castShadow = false;
+        const fm = mesh.material.clone(); fm.side = THREE.FrontSide;          // (r98: never the inside of his coverall in your view)
+        fp = new THREE.SkinnedMesh(SHAPE.fpGeo, fm); fp.frustumCulled = false; fp.castShadow = false;
         mesh.add(fp); fp.bind(mesh.skeleton, mesh.bindMatrix);
         mesh.layers.set(SURVIVOR_BODY_LAYER); fp.layers.set(SURVIVOR_ARMS_LAYER);   // (your eyes: the copy without head and neck)
       }
@@ -29192,7 +29335,7 @@
       shapeAim(A.U, _sV3.subVectors(_sE, _sS).clone(), elbow.sub(_sS), SHAPE_SHOULDER_MAX);
       A.F.getWorldPosition(_sE); _sG.copy(A.gLocal); A.F.localToWorld(_sG);
       const fistWant = _sS.clone().add(d0);
-      shapeAim(A.F, _sV3.subVectors(_sG, _sE).clone(), fistWant.sub(_sE), 0);
+      shapeAim(A.F, _sV3.subVectors(_sG, _sE).clone(), fistWant.sub(_sE), SHAPE_ELBOW_MAX);
       // the forearm rolls with the controller (the fist's top towards the grip's top), as far as a forearm can
       if (upW) {
         A.F.getWorldPosition(_sE); _sG.copy(A.gLocal); A.F.localToWorld(_sG);
@@ -29233,13 +29376,13 @@
         const off = _sV2.copy(S.eyeRoot).multiplyScalar(H).applyQuaternion(S.root.quaternion);
         S.root.position.subVectors(_sV1, off);
         const fl = floorUnder(map, S.root.position.x, S.root.position.z);
-        if (S.root.position.y < fl) {                                          // (crouching: he bows forward from the hem instead of sinking)
+        if (S.root.position.y < fl) {                                          // (crouching low: he bows forward from the hem instead of sinking)
           const lean = THREE.MathUtils.clamp((fl - S.root.position.y) / (0.6 * H), 0, 0.7);
           S.root.position.y = fl; S.root.rotation.set(lean, yaw, 0, 'YXZ');
         }
       } else {
         const fl = groundY(map, I.root.position.x, I.root.position.z);
-        S.root.position.set(I.root.position.x, I === monAI ? Math.max(fl, ai.pos.y) : fl, I.root.position.z);   // (his hem on the floor, however low its body crouches)
+        S.root.position.set(I.root.position.x, (I === monAI ? Math.max(fl, ai.pos.y) : fl) + SHAPE_REAR * H, I.root.position.z);   // (reared up on his knuckles, however low its body crouches)
       }
       S.root.updateMatrixWorld(true);
       // the head turns as its head turns
@@ -29332,6 +29475,535 @@
     shapeLoad();
     // (for the tests)
     window.__shape = { S: SHAPE, ready: () => shapeReady(), name: () => hcMonsterName(), copies: shapeCopies, status: () => SHAPE.status.text };
+    // =====================================================================
+    //  r98: monster.glb in first person, and its mask
+    //  - Its Head and Neck are held at their bind scale (1, 1, 1) every frame on every copy (yours, the AI's, other
+    //    players'), after all posing, so the hockey mask never squishes or warps. (A head torn off in a fight, and the
+    //    POV monitor's split-second hide, still work: those are the only times it's anything else.)
+    //  - Your own copy: the head, hood, collar, chest and shoulders were already kept off the layer your headset's eyes see
+    //    (only the forearms and hands are on it; the whole body stays on the layer everyone else, the POV monitor and the
+    //    desktop see). Now that first-person copy is also drawn one-sided, so the open ends of its sleeves never show the
+    //    hollow inside of the coat when you look down.
+    // =====================================================================
+    // your copy for your eyes: one-sided (never the inside of the coat)
+    function monFpOneSided(inst) {
+      if (!inst || !inst.mesh || inst.fpOneSided) return;
+      for (const c of inst.mesh.children) {
+        if (!c.isSkinnedMesh) continue;
+        const mats = Array.isArray(c.material) ? c.material : [c.material];
+        const fixed = mats.map((m) => { const n = m.clone(); n.side = THREE.FrontSide; return n; });
+        c.material = Array.isArray(c.material) ? fixed : fixed[0];
+      }
+      inst.fpOneSided = true;
+    }
+    // the mask at its bind scale
+    function monHeadScale(inst) {
+      if (!inst || !inst.bones) return;
+      for (const b of [inst.bones.head, inst.bones.neck]) {
+        if (!b) continue;
+        const s = b.scale;
+        if (s.x < 0.01 && s.y < 0.01 && s.z < 0.01) continue;                // (torn off: left as it is)
+        if (s.x !== 1 || s.y !== 1 || s.z !== 1) { s.set(1, 1, 1); b.updateMatrixWorld(true); }
+      }
+    }
+    {
+      const baseNet = updateNet;
+      updateNet = function (dt) {
+        const r = baseNet(dt);
+        try {
+          if (MONG.ready) {
+            monHeadScale(monMe); monHeadScale(monAI);
+            for (const p of netPeers().values()) if (p.monGlb) monHeadScale(p.monGlb);
+            if (monMe) monFpOneSided(monMe);
+          }
+        } catch (e) { if (!updateNet.r98W) { updateNet.r98W = true; console.warn('[MonsterGLB] mask / first person', e); } }
+        return r;
+      };
+    }
+    window.__r98 = { monHeadScale, monFpOneSided };
+    // =====================================================================
+    //  r100: HALLOWCREEK: THE POLICE ARRIVE (a 5 s cutscene when the countdown hits 0:00)
+    //  - When POLICE ARRIVING IN reaches 0:00 (and you're on Hallowcreek, not caught), a 5 second scene plays out in
+    //    the town itself before the victory screen: the cruiser that has been coming up Main Street and a second one
+    //    behind it pull up across the road, light bars flashing, sirens wailing and a yelp as they stop; the survivors
+    //    (you and everyone else still alive on the map) sprint down Main Street towards them with THE SHAPE right behind;
+    //    the officer, a proboscis monkey in a navy uniform shirt with a gold badge and a peaked cap, swings the driver's
+    //    door open, steps out from behind it and fires twice; THE SHAPE is knocked backwards and falls flat on his back.
+    //    Then YOU ESCAPED and +120 COINS (the victory panel and reward exactly as before).
+    //  - In the headset you watch it from the south side of Main Street: a quick fade, you're standing there for the
+    //    5 seconds (your own movement is paused; you can look around), then a fade back to where you were. On the
+    //    desktop the camera watches from the same spot and pans with the action, then goes back.
+    //  - The actors are copies made for the scene: the survivors use survivor.glb (their arms galloping), the officer is
+    //    survivor.glb in uniform, THE SHAPE is a copy of shape.glb (posed like the hunting one: arms reaching, then
+    //    thrown up as he goes over). The real monster AI is paused for the scene (and is gone with the victory, as
+    //    before); other players' bodies are hidden while their stand-ins run. Every client plays it from the same
+    //    synced countdown, so nothing extra goes over the network.
+    //  - If survivor.glb or shape.glb isn't loaded, simple stand-ins take their place (the GLB FAILED badges say why).
+    // =====================================================================
+    const HPC_LEN = 5.0;
+    const HPC = { on: false, after: false, t: 0, built: false, actors: [], cop: null, shape: null, carB: null, door: null, doorGap: null, glowB: null,
+                  saved: null, hidden: new Set(), shots: [false, false], flash: null, flashT: 0, light: null, lightOn: false, puff: null, puffT: 0, yelped: false, endFade: -1 };
+    const HPC_VIEW = { x: 32.75, z: HALLOW.z + 4.4, lift: 0.35 };                // where you watch from: the north sidewalk, a few metres from it all
+    const HPC_LOOK = { x: 36.65, z: HALLOW.z + 1.25 };                          // (between where the officer fires from and where THE SHAPE goes down)
+    const _hpcV1 = new THREE.Vector3(), _hpcV2 = new THREE.Vector3(), _hpcV3 = new THREE.Vector3(), _hpcQ1 = new THREE.Quaternion(), _hpcQ2 = new THREE.Quaternion();
+    const _hpcA1 = new THREE.Vector3(), _hpcA2 = new THREE.Vector3(), _hpcA3 = new THREE.Vector3(), _hpcAQ = new THREE.Quaternion(), _hpcAQ2 = new THREE.Quaternion(), _hpcChest = new THREE.Vector3();
+    const hpcClamp01 = (v) => Math.min(1, Math.max(0, v));
+    const hpcSeg = (t, a, b) => hpcClamp01((t - a) / (b - a));
+    const hpcOut = (u) => 1 - (1 - u) * (1 - u) * (1 - u);
+    const hpcInOut = (u) => (u < 0.5 ? 2 * u * u : 1 - Math.pow(-2 * u + 2, 2) / 2);
+    const hpcYawNegZ = (dx, dz) => Math.atan2(-dx, -dz);                     // the yaw that turns an object's -Z towards (dx, dz)
+    const hpcYawPosZ = (dx, dz) => Math.atan2(dx, dz);                       // the yaw that turns an object's +Z towards (dx, dz)
+    const hpcGround = (x, z) => { try { return floorUnder('hallowcreek', x, z); } catch (e) { return 0; } };
+
+    // ---------- the uniform: navy shirt (long sleeves) and dark trousers, painted onto the model's own fur ----------
+    function hpcUniformMaterial(src) {
+      const one = (m) => {
+        const n = m.clone(); n.clippingPlanes = null;
+        const B = survivorRig.bind;
+        n.onBeforeCompile = (sh) => {
+          sh.uniforms.uCopU = { value: B.L.u.clone() }; sh.uniforms.uCopH = { value: B.L.h.clone() };
+          sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vCopP;')
+            .replace('#include <begin_vertex>', '#include <begin_vertex>\nvCopP = position;');
+          sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vCopP;\nuniform vec3 uCopU;\nuniform vec3 uCopH;')
+            .replace('#include <map_fragment>', `#include <map_fragment>
+            {
+              vec3 q = vec3(abs(vCopP.x), vCopP.y, vCopP.z);
+              vec3 ab = uCopH - uCopU; float t = clamp(dot(q - uCopU, ab) / dot(ab, ab), 0.0, 1.0);
+              float dA = length(q - (uCopU + t * ab));
+              bool arm = q.x > uCopU.x - 0.06 && dA < 0.24 && !(vCopP.y > 0.04 && q.x < 0.5);
+              bool body = !arm && vCopP.y < 0.035 && q.x < 0.66;
+              if ((arm && t < 0.86) || body) {
+                float lum = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
+                vec3 cloth = (body && vCopP.y < -0.58) ? vec3(0.03, 0.035, 0.06) : vec3(0.05, 0.075, 0.19);
+                float seam = (body && abs(vCopP.x) < 0.012 && vCopP.y > -0.55) ? 0.55 : 1.0;   // the button placket
+                diffuseColor.rgb = cloth * (0.6 + 0.8 * lum) * seam;
+              }
+            }`);
+        };
+        n.customProgramCacheKey = () => 'grimape-cop-uniform';
+        return n;
+      };
+      return Array.isArray(src) ? src.map(one) : one(src);
+    }
+    // ---------- a survivor (or the officer) for the scene ----------
+    // its -Z is its front (as the other players' bodies are built); bones: the rigged survivor.glb's upper arm / forearm /
+    // hand on each side, swung for the gallop or raised to aim
+    function hpcSurvivorFigure(cop) {
+      const root = new THREE.Group(); root.name = cop ? 'hpcOfficer' : 'hpcSurvivor'; root.visible = false; scene.add(root);
+      const H = SURVIVOR_GLB_HEIGHT * SURVIVOR_GLB_FIT * (cop ? 1.15 : 1);
+      const fig = { root, H, rig: null, model: null, s: 1, cop, phase: Math.random() * 6, pistol: null, tip: null };
+      if (survivorRig && survivorRig.local) {
+        const srcMat = survivorRig.local.mesh.material;
+        const mat = cop ? hpcUniformMaterial(srcMat) : (Array.isArray(srcMat) ? srcMat.map((m) => Object.assign(m.clone(), { clippingPlanes: null })) : Object.assign(srcMat.clone(), { clippingPlanes: null }));
+        const inst = makeRigInstance(mat, false);
+        const model = new THREE.Group(); model.add(inst.mesh);
+        model.rotation.set(0, Math.PI, 0); model.updateMatrixWorld(true);
+        let box = new THREE.Box3().setFromObject(model);
+        const sy = box.getSize(_hpcV1).y || survivorRig.height || 1.6;
+        fig.s = H / sy; model.scale.setScalar(fig.s); model.updateMatrixWorld(true);
+        box = new THREE.Box3().setFromObject(model);
+        const c = box.getCenter(_hpcV1);
+        model.position.set(-c.x, -box.min.y, -c.z);
+        inst.mesh.castShadow = false; inst.mesh.frustumCulled = false; inst.mesh.layers.set(0);
+        root.add(model);
+        fig.rig = inst; fig.model = model;
+      } else {
+        // survivor.glb isn't up: a plain stand-in (orange monkey; the officer in navy)
+        const fur = new THREE.MeshStandardMaterial({ color: 0xc96a2b, roughness: 0.9 }), cloth = new THREE.MeshStandardMaterial({ color: cop ? 0x14204a : 0xc96a2b, roughness: 0.85 });
+        const t = new THREE.Mesh(new THREE.SphereGeometry(0.17, 14, 10), cloth); t.scale.set(1, 1.15, 0.85); t.position.y = 0.2; root.add(t);
+        const h = new THREE.Mesh(new THREE.SphereGeometry(0.1, 14, 10), fur); h.position.y = 0.43; root.add(h);
+        const n = new THREE.Mesh(new THREE.SphereGeometry(0.045, 10, 8), fur); n.scale.set(0.8, 1.1, 1); n.position.set(0, 0.41, -0.1); root.add(n);   // the long nose
+        root.scale.setScalar(H / 0.53);
+      }
+      if (cop) hpcDressOfficer(fig);
+      return fig;
+    }
+    // the peaked cap (on the head bone), the badge on the chest (left side), the pistol in the right hand
+    function hpcDressOfficer(fig) {
+      const navy = new THREE.MeshStandardMaterial({ color: 0x10193a, roughness: 0.7 }), black = new THREE.MeshStandardMaterial({ color: 0x060608, roughness: 0.35, metalness: 0.2 });
+      const gold = new THREE.MeshStandardMaterial({ color: 0xd8a83a, roughness: 0.3, metalness: 0.85, emissive: 0x2a1a00 });
+      const cap = new THREE.Group();
+      const crown = new THREE.Mesh(new THREE.CylinderGeometry(0.43, 0.37, 0.18, 28), navy); crown.position.y = 0.11; cap.add(crown);
+      const top = new THREE.Mesh(new THREE.CylinderGeometry(0.43, 0.43, 0.012, 28), navy); top.position.y = 0.206; cap.add(top);
+      const band = new THREE.Mesh(new THREE.CylinderGeometry(0.376, 0.376, 0.085, 28), black); band.position.y = 0.02; cap.add(band);
+      const visor = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.34, 0.018, 20, 1, false, -Math.PI / 2, Math.PI).scale(1, 1, 0.72).rotateX(0.32), black);
+      visor.position.set(0, -0.01, 0.2); cap.add(visor);
+      const shield = new THREE.Shape(); shield.moveTo(0, 0.05); shield.lineTo(0.04, 0.032); shield.lineTo(0.034, -0.02); shield.lineTo(0, -0.05); shield.lineTo(-0.034, -0.02); shield.lineTo(-0.04, 0.032); shield.closePath();
+      const capBadge = new THREE.Mesh(new THREE.ExtrudeGeometry(shield, { depth: 0.01, bevelEnabled: false }), gold); capBadge.position.set(0, 0.075, 0.392); capBadge.rotation.x = -0.12; cap.add(capBadge);
+      const badge = new THREE.Mesh(new THREE.ExtrudeGeometry(shield, { depth: 0.012, bevelEnabled: false }).scale(1.35, 1.35, 1), gold);
+      for (const k of [0, 1]) { const st = new THREE.Mesh(new THREE.CircleGeometry(0.014, 5), new THREE.MeshBasicMaterial({ color: 0x6a4a10 })); st.position.set(0, k ? -0.012 : 0.022, 0.0125); badge.add(st); }
+      // the pistol: a short black service pistol, barrel along +Z (sized in metres, then to the model's units)
+      const pistol = new THREE.Group();
+      const slide = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.026, 0.11), black); slide.position.set(0, 0.012, 0.035); pistol.add(slide);
+      const grip = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.06, 0.03).rotateX(0.25), black); grip.position.set(0, -0.022, -0.01); pistol.add(grip);
+      const tip = new THREE.Object3D(); tip.position.set(0, 0.014, 0.095); pistol.add(tip);
+      if (fig.rig) {
+        const B = survivorRig.bind, s = fig.s, head = fig.rig.bones.head, rootB = fig.rig.bones.root;
+        cap.position.set(0.015 - SURVIVOR_NECK_PIVOT.x, 0.6 - SURVIVOR_NECK_PIVOT.y, 0.0 - SURVIVOR_NECK_PIVOT.z); head.add(cap);
+        badge.position.set(0.2, -0.09, 0.135); badge.rotation.x = -0.15; badge.scale.setScalar(1.25); rootB.add(badge);
+        const hand = fig.rig.bones.R.h, d0 = _hpcV1.copy(B.R.h).sub(B.R.u).normalize();
+        pistol.scale.setScalar(1.05 / s);                                    // (a monkey-sized pistol in the model's units)
+        pistol.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), d0);
+        pistol.position.copy(d0).multiplyScalar(0.07).add(new THREE.Vector3(0, -0.03, 0.02));
+        hand.add(pistol);
+      } else {
+        const r = fig.root;
+        cap.scale.setScalar(0.24); cap.position.set(0, 0.49, 0); r.add(cap);
+        badge.scale.setScalar(0.5); badge.position.set(0.06, 0.27, -0.145); badge.rotation.y = Math.PI; r.add(badge);
+        pistol.scale.setScalar(1 / r.scale.x * 1.2); pistol.position.set(0.08, 0.25, -0.2); pistol.rotation.y = Math.PI; r.add(pistol);
+      }
+      fig.pistol = pistol; fig.tip = tip;
+    }
+    // gallop: both arms reaching forward and back together, the body bounding and leaning into the run
+    function hpcGallop(fig, amp, lean, crouch) {
+      const a = Math.sin(fig.phase);
+      if (fig.rig) {
+        const L = fig.rig.bones.L, R = fig.rig.bones.R;
+        for (const A of [L, R]) {
+          A.u.quaternion.setFromAxisAngle(_hpcV1.set(1, 0, 0), -0.55 * amp * a - 0.15 * crouch);
+          A.l.quaternion.setFromAxisAngle(_hpcV1.set(1, 0, 0), -0.35 * amp * Math.max(0, -a) - 0.2 * crouch);
+          A.h.quaternion.identity();
+        }
+      }
+      return { bob: 0.06 * fig.H * amp * Math.abs(Math.sin(fig.phase)), lean: lean };
+    }
+    // the officer's aim: both arms raised from where they hang towards the target (k 0..1), the pistol in the right
+    function hpcAim(fig, target, k) {
+      if (!fig.rig) return;
+      const B = survivorRig.bind;
+      fig.rig.mesh.updateMatrixWorld(true);
+      fig.rig.mesh.getWorldQuaternion(_hpcAQ).invert();
+      for (const [A, b, side] of [[fig.rig.bones.R, B.R, 0], [fig.rig.bones.L, B.L, 1]]) {
+        const sh = _hpcA1.copy(b.u); fig.rig.mesh.localToWorld(sh);                       // the shoulder, in the world
+        const want = _hpcA2.subVectors(target, sh).applyQuaternion(_hpcAQ).normalize();     // where to point, in the model's frame
+        if (side) want.x -= 0.45;                                                         // (the support hand comes in across to the pistol)
+        want.normalize();
+        const d0 = _hpcA3.copy(b.h).sub(b.u).normalize();
+        _hpcAQ2.setFromUnitVectors(d0, want);
+        A.u.quaternion.identity().slerp(_hpcAQ2, k);
+        A.l.quaternion.identity(); A.h.quaternion.identity();
+      }
+    }
+    // ---------- THE SHAPE for the scene (+Z is his front, as the game's monster) ----------
+    function hpcShapeFigure() {
+      if (typeof SHAPE !== 'undefined' && SHAPE.ready) {
+        const S = shapeInstance(false);
+        S.root.scale.setScalar(JK_HEIGHT); S.height = JK_HEIGHT;
+        return { S, root: S.root, H: JK_HEIGHT, real: true };
+      }
+      // shape.glb isn't up: a tall dark stand-in (the coverall, a pale mask)
+      const root = new THREE.Group(); root.visible = false; scene.add(root);
+      const suit = new THREE.MeshStandardMaterial({ color: 0x1c2028, roughness: 0.9 }), mask = new THREE.MeshStandardMaterial({ color: 0xd8d4c8, roughness: 0.75 });
+      const b = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.2, 0.7, 12), suit); b.position.y = 0.35; root.add(b);
+      const h = new THREE.Mesh(new THREE.SphereGeometry(0.11, 14, 10), mask); h.scale.set(0.9, 1.15, 0.95); h.position.y = 0.82; root.add(h);
+      for (const s of [-1, 1]) { const a = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.04, 0.55, 8), suit); a.position.set(s * 0.21, 0.45, 0.12); a.rotation.x = 1.1; root.add(a); }
+      root.scale.setScalar(JK_HEIGHT / 0.95);
+      return { S: null, root, H: JK_HEIGHT, real: false };
+    }
+    function hpcPoseShape(sh, reach, fling, sway) {
+      const S = sh.S; if (!S) return;
+      for (const b of Object.values(S.byName)) if (b.userData.rest && !/(Leg|Foot|ToeBase|Toe_End)$/.test(b.name)) b.quaternion.copy(b.userData.rest.q);
+      S.root.updateMatrixWorld(true);
+      const H = sh.H, fwd = _hpcV1.set(0, 0, 1).applyQuaternion(S.root.quaternion), up = _hpcV2.set(0, 1, 0).applyQuaternion(S.root.quaternion), side = _hpcV3.set(1, 0, 0).applyQuaternion(S.root.quaternion);
+      for (const [sd, sg] of [['L', 1], ['R', -1]]) {
+        const t = S.root.position.clone()
+          .addScaledVector(fwd, H * (0.55 * reach - 0.1 * fling + 0.06 * sway * sg))
+          .addScaledVector(up, H * (0.5 + 0.08 * reach + 0.45 * fling))
+          .addScaledVector(side, sg * H * (0.2 + 0.25 * fling));
+        shapeArm(S, sd, t, null);
+      }
+      S.root.updateMatrixWorld(true);
+    }
+    // ---------- the second cruiser and the driver's door of the first ----------
+    function hpcBuild() {
+      if (HPC.built) return; HPC.built = true;
+      const C = hcCruiser;
+      HPC.carB = C.group.clone(true); HPC.carB.visible = false; scene.add(HPC.carB);
+      const mkGlow = (col) => { const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: col, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, fog: false })); sp.scale.set(3.2, 3.2, 1); sp.visible = false; scene.add(sp); return sp; };
+      HPC.glowB = [mkGlow(0xff2020), mkGlow(0x2040ff)];
+      // the driver's door (its left, local +X), hinged at its front edge: black, the white stripe, its window
+      const black = new THREE.MeshStandardMaterial({ color: 0x0c0c10, roughness: 0.35, metalness: 0.4 }), white = new THREE.MeshStandardMaterial({ color: 0xe8e8e4, roughness: 0.35, metalness: 0.3 });
+      const door = new THREE.Group(); door.position.set(0.99, 0, 0.92); door.visible = false; C.group.add(door);
+      const panel = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.6, 1.07), black); panel.position.set(0, 0.655, -0.535); door.add(panel);
+      const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.4, 1.0), white); stripe.position.set(0.028, 0.66, -0.535); door.add(stripe);
+      const inner = new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.56, 1.0), new THREE.MeshStandardMaterial({ color: 0x2a2a30, roughness: 0.9 })); inner.position.set(-0.028, 0.66, -0.535); door.add(inner);
+      const frame = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.03, 0.95), black); frame.position.set(-0.1, 1.37, -0.52); door.add(frame);
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.42, 0.03), black); post.position.set(-0.08, 1.16, -1.02); door.add(post);
+      const glass = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.4, 0.93), hcM.carGlass); glass.position.set(-0.09, 1.16, -0.52); door.add(glass);
+      const handle = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.03, 0.18), hcM.chrome); handle.position.set(0.035, 0.74, -0.85); door.add(handle);
+      HPC.door = door;
+      const gap = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.56, 1.05), new THREE.MeshBasicMaterial({ color: 0x050507 })); gap.position.set(1.004, 0.65, 0.39); gap.visible = false; C.group.add(gap);   // the open doorway (the dark cab)
+      HPC.doorGap = gap;
+      // the muzzle flash and the hit
+      HPC.flash = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xffc070, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+      HPC.flash.scale.set(0.35, 0.35, 1); HPC.flash.visible = false; scene.add(HPC.flash);
+      HPC.puff = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0x5a4a40, transparent: true, opacity: 0, depthWrite: false }));
+      HPC.puff.scale.set(0.3, 0.3, 1); HPC.puff.visible = false; scene.add(HPC.puff);
+      HPC.light = { x: 0, y: 1, z: 0, color: 0xffc080, intensity: 0, distance: 7, weight: 80 };
+    }
+    // ---------- who runs: you (as a survivor) and everyone else alive on the map ----------
+    function hpcRunners() {
+      const n0 = [];
+      if (playerRole === 'survivor' && !caught) n0.push('me');
+      try { const now = performance.now(); for (const [id, r] of netPeers()) if (r && r.st && r.st.m === 'hallowcreek' && r.st.r === 's' && !(r.st.hp <= 0) && now - r.seen < 4000) n0.push(id); } catch (e) { }
+      if (!n0.length) n0.push('me');
+      return n0.slice(0, 4);
+    }
+    function hpcSurvivorPath(k) {
+      const Z = HALLOW.z;
+      return [new THREE.Vector3(31.0 - 0.9 * k, 0, Z - 0.5 + (k % 2 ? 0.9 : 0) - 0.3 * Math.floor(k / 2)),
+              new THREE.Vector3(37.4 - 0.6 * k, 0, Z - 1.25 - 0.3 * k),
+              new THREE.Vector3(40.8 + 0.75 * k, 0, Z - 3.6 - (k % 2 ? 0.35 : 0))];
+    }
+    const HPC_CAR_A1 = { x: 40.6, z: HALLOW.z + 1.35, yaw: -Math.PI / 2 - 0.3 }, HPC_CAR_B0 = { x: 70, z: HALLOW.z - 1.6 }, HPC_CAR_B1 = { x: 44.6, z: HALLOW.z - 1.5, yaw: -Math.PI / 2 + 0.36 };
+    const HPC_COP = [[0.6, 0.25, 2.05], [1.35, 0.05, 2.42], [2.35, 0.2, 2.68], [2.9, 1.1, 2.95]];   // the officer's steps (the car's frame: x out of the driver's side, z forward) and when he's there: behind the open door, round its end, clear of the car's nose
+    const HPC_SHAPE0 = new THREE.Vector3(27.0, 0, HALLOW.z + 0.3), HPC_SHAPE_AT = new THREE.Vector3(41, 0, HALLOW.z - 2.2), HPC_SHOT = [3.05, 3.32];
+    // how far THE SHAPE has run by time t: flat out with them (3.3 m/s), then checking as the cruisers block the road (1.2 m/s)
+    const hpcShapeRun = (t) => (t < 1.5 ? 3.3 * t : t < 2.4 ? 4.95 + (3.3 * (t - 1.5) - 1.1667 * (t - 1.5) * (t - 1.5)) : 6.975 + 1.2 * (t - 2.4));
+    const hpcCarLocal = (car, lx, lz, out) => { const c = Math.cos(car.rotation.y), s = Math.sin(car.rotation.y); return out.set(car.position.x + lx * c + lz * s, 0, car.position.z - lx * s + lz * c); };
+
+    // ---------- start / end ----------
+    function hpcCanPlay() { return hpHere() && !caught && !ending && !titleActive && !travel; }
+    function hpcStart() {
+      hpcBuild();
+      HPC.on = true; HPC.after = false; HPC.t = 0; HPC.shots = [false, false]; HPC.yelped = false; HPC.endFade = -1;
+      // the actors
+      for (const a of HPC.actors) scene.remove(a.fig.root);
+      HPC.actors = hpcRunners().map((id, k) => ({ id, k, fig: hpcSurvivorFigure(false), path: hpcSurvivorPath(k), done: false }));
+      if (!HPC.cop) HPC.cop = hpcSurvivorFigure(true);
+      if (!HPC.shape) HPC.shape = hpcShapeFigure();
+      HPC.cop.root.visible = false; HPC.shape.root.visible = true;
+      hcCruiser.cut = true; hcCruiser.group.visible = true;
+      HPC.carA0 = { x: hcCruiser.group.position.x > 45 ? hcCruiser.group.position.x : HP_STOP_X, z: HALLOW.z + 1.6 };
+      HPC.carB.visible = true; for (const g of HPC.glowB) g.visible = true;
+      HPC.door.visible = true; HPC.door.rotation.y = 0; HPC.doorGap.visible = false;
+      // the monster AI stops where it is (the victory sends it away, as before)
+      HPC.aiWasVisible = !!(monAI && monAI.root.visible);
+      try { chaseAudio.setTarget(0); } catch (e) { }
+      try { if (struggle) endStruggle(); } catch (e) { }                    // (a grab in progress lets go: the police are here)
+      try { hpAudio.yelp(); } catch (e) { }
+      // where you watch from
+      const vr = renderer.xr.isPresenting;
+      HPC.saved = { vr, rigP: playerRig.position.clone(), rigR: playerRig.rotation.clone(), cam: camera.position.clone(), tgt: orbit.target.clone() };
+      if (vr) hpcPlaceRig();
+      travelFadeMat.opacity = 1; travelFade.visible = true;
+      showToast('THE POLICE ARE HERE', 'Get to the cruisers!');
+    }
+    function hpcPlaceRig() {
+      const want = hpcYawNegZ(HPC_LOOK.x - HPC_VIEW.x, HPC_LOOK.z - HPC_VIEW.z);
+      camera.getWorldDirection(_hpcV1); const head = Math.atan2(-_hpcV1.x, -_hpcV1.z);
+      playerRig.rotation.set(0, playerRig.rotation.y + (want - head), 0);
+      playerRig.updateMatrixWorld(true);
+      camera.getWorldPosition(_hpcV1);
+      playerRig.position.x += HPC_VIEW.x - _hpcV1.x; playerRig.position.z += HPC_VIEW.z - _hpcV1.z;
+      playerRig.position.y = hpcGround(HPC_VIEW.x, HPC_VIEW.z) + HPC_VIEW.lift;
+      playerRig.updateMatrixWorld(true);
+    }
+    function hpcFinish(abort) {
+      if (!HPC.on) return;
+      HPC.on = false; HPC.after = !abort;
+      hpcUnhide();
+      const S = HPC.saved;
+      if (S) {
+        if (S.vr && renderer.xr.isPresenting) { playerRig.position.copy(S.rigP); playerRig.rotation.copy(S.rigR); playerRig.updateMatrixWorld(true); }
+        if (!renderer.xr.isPresenting) { camera.position.copy(S.cam); orbit.target.copy(S.tgt); orbit.update(); }
+      }
+      HPC.saved = null;
+      for (const a of HPC.actors) a.fig.root.visible = false;
+      if (HPC.lightOn) { const i = lightSources.indexOf(HPC.light); if (i >= 0) lightSources.splice(i, 1); HPC.lightOn = false; }
+      HPC.flash.visible = false; HPC.puff.visible = false;
+      if (monAI && HPC.aiWasVisible && !ending) monAI.root.visible = true;
+      HPC.endFade = abort ? -1 : 0;
+      hpcBaseArrived();                                                    // (the victory, the reward, or for the MONSTER: back to the waiting room)
+    }
+    function hpcClear() {                                                   // a new visit: everything from the scene goes away
+      if (HPC.on) hpcFinish(true);
+      HPC.after = false; HPC.endFade = -1;
+      if (!HPC.built) return;
+      hcCruiser.cut = false; HPC.door.visible = false; HPC.door.rotation.y = 0; HPC.doorGap.visible = false;
+      HPC.carB.visible = false; for (const g of HPC.glowB) g.visible = false;
+      if (HPC.cop) HPC.cop.root.visible = false;
+      if (HPC.shape) HPC.shape.root.visible = false;
+      for (const a of HPC.actors) scene.remove(a.fig.root);
+      HPC.actors = [];
+      if (travelFadeMat.opacity > 0 && !travel) { travelFadeMat.opacity = 0; travelFade.visible = false; }
+    }
+    // other players' bodies (and yours, and the monster's) are hidden while their stand-ins act it out
+    function hpcHide(list) {
+      for (const o of list) if (o && o.visible) { o.visible = false; HPC.hidden.add(o); }
+    }
+    function hpcUnhide() { for (const o of HPC.hidden) o.visible = true; HPC.hidden.clear(); }
+    function hpcHideAll() {
+      const list = [];
+      try { if (typeof survivorBodyGroup !== 'undefined') list.push(survivorBodyGroup); } catch (e) { }
+      if (monAI) list.push(monAI.root);
+      try { if (shapeCopies.ai) list.push(shapeCopies.ai.root); if (shapeCopies.me) list.push(shapeCopies.me.root); } catch (e) { }
+      if (monMe) list.push(monMe.root);
+      try {
+        for (const r of netPeers().values()) {
+          if (!r || !r.st || r.st.m !== 'hallowcreek') continue;
+          list.push(r.root, r.mon, r.tag && r.tag.s, r.arms && r.arms.g, r.joints && r.joints.g, r.shapeGlb && r.shapeGlb.root, ...(r.monHands || []), ...(r.cuffs || []), ...((r.paws || []).map((p) => p.root)));
+        }
+      } catch (e) { }
+      hpcHide(list);
+    }
+
+    // ---------- every frame ----------
+    function hpcUpdate(dt) {
+      const C = hcCruiser, flip = (Math.floor(performance.now() * 0.006) % 4) < 2;
+      // after the scene: the cruisers stay parked with their lights going, the officer on guard, THE SHAPE down
+      if (!HPC.on) {
+        if (HPC.after) {
+          if (!hpHere()) { hpcClear(); return; }
+          const g = HPC.glowB; g[0].material.opacity = flip ? 0.95 : 0.05; g[1].material.opacity = flip ? 0.05 : 0.95;
+        }
+        if (HPC.endFade >= 0) {                                               // the fade back from the scene
+          HPC.endFade += dt; const f = Math.max(0, 1 - HPC.endFade / 0.45);
+          if (!travel) { travelFadeMat.opacity = f; travelFade.visible = f > 0.001; }
+          if (f <= 0) HPC.endFade = -1;
+        }
+        return;
+      }
+      if (!hpHere() || titleActive || travel) { hpcFinish(true); return; }
+      const t = (HPC.t += dt);
+      hpcHideAll();
+      if (HPC.saved && HPC.saved.vr && renderer.xr.isPresenting) {          // (you stay where you watch from: only your head moves)
+        playerRig.position.y = hpcGround(HPC_VIEW.x, HPC_VIEW.z) + HPC_VIEW.lift;
+      } else if (!renderer.xr.isPresenting) {
+        const pan = hpcInOut(hpcSeg(t, 0, HPC_LEN));
+        camera.position.set(HPC_VIEW.x - 0.4 + 1.0 * pan, 1.5, HPC_VIEW.z + 0.4);
+        orbit.target.set(32.5 + 5.5 * pan, 0.5, HALLOW.z + 0.4 + 0.8 * pan); orbit.update();
+      }
+      // the fades in and out
+      const fade = Math.max(1 - t / 0.35, hpcSeg(t, HPC_LEN - 0.35, HPC_LEN));
+      travelFadeMat.opacity = fade; travelFade.visible = fade > 0.001;
+      // the cruisers pull up
+      const a = hpcOut(hpcSeg(t, 0, 1.9)), A0 = HPC.carA0;
+      C.group.position.set(A0.x + (HPC_CAR_A1.x - A0.x) * a, 0, A0.z + (HPC_CAR_A1.z - A0.z) * a);
+      C.group.rotation.set(0, -Math.PI / 2 + (HPC_CAR_A1.yaw + Math.PI / 2) * hpcInOut(hpcSeg(t, 0.8, 1.9)), t > 1.75 && t < 2.1 ? Math.sin(t * 40) * 0.006 : 0);
+      const b = hpcOut(hpcSeg(t, 0.2, 2.4)), B = HPC.carB;
+      B.position.set(HPC_CAR_B0.x + (HPC_CAR_B1.x - HPC_CAR_B0.x) * b, 0, HPC_CAR_B0.z + (HPC_CAR_B1.z - HPC_CAR_B0.z) * b);
+      B.rotation.set(0, -Math.PI / 2 + (HPC_CAR_B1.yaw + Math.PI / 2) * hpcInOut(hpcSeg(t, 1.2, 2.4)), 0);
+      if (!HPC.yelped && t > 1.85) { HPC.yelped = true; try { hpAudio.yelp(); } catch (e) { } }
+      // B's light bar glow (A's is the existing one)
+      { const g = HPC.glowB; g[0].position.set(B.position.x, 1.6, B.position.z - 0.36); g[1].position.set(B.position.x, 1.6, B.position.z + 0.36); g[0].material.opacity = flip ? 0.95 : 0.05; g[1].material.opacity = flip ? 0.05 : 0.95; }
+      // the driver's door swings open
+      const dOpen = hpcOut(hpcSeg(t, 2.0, 2.35));
+      HPC.door.rotation.y = -1.1 * dOpen; HPC.doorGap.visible = dOpen > 0.02;
+      // THE SHAPE: chasing down Main Street, shot, thrown over onto his back
+      const sh = HPC.shape, H = sh.H;
+      const run = hpcShapeRun(Math.min(t, HPC_SHOT[0]));
+      const dir = _hpcV1.subVectors(HPC_SHAPE_AT, HPC_SHAPE0); dir.y = 0; dir.normalize();
+      const sp = _hpcV2.copy(HPC_SHAPE0).addScaledVector(dir, run);
+      sp.z += Math.sin(run * 1.1) * 0.12;
+      const fall = hpcSeg(t, HPC_SHOT[0] + 0.05, HPC_SHOT[0] + 0.8), fallE = fall * fall;
+      const yaw = hpcYawPosZ(dir.x, dir.z);
+      const back = 0.35 * hpcOut(fall) + (t > HPC_SHOT[0] ? 0.08 : 0);
+      sp.addScaledVector(dir, -back);
+      const settle = t > HPC_SHOT[0] + 0.8 ? Math.sin((t - HPC_SHOT[0] - 0.8) * 14) * 0.05 * Math.max(0, 1 - (t - HPC_SHOT[0] - 0.8) / 0.3) : 0;
+      const pitch = -1.52 * fallE + settle - (t > HPC_SHOT[1] && t < HPC_SHOT[1] + 0.12 ? 0.08 : 0) + (t < HPC_SHOT[0] ? 0.12 : 0);   // (leaning into the chase, then over backwards)
+      const gy = hpcGround(sp.x, sp.z);
+      sh.root.position.set(sp.x, gy + (typeof SHAPE_REAR === 'number' ? SHAPE_REAR : 0.1) * H * (1 - fall) + 0.12 * H * fall, sp.z);   // (on his back: his back on the road, not through it)
+      sh.root.rotation.set(pitch, yaw, 0, 'YXZ');
+      sh.root.visible = true;
+      hpcPoseShape(sh, t < HPC_SHOT[0] ? 1 : Math.max(0, 1 - (t - HPC_SHOT[0]) * 4), t < HPC_SHOT[0] ? 0 : Math.min(1, (t - HPC_SHOT[0]) * 3), t < HPC_SHOT[0] ? Math.sin(t * 9) : 0);
+      // the survivors sprint for the cruisers, then duck in by the second one and turn to watch
+      for (const A of HPC.actors) {
+        const f = A.fig, P = A.path, speed = 3.3, delay = 0.08 * A.k;
+        const l1 = P[0].distanceTo(P[1]), l2 = P[1].distanceTo(P[2]);
+        const s = Math.max(0, t - delay) * speed;
+        let pos, dx, dz, moving = true;
+        if (s < l1) { pos = _hpcV3.lerpVectors(P[0], P[1], s / l1); dx = P[1].x - P[0].x; dz = P[1].z - P[0].z; }
+        else if (s < l1 + l2) { pos = _hpcV3.lerpVectors(P[1], P[2], (s - l1) / l2); dx = P[2].x - P[1].x; dz = P[2].z - P[1].z; }
+        else { pos = _hpcV3.copy(P[2]); moving = false; dx = sh.root.position.x - pos.x; dz = sh.root.position.z - pos.z; }
+        f.phase += dt * (moving ? 11 : 2);
+        const g = hpcGallop(f, moving ? 1 : 0.08, moving ? 0.3 : 0.05, moving ? 0 : 1);
+        f.root.position.set(pos.x, hpcGround(pos.x, pos.z) + g.bob, pos.z);
+        const want = hpcYawNegZ(dx, dz);
+        if (!A.yaw0) { A.yaw0 = true; f.root.rotation.set(0, want, 0, 'YXZ'); }
+        const cur = f.root.rotation.y, d = Math.atan2(Math.sin(want - cur), Math.cos(want - cur));
+        f.root.rotation.set(-g.lean, cur + d * Math.min(1, dt * 8), 0, 'YXZ');
+        f.root.visible = true;
+      }
+      // the officer: out of the driver's door, from behind it, aims, fires twice
+      const cop = HPC.cop;
+      if (t >= 2.05) {
+        cop.root.visible = true;
+        const S = HPC_COP; let lx, lz;
+        let i = 0; while (i < S.length - 2 && t >= S[i + 1][2]) i++;
+        { const u = hpcInOut(hpcSeg(t, S[i][2], S[i + 1][2])); lx = S[i][0] + (S[i + 1][0] - S[i][0]) * u; lz = S[i][1] + (S[i + 1][1] - S[i][1]) * u; }
+        const cp = hpcCarLocal(C.group, lx, lz, _hpcV3);
+        const walking = t < S[S.length - 1][2];
+        cop.phase += dt * (walking ? 10 : 0);
+        cop.root.position.set(cp.x, hpcGround(cp.x, cp.z) + (walking ? 0.02 * cop.H * Math.abs(Math.sin(cop.phase)) : 0), cp.z);
+        const outYaw = C.group.rotation.y - Math.PI / 2;                     // (facing out of the door: the car's +X is his -Z)
+        const toShape = hpcYawNegZ(sh.root.position.x - cp.x, sh.root.position.z - cp.z);
+        const turn = hpcInOut(hpcSeg(t, 2.5, 2.9));
+        const dy = Math.atan2(Math.sin(toShape - outYaw), Math.cos(toShape - outYaw));
+        cop.root.rotation.set(0, outYaw + dy * turn, 0, 'YXZ');
+        cop.root.updateMatrixWorld(true);
+        const aimK = hpcInOut(hpcSeg(t, 2.72, 3.0)) * (1 - 0.35 * hpcSeg(t, 4.3, 4.9));
+        const chest = _hpcChest.copy(sh.root.position); chest.y += H * 0.62 * (1 - fall) + 0.1 * fall;
+        if (walking && aimK < 0.01) hpcGallop(cop, 0.35, 0, 0); else hpcAim(cop, chest, aimK);
+        let kick = 0;
+        for (let k = 0; k < 2; k++) if (t >= HPC_SHOT[k] && t < HPC_SHOT[k] + 0.12) kick = 1 - (t - HPC_SHOT[k]) / 0.12;
+        if (kick > 0 && cop.rig) { const R = cop.rig.bones.R.l; R.quaternion.multiply(_hpcQ1.setFromAxisAngle(_hpcV1.set(1, 0, 0), 0.25 * kick)); }
+        cop.root.updateMatrixWorld(true);
+        // the shots
+        for (let k = 0; k < 2; k++) if (!HPC.shots[k] && t >= HPC_SHOT[k]) {
+          HPC.shots[k] = true;
+          cop.tip.getWorldPosition(_hpcV1);
+          HPC.flash.position.copy(_hpcV1); HPC.flashT = 0.07; HPC.flash.visible = true;
+          HPC.light.x = _hpcV1.x; HPC.light.y = _hpcV1.y + 0.1; HPC.light.z = _hpcV1.z;
+          if (!HPC.lightOn) { lightSources.push(HPC.light); HPC.lightOn = true; }
+          HPC.puff.position.copy(chest); HPC.puffT = 0.35; HPC.puff.visible = true;
+          camera.getWorldPosition(_hpcV2);
+          try { hpAudio.pistol(_hpcV2.distanceTo(_hpcV1)); } catch (e) { }
+          try { controllers.forEach((c) => pulse(c, 0.5, 60)); } catch (e) { }
+        }
+      }
+      if (HPC.flashT > 0) {
+        HPC.flashT -= dt; const k = Math.max(0, HPC.flashT / 0.07);
+        HPC.flash.material.opacity = k; HPC.flash.scale.setScalar(0.25 + 0.25 * k); HPC.light.intensity = 9 * k;
+        for (const slot of lightPool) if (slot.src === HPC.light) slot.light.position.set(HPC.light.x, HPC.light.y, HPC.light.z);
+        if (HPC.flashT <= 0) { HPC.flash.visible = false; const i = lightSources.indexOf(HPC.light); if (i >= 0) lightSources.splice(i, 1); HPC.lightOn = false; }
+      }
+      if (HPC.puffT > 0) {
+        HPC.puffT -= dt; const k = Math.max(0, HPC.puffT / 0.35);
+        HPC.puff.material.opacity = 0.6 * k; HPC.puff.scale.setScalar(0.15 + 0.35 * (1 - k)); HPC.puff.position.y += dt * 0.2;
+        if (HPC.puffT <= 0) HPC.puff.visible = false;
+      }
+      if (t >= HPC_LEN) hpcFinish(false);
+    }
+
+    // ---------- wiring ----------
+    let hpcBaseArrived = hpArrived;
+    hpArrived = function () {
+      // 0:00 on the countdown: the scene first (where it can play), then the victory as before
+      if (!HPC.on && !HPC.after && !HPQ.won && hpcCanPlay()) {
+        try { hpcStart(); return; } catch (e) { console.warn('[hallowcreek] police cutscene', e); HPC.on = false; hpcUnhide(); }
+      }
+      if (HPC.on) return;
+      return hpcBaseArrived();
+    };
+    {
+      const baseLoco = updateLocomotion;
+      updateLocomotion = function (dt, frame) { if (HPC.on) return; return baseLoco(dt, frame); };   // (you watch: you don't walk off during the scene)
+      const baseAI = updateAI;
+      updateAI = function (dt) { if (HPC.on && ai.map === 'hallowcreek') return; return baseAI(dt); };
+      const baseReset = hpReset;
+      hpReset = function () { const r = baseReset(); try { hpcClear(); } catch (e) { console.warn('[hallowcreek] cutscene reset', e); } return r; };
+      const baseArr = arrive;
+      arrive = function (id) { if (id !== 'hallowcreek') { try { hpcClear(); } catch (e) { } } return baseArr(id); };
+      const baseNet = updateNet;
+      updateNet = function (dt) {
+        const r = baseNet(dt);
+        try { hpcUpdate(dt); } catch (e) { if (!updateNet.hpcW) { updateNet.hpcW = true; console.warn('[hallowcreek] police cutscene', e); } try { hpcFinish(true); } catch (e2) { } }
+        return r;
+      };
+    }
+    // (for the tests)
+    window.__hpcut = { HPC, hpcStart, hpcFinish, hpcClear, hpcUpdate, hpcCanPlay, arrived: () => hpArrived() };
 
     // ---------- XR session hooks ----------
     renderer.xr.addEventListener('sessionstart', () => {
