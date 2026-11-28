@@ -6293,6 +6293,8 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'FIX', date: '28/11/26', title: 'CARS, COPS AND HANDS',
+        text: "The parked cars of Hallowcreek are smaller (survivor-sized) with their hoods shut flush. The police cruisers keep their doors shut, and POLICE / HALLOWCREEK P.D. reads the right way round on both sides. The officer's uniform sits cleanly on him, and he holds his pistol in his own monkey hands. THE SHAPE has clean, pale hands with long fingers. Looking straight down you see only your arms, never the inside of your body." },
       { tag: 'NEW', date: '28/11/26', title: 'HIDE THE VICTORY SCREEN',
         text: "Every victory screen now has a ⌫ button in its top-right corner (or press Backspace): it hides the screen so you can look round at the sunrise, the lake or the police cruisers. A small SHOW PANEL button in the top right brings it back, RETURN TO WAITING ROOM and all." },
       { tag: 'FIX', date: '28/11/26', title: 'TIDIER HOUSES',
@@ -10646,32 +10648,52 @@
       hcSB.build(hcStreet, { castShadow: false });
     }
     // ---------- parked 1970s cars: long station wagons with wood-panel sides and boxy sedans, chrome bumpers ----------
+    // (r104) the parked cars, rebuilt clean: one closed, flush body (bumper line, nose, a shut hood flush with the
+    // fenders, the cowl, the rear deck / tailgate), a closed cabin on it, the glass laid flush on the cabin (windscreen,
+    // rear window, side windows that face the right way on both sides), chrome bumpers, grille, trim and hubcaps, round
+    // headlights, tail lights, and the wood-grain panels on the wagons. Placed at 0.68 (HC_CAR_K) to suit the survivors.
+    const HC_CAR_K = 0.68;
     const hcCarGeo = (() => {
       const mk = (wagon) => {
-        const L = wagon ? 5.4 : 5.2, body = [], chrome = [], glass = [], tire = [], wood = [], lf = [], lr = [];
+        const L = wagon ? 5.4 : 5.2, hl = L / 2, body = [], chrome = [], glass = [], tire = [], wood = [], lf = [], lr = [];
         const box = (list, w, h, l, x, y, z, rx = 0) => list.push(new THREE.BoxGeometry(w, h, l).rotateX(rx).translate(x, y, z));
-        box(body, 1.95, 0.55, L, 0, 0.62, 0);                                                                  // the long lower body
-        box(body, 1.9, 0.08, L - 0.1, 0, 0.93, 0);                                                             // the belt line
-        const cabL = wagon ? 2.9 : 2.2, cabZ = wagon ? -0.55 : -0.15;
-        box(body, 1.72, 0.06, cabL, 0, 1.4, cabZ);                                                             // the roof
-        for (const s of [-1, 1]) for (const z of (wagon ? [cabZ - cabL / 2 + 0.05, cabZ - 0.4, cabZ + 0.55, cabZ + cabL / 2 - 0.05] : [cabZ - cabL / 2 + 0.1, cabZ, cabZ + cabL / 2 - 0.1]))
-          box(body, 0.06, 0.45, 0.08, s * 0.83, 1.17, z);                                                       // pillars
-        box(glass, 1.68, 0.44, cabL - 0.08, 0, 1.17, cabZ);                                                    // the glasshouse
-        box(glass, 1.6, 0.05, 0.6, 0, 1.17, cabZ + cabL / 2 + 0.2, -0.85);                                     // windscreen
-        if (!wagon) box(glass, 1.6, 0.05, 0.55, 0, 1.17, cabZ - cabL / 2 - 0.2, 0.9);                          // rear window
-        for (const z of [L / 2 - 0.05, -L / 2 + 0.05]) { box(chrome, 2.0, 0.14, 0.12, 0, 0.42, z); box(chrome, 1.5, 0.22, 0.05, 0, 0.66, z + Math.sign(z) * 0.02); }   // bumpers, grille / tail panel
-        for (const s of [-1, 1]) {
-          box(chrome, 0.02, 0.03, L - 0.6, s * 0.985, 0.82, 0);                                               // side trim
-          box(chrome, 0.03, 0.03, 0.18, s * 0.99, 0.74, 0.3);                                                  // door handles
-          if (wagon) box(wood, 0.02, 0.28, L - 1.4, s * 0.985, 0.64, -0.2);                                    // wood-grain panels
-          for (const z of [L / 2 - 1.0, -L / 2 + 1.05]) {
-            tire.push(new THREE.CylinderGeometry(0.36, 0.36, 0.26, 16).rotateZ(Math.PI / 2).translate(s * 0.86, 0.36, z));
-            chrome.push(new THREE.CylinderGeometry(0.2, 0.2, 0.27, 12).rotateZ(Math.PI / 2).translate(s * 0.865, 0.36, z));   // hubcaps
-          }
-          lf.push(new THREE.CylinderGeometry(0.11, 0.11, 0.04, 12).rotateX(Math.PI / 2).translate(s * 0.62, 0.7, L / 2 + 0.02));   // round headlights
-          box(lr, 0.32, 0.14, 0.04, s * 0.72, 0.7, -L / 2 - 0.02);                                             // tail lights
+        const shell = (pts, width, bevel) => {
+          const sh = new THREE.Shape(); pts.forEach(([u, v], i) => (i ? sh.lineTo(u, v) : sh.moveTo(u, v))); sh.closePath();
+          return new THREE.ExtrudeGeometry(sh, { depth: width - 2 * bevel, bevelEnabled: true, bevelThickness: bevel, bevelSize: bevel, bevelSegments: 2, curveSegments: 4 })
+            .rotateY(-Math.PI / 2).translate((width - 2 * bevel) / 2, 0, 0);
+        };
+        body.push(shell(wagon
+          ? [[-hl + 0.04, 0.3], [hl - 0.04, 0.3], [hl - 0.04, 0.6], [hl - 0.1, 0.82], [1.35, 0.92], [-hl + 0.12, 0.94], [-hl + 0.04, 0.66]]
+          : [[-hl + 0.04, 0.3], [hl - 0.04, 0.3], [hl - 0.04, 0.6], [hl - 0.1, 0.82], [1.3, 0.92], [-1.55, 0.93], [-hl + 0.12, 0.9], [-hl + 0.04, 0.66]], 1.95, 0.04));
+        const cab = wagon ? [[1.25, 0.9], [0.55, 1.36], [-hl + 0.3, 1.38], [-hl + 0.16, 0.92]] : [[1.18, 0.9], [0.45, 1.36], [-0.95, 1.36], [-1.5, 0.9]];
+        body.push(shell(cab, 1.64, 0.02));
+        const glassOn = (a, b, w) => {
+          const A = new THREE.Vector3(0, a[1], a[0]), B = new THREE.Vector3(0, b[1], b[0]), d = B.clone().sub(A), len = d.length(); d.normalize();
+          const n = new THREE.Vector3(0, -d.z, d.y); if (n.y < 0) n.negate();
+          const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), d), m = A.clone().add(B).multiplyScalar(0.5).addScaledVector(n, 0.026);
+          glass.push(new THREE.BoxGeometry(w, 0.006, len * 0.86).applyQuaternion(q).translate(m.x, m.y, m.z));
+        };
+        glassOn(cab[0], cab[1], 1.46); glassOn(cab[3], cab[2], 1.46);
+        const wins = wagon ? [[[1.12, 0.97], [0.58, 1.31], [-0.1, 1.31], [-0.1, 0.97]], [[-0.22, 0.97], [-0.22, 1.31], [-1.3, 1.31], [-1.3, 0.97]], [[-1.42, 0.97], [-1.42, 1.31], [-hl + 0.42, 1.31], [-hl + 0.32, 0.97]]]
+          : [[[1.04, 0.97], [0.5, 1.3], [-0.12, 1.3], [-0.12, 0.97]], [[-0.24, 0.97], [-0.24, 1.3], [-0.92, 1.3], [-1.36, 0.97]]];
+        for (const pts of wins) for (const sd of [-1, 1]) {                    // (each side's glass faces out on its own side)
+          const sh = new THREE.Shape(); pts.forEach(([u, v], i) => (i ? sh.lineTo(sd * -u, v) : sh.moveTo(sd * -u, v))); sh.closePath();
+          glass.push(new THREE.ShapeGeometry(sh).rotateY(sd * Math.PI / 2).translate(sd * 0.826, 0, 0));
         }
-        box(tire, 1.7, 0.25, L - 0.6, 0, 0.35, 0);                                                             // (the dark underside)
+        for (const z of [hl + 0.02, -hl - 0.02]) box(chrome, 1.97, 0.13, 0.1, 0, 0.42, z);            // bumpers
+        box(chrome, 1.1, 0.2, 0.02, 0, 0.62, hl + 0.005);                                              // the grille
+        for (const s of [-1, 1]) {
+          box(chrome, 0.012, 0.025, L - 0.9, s * 0.981, 0.84, 0);                                      // side trim
+          for (const z of (wagon ? [0.62, -0.62] : [0.6, -0.65])) box(chrome, 0.02, 0.03, 0.16, s * 0.984, 0.76, z);   // door handles
+          if (wagon) box(wood, 0.012, 0.3, L - 1.5, s * 0.981, 0.62, -0.25);                          // wood-grain panels
+          for (const z of [hl - 1.0, -hl + 1.05]) {
+            tire.push(new THREE.CylinderGeometry(0.34, 0.34, 0.24, 18).rotateZ(Math.PI / 2).translate(s * 0.84, 0.34, z));
+            chrome.push(new THREE.CylinderGeometry(0.19, 0.2, 0.02, 16).rotateZ(Math.PI / 2).translate(s * 0.965, 0.34, z));   // hubcaps
+          }
+          lf.push(new THREE.CylinderGeometry(0.1, 0.1, 0.03, 14).rotateX(Math.PI / 2).translate(s * 0.66, 0.65, hl + 0.005));   // round headlights
+          box(lr, 0.32, 0.13, 0.02, s * 0.68, 0.72, -hl - 0.005);                                      // tail lights
+        }
+        box(tire, 1.7, 0.08, L - 0.7, 0, 0.3, 0);                                                      // (the dark underside)
         const M = (l) => (l.length ? mergeGeometries(l.map((g) => (g.index ? g.toNonIndexed() : g)), false) : null);
         return { body: M(body), chrome: M(chrome), glass: M(glass), tire: M(tire), wood: M(wood), lf: M(lf), lr: M(lr), L };
       };
@@ -10684,17 +10706,18 @@
     hcM.taillight = new THREE.MeshBasicMaterial({ color: 0x5a0a08 });
     function hcCar(x, z, yaw, wagon, color) {
       const G = wagon ? hcCarGeo.wagon : hcCarGeo.sedan, k = wagon ? 'W' : 'S';
-      hcPut('carBody' + k, G.body, hcM.carBody, x, 0, z, 0, yaw, 0, 1, 1, 1, color);
-      hcPut('carChrome' + k, G.chrome, hcM.chrome, x, 0, z, 0, yaw, 0, 1, 1, 1);
-      hcPut('carGlass' + k, G.glass, hcM.carGlass, x, 0, z, 0, yaw, 0, 1, 1, 1);
-      hcPut('carTire' + k, G.tire, hcM.tire, x, 0, z, 0, yaw, 0, 1, 1, 1);
-      hcPut('carLF' + k, G.lf, hcM.headlight, x, 0, z, 0, yaw, 0, 1, 1, 1);
-      hcPut('carLR' + k, G.lr, hcM.taillight, x, 0, z, 0, yaw, 0, 1, 1, 1);
-      if (G.wood) hcPut('carWood', G.wood, hcM.panel, x, 0, z, 0, yaw, 0, 1, 1, 1);
+      hcPut('carBody' + k, G.body, hcM.carBody, x, 0, z, 0, yaw, 0, HC_CAR_K, HC_CAR_K, HC_CAR_K, color);
+      hcPut('carChrome' + k, G.chrome, hcM.chrome, x, 0, z, 0, yaw, 0, HC_CAR_K, HC_CAR_K, HC_CAR_K);
+      hcPut('carGlass' + k, G.glass, hcM.carGlass, x, 0, z, 0, yaw, 0, HC_CAR_K, HC_CAR_K, HC_CAR_K);
+      hcPut('carTire' + k, G.tire, hcM.tire, x, 0, z, 0, yaw, 0, HC_CAR_K, HC_CAR_K, HC_CAR_K);
+      hcPut('carLF' + k, G.lf, hcM.headlight, x, 0, z, 0, yaw, 0, HC_CAR_K, HC_CAR_K, HC_CAR_K);
+      hcPut('carLR' + k, G.lr, hcM.taillight, x, 0, z, 0, yaw, 0, HC_CAR_K, HC_CAR_K, HC_CAR_K);
+      if (G.wood) hcPut('carWood', G.wood, hcM.panel, x, 0, z, 0, yaw, 0, HC_CAR_K, HC_CAR_K, HC_CAR_K);
       const along = Math.abs(Math.sin(yaw)) > 0.5;                                                               // (pointing along x)
-      addBoxCollider(x, 0, z, along ? G.L : 2.0, 1.15, along ? 2.0 : G.L);
-      addBoxCollider(x, 1.15, z, along ? G.L - 2.4 : 1.7, 0.3, along ? 1.7 : G.L - 2.4);
-      HC_CARS.push({ x, z, yaw, wagon, L: G.L });
+      const ck = HC_CAR_K, Lk = G.L * ck;
+      addBoxCollider(x, 0, z, along ? Lk : 2.0 * ck, 0.97 * ck, along ? 2.0 * ck : Lk);
+      addBoxCollider(x, 0.97 * ck, z, along ? (G.L - 2.4) * ck : 1.64 * ck, 0.42 * ck, along ? 1.64 * ck : (G.L - 2.4) * ck);
+      HC_CARS.push({ x, z, yaw, wagon, L: G.L * HC_CAR_K });
     }
     {
       const Z = HALLOW.z, H = (no) => HC_HOUSES.find((h) => h.no === no);
@@ -11046,16 +11069,17 @@
       };
       glassOn(cab[0], cab[1], 1.44); glassOn(cab[3], cab[2], 1.44);
       for (const pts of [[[1.04, 0.97], [0.5, 1.3], [-0.12, 1.3], [-0.12, 0.97]], [[-0.24, 0.97], [-0.24, 1.3], [-0.92, 1.3], [-1.36, 0.97]]]) {
-        const sh = new THREE.Shape(); pts.forEach(([u, v], i) => (i ? sh.lineTo(u, v) : sh.moveTo(u, v))); sh.closePath();
-        const geo = new THREE.ShapeGeometry(sh).rotateY(-Math.PI / 2);
-        for (const sd of [-1, 1]) { const m = add(geo, hcM.carGlass, sd * 0.806); if (sd > 0) m.scale.x = -1; }
+        for (const sd of [-1, 1]) {                                            // (r104: each side's glass built facing out on its own side)
+          const sh = new THREE.Shape(); pts.forEach(([u, v], i) => (i ? sh.lineTo(sd * -u, v) : sh.moveTo(sd * -u, v))); sh.closePath();
+          add(new THREE.ShapeGeometry(sh).rotateY(sd * Math.PI / 2), hcM.carGlass, sd * 0.806);
+        }
       }
       // the livery on both sides: white doors with POLICE and HALLOWCREEK P.D., the door seams, the wheel arches
-      const liv = (() => {
+      const livTex = (mirror) => {                                            // (r104: mirror = the doors laid out front-to-back for the other side; the words never mirrored)
         const cv = document.createElement('canvas'); cv.width = 2048; cv.height = 276; const c = cv.getContext('2d');
-        const Wd = cv.width, Hd = cv.height, zx = (z) => ((z + 2.5) / 5.0) * Wd, yy = (y) => Hd - ((y - 0.26) / 0.72) * Hd;
+        const Wd = cv.width, Hd = cv.height, zx = (z) => (((mirror ? -z : z) + 2.5) / 5.0) * Wd, yy = (y) => Hd - ((y - 0.26) / 0.72) * Hd;
         c.clearRect(0, 0, Wd, Hd);
-        c.fillStyle = '#ecece8'; c.fillRect(zx(-1.48), yy(0.94), zx(0.96) - zx(-1.48), yy(0.33) - yy(0.94));          // the white doors
+        c.fillStyle = '#ecece8'; c.fillRect(Math.min(zx(-1.48), zx(0.96)), yy(0.94), Math.abs(zx(0.96) - zx(-1.48)), yy(0.33) - yy(0.94));          // the white doors
         c.strokeStyle = '#2a2a2e'; c.lineWidth = 4;
         for (const z of [-1.48, -0.18, 0.96]) { c.beginPath(); c.moveTo(zx(z), yy(0.94)); c.lineTo(zx(z), yy(0.33)); c.stroke(); }   // the door seams
         c.fillStyle = '#0c0c10'; c.textAlign = 'center'; c.textBaseline = 'middle';
@@ -11064,10 +11088,12 @@
         c.fillStyle = '#060608';
         for (const z of [-1.55, 1.55]) { c.beginPath(); c.arc(zx(z), yy(0.34), (0.42 / 5.0) * Wd, Math.PI, 2 * Math.PI); c.fill(); }   // the wheel arches
         const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; return t;
-      })();
-      const livGeo = new THREE.PlaneGeometry(5.0, 0.72).rotateY(-Math.PI / 2);
-      const livMat = new THREE.MeshStandardMaterial({ map: liv, transparent: true, roughness: 0.4, metalness: 0.2, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
-      for (const sd of [-1, 1]) { const m = add(livGeo, livMat, sd * 0.932, 0.62, 0); if (sd > 0) m.scale.x = -1; }
+      };
+      const liv = { [-1]: livTex(false), 1: livTex(true) };
+      // (r104) one plane per side, each turned to face out of its own side, so POLICE / HALLOWCREEK P.D. reads
+      // left to right on the driver's side and the passenger's side alike (no mirrored copy)
+      const livGeo = { [-1]: new THREE.PlaneGeometry(5.0, 0.72).rotateY(-Math.PI / 2), 1: new THREE.PlaneGeometry(5.0, 0.72).rotateY(Math.PI / 2) };
+      for (const sd of [-1, 1]) add(livGeo[sd], new THREE.MeshStandardMaterial({ map: liv[sd], transparent: true, roughness: 0.4, metalness: 0.2, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }), sd * 0.932, 0.62, 0);
       for (const sd of [-1, 1]) for (const z of [0.62, -0.62]) add(new THREE.BoxGeometry(0.02, 0.03, 0.16), hcM.chrome, sd * 0.94, 0.84, z);   // door handles
       // wheels: tyres just proud of the body sides, chrome hubcaps
       for (const sd of [-1, 1]) for (const z of [1.55, -1.55]) {
@@ -18630,9 +18656,10 @@
       for (let t = 0; t < tris; t++) {
         const a = idx ? idx[t * 3] : t * 3, b = idx ? idx[t * 3 + 1] : t * 3 + 1, c = idx ? idx[t * 3 + 2] : t * 3 + 2;
         all.push(a, b, c);
-        // (your own eyes: no head, and no upper chest / shoulder skin above the belly, which sat right under the headset)
-        const upperBody = Math.max(pos.getY(a), pos.getY(b), pos.getY(c)) > -0.12 && Math.min(armW[a], armW[b], armW[c]) < 0.5;
-        if (Math.max(headW[a], headW[b], headW[c]) < 0.35 && !upperBody) noHead.push(a, b, c);
+        // (your own eyes: your arms and hands only. r104: the torso, belly, chest and collar are all left to the copy
+        // everyone else sees (on the body layer, which your headset's eye cameras never draw), so looking straight down
+        // never shows the cut edge or the hollow inside of the body)
+        if (Math.max(headW[a], headW[b], headW[c]) < 0.35 && Math.min(armW[a], armW[b], armW[c]) >= 0.5) noHead.push(a, b, c);
       }
       const ix = (arr) => new THREE.BufferAttribute(n > 65535 ? new Uint32Array(arr) : new Uint16Array(arr), 1);
       const full = mk(ix(all)), arms = mk(ix(noHead));
@@ -29661,33 +29688,47 @@
 
     // ---------- the uniform: navy shirt (long sleeves) and dark trousers, painted onto the model's own fur ----------
     function hpcUniformMaterial(src) {
+      // (r104) the uniform follows the model's own skinning, not a guess from its shape: everything carried by the
+      // torso, upper arm and forearm bones is the navy shirt (and dark trousers below the belt), everything carried by
+      // the head, jaw, hand and finger bones stays fur; blended across the weights, so the cuffs and collar are clean
+      // edges with nothing fighting or poking through
+      const fur = new Float32Array(64);
       const one = (m) => {
-        const n = m.clone(); n.clippingPlanes = null;
-        const B = survivorRig.bind;
+        const n = m.clone(); n.clippingPlanes = null; n.userData.fur = fur;
         n.onBeforeCompile = (sh) => {
-          sh.uniforms.uCopU = { value: B.L.u.clone() }; sh.uniforms.uCopH = { value: B.L.h.clone() };
-          sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vCopP;')
-            .replace('#include <begin_vertex>', '#include <begin_vertex>\nvCopP = position;');
-          sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vCopP;\nuniform vec3 uCopU;\nuniform vec3 uCopH;')
+          sh.uniforms.uFur = { value: fur };
+          sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vCopP;\nvarying float vCopFur;\nuniform float uFur[64];')
+            .replace('#include <begin_vertex>', `#include <begin_vertex>
+            vCopP = position; vCopFur = 0.0;
+            #ifdef USE_SKINNING
+            vCopFur = dot(skinWeight, vec4(uFur[int(skinIndex.x)], uFur[int(skinIndex.y)], uFur[int(skinIndex.z)], uFur[int(skinIndex.w)]));
+            #endif`);
+          sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vCopP;\nvarying float vCopFur;')
             .replace('#include <map_fragment>', `#include <map_fragment>
             {
-              vec3 q = vec3(abs(vCopP.x), vCopP.y, vCopP.z);
-              vec3 ab = uCopH - uCopU; float t = clamp(dot(q - uCopU, ab) / dot(ab, ab), 0.0, 1.0);
-              float dA = length(q - (uCopU + t * ab));
-              bool arm = q.x > uCopU.x - 0.06 && dA < 0.24 && !(vCopP.y > 0.04 && q.x < 0.5);
-              bool body = !arm && vCopP.y < 0.035 && q.x < 0.66;
-              if ((arm && t < 0.86) || body) {
+              float cloth = 1.0 - smoothstep(0.3, 0.6, vCopFur);
+              if (cloth > 0.0) {
                 float lum = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
-                vec3 cloth = (body && vCopP.y < -0.58) ? vec3(0.03, 0.035, 0.06) : vec3(0.05, 0.075, 0.19);
-                float seam = (body && abs(vCopP.x) < 0.012 && vCopP.y > -0.55) ? 0.55 : 1.0;   // the button placket
-                diffuseColor.rgb = cloth * (0.6 + 0.8 * lum) * seam;
+                vec3 c = vCopP.y < -0.58 ? vec3(0.03, 0.035, 0.06) : vec3(0.05, 0.075, 0.19);
+                float seam = (abs(vCopP.x) < 0.012 && vCopP.y > -0.55 && vCopP.y < 0.0) ? 0.55 : 1.0;   // the button placket
+                diffuseColor.rgb = mix(diffuseColor.rgb, c * (0.62 + 0.6 * lum) * seam, cloth);
               }
             }`);
         };
-        n.customProgramCacheKey = () => 'grimape-cop-uniform';
+        n.customProgramCacheKey = () => 'grimape-cop-uniform-2';
         return n;
       };
-      return Array.isArray(src) ? src.map(one) : one(src);
+      const out = Array.isArray(src) ? src.map(one) : one(src);
+      out.fur = fur;
+      return out;
+    }
+    function hpcFurBones(inst, fur) {                                        // which bones are fur: the head, the jaw, the hands and every finger
+      const bones = inst.mesh.skeleton.bones, furSet = new Set();
+      const all = (b) => { if (!b) return; b.traverse((o) => { if (o.isBone) furSet.add(o); }); };
+      all(inst.bones.head); if (inst.bones.jaw) furSet.add(inst.bones.jaw);
+      all(inst.bones.L.h); all(inst.bones.R.h);
+      for (const A of [inst.bones.L, inst.bones.R]) for (const k of ['trig', 'grip', 'thumb']) for (const b of (A.fingers && A.fingers[k]) || []) all(b);
+      fur.fill(0); bones.forEach((b, i) => { if (i < 64 && furSet.has(b)) fur[i] = 1; });
     }
     // ---------- a survivor (or the officer) for the scene ----------
     // its -Z is its front (as the other players' bodies are built); bones: the rigged survivor.glb's upper arm / forearm /
@@ -29700,6 +29741,7 @@
         const srcMat = survivorRig.local.mesh.material;
         const mat = cop ? hpcUniformMaterial(srcMat) : (Array.isArray(srcMat) ? srcMat.map((m) => Object.assign(m.clone(), { clippingPlanes: null })) : Object.assign(srcMat.clone(), { clippingPlanes: null }));
         const inst = makeRigInstance(mat, false);
+        if (cop && mat.fur) hpcFurBones(inst, mat.fur);
         const model = new THREE.Group(); model.add(inst.mesh);
         model.rotation.set(0, Math.PI, 0); model.updateMatrixWorld(true);
         let box = new THREE.Box3().setFromObject(model);
@@ -29760,11 +29802,11 @@
         const B = survivorRig.bind, s = fig.s, head = fig.rig.bones.head, rootB = fig.rig.bones.root;
         cap.position.set(0.015 - SURVIVOR_NECK_PIVOT.x, 0.6 - SURVIVOR_NECK_PIVOT.y, 0.0 - SURVIVOR_NECK_PIVOT.z); head.add(cap);
         badge.position.set(0.2, -0.09, 0.135); badge.rotation.x = -0.15; badge.scale.setScalar(1.25); rootB.add(badge);
-        const hand = fig.rig.bones.R.h, d0 = _hpcV1.copy(B.R.h).sub(B.R.u).normalize();
-        pistol.scale.setScalar(0.6 / s);                                    // (a monkey-sized pistol in the model's units)
-        pistol.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), d0);
-        pistol.position.copy(d0).multiplyScalar(0.06).add(new THREE.Vector3(0, -0.03, 0.0));
-        hand.add(pistol);
+        // (r104) the pistol sits in his right hand's grip frame (barrel along -Z, the top of the slide up), the same frame
+        // his fingers close round (see hpcCopArms)
+        pistol.rotation.y = Math.PI; pistol.scale.setScalar(0.62);
+        const holder = new THREE.Group(); holder.visible = false; holder.add(pistol); scene.add(holder);
+        fig.pistolHolder = holder;
       } else {
         const r = fig.root;
         cap.scale.setScalar(0.24); cap.position.set(0, 0.49, 0); r.add(cap);
@@ -29802,6 +29844,50 @@
         A.u.quaternion.identity().slerp(_hpcAQ2, k);
         A.l.quaternion.identity(); A.h.quaternion.identity();
       }
+    }
+    // (r104) the officer's arms: the same solver the players' bodies use (solveRigArm), his wrists on a two-handed
+    // pistol grip in front of him and his own monkey fingers closed round it (Grip + Trigger + thumb); resting at his
+    // sides, fingers loose and the pistol pointing at the ground, before he raises it
+    const _hcaA = new THREE.Vector3(), _hcaSR = new THREE.Vector3(), _hcaSL = new THREE.Vector3(), _hcaX = new THREE.Vector3(), _hcaY = new THREE.Vector3(), _hcaZ = new THREE.Vector3(),
+          _hcaG = new THREE.Vector3(), _hcaW = new THREE.Vector3(), _hcaW2 = new THREE.Vector3(), _hcaR = new THREE.Vector3(), _hcaM = new THREE.Matrix4(), _hcaQ = new THREE.Quaternion(),
+          _hcaS = new THREE.Vector3(), _hcaT = new THREE.Vector3(), _hcaQ2 = new THREE.Quaternion(), _hcaF = new THREE.Vector3();
+    function hpcCopArms(fig, target, k, kick, yaw) {
+      const inst = fig.rig, B = survivorRig.bind, holder = fig.pistolHolder;
+      const curl = [0.35 + 0.65 * k, 0.35 + 0.65 * k, 0.25 + 0.5 * k];
+      inst.mesh.updateWorldMatrix(true, false);
+      inst.mesh.matrixWorld.decompose(_hcaT, _hcaQ2, _hcaS);
+      const sc = _hcaS.x, hs = PLAYER_SCALE * (fig.H / (SURVIVOR_GLB_HEIGHT * SURVIVOR_GLB_FIT));
+      const fwd = _hcaF.set(-Math.sin(yaw), 0, -Math.cos(yaw));
+      if (k < 0.01) {
+        solveRigArm(inst, 'L', null, yaw, null, curl); solveRigArm(inst, 'R', null, yaw, null, curl);
+        inst.mesh.updateMatrixWorld(true);
+        const h = inst.bones.R.h; h.updateWorldMatrix(true, false); h.getWorldPosition(_hcaG);
+        _hcaY.copy(fwd); _hcaZ.set(0, 1, 0); _hcaX.crossVectors(_hcaY, _hcaZ);           // (barrel down, at his side)
+        holder.position.copy(_hcaG).addScaledVector(fwd, 0.02); holder.position.y -= 0.03;
+        holder.quaternion.setFromRotationMatrix(_hcaM.makeBasis(_hcaX, _hcaY, _hcaZ));
+        return;
+      }
+      _hcaSR.copy(B.R.u).applyMatrix4(inst.mesh.matrixWorld); _hcaSL.copy(B.L.u).applyMatrix4(inst.mesh.matrixWorld);
+      const reach = (B.R.l.distanceTo(B.R.u) + B.R.h.distanceTo(B.R.l)) * sc;
+      const aim = _hcaA.copy(target).sub(_hcaR.addVectors(_hcaSR, _hcaSL).multiplyScalar(0.5)).normalize();
+      aim.y += 0.2 * kick; aim.normalize();                                                // (the recoil)
+      // the grip frame: -Z along the aim, +Y up, +X to his right
+      _hcaZ.copy(aim).negate(); _hcaY.set(0, 1, 0).addScaledVector(_hcaZ, -_hcaZ.y).normalize(); _hcaX.crossVectors(_hcaY, _hcaZ);
+      _hcaQ.setFromRotationMatrix(_hcaM.makeBasis(_hcaX, _hcaY, _hcaZ));
+      // the pistol grip: out in front of his chest on the right, arms nearly straight
+      _hcaG.copy(_hcaSR).addScaledVector(aim, reach * 0.84).addScaledVector(_hcaX, -0.035 * fig.H);
+      const wOff = _hcaW2.copy(SURVIVOR_WRIST).multiplyScalar(hs).applyQuaternion(_hcaQ);
+      _hcaW.copy(_hcaG).add(wOff);
+      _hcaR.copy(B.R.h).applyMatrix4(inst.mesh.matrixWorld); _hcaW.lerp(_hcaR, 1 - k);       // (raising it from his side)
+      solveRigArm(inst, 'R', _hcaW, yaw, _hcaQ, curl);
+      // the support hand cups the grip from the left, a little lower
+      const gL = _hcaR.copy(_hcaG).addScaledVector(_hcaX, -0.055 * fig.H).addScaledVector(_hcaY, -0.03 * fig.H).addScaledVector(aim, -0.015 * fig.H);
+      _hcaW2.set(-SURVIVOR_WRIST.x, SURVIVOR_WRIST.y, SURVIVOR_WRIST.z).multiplyScalar(hs).applyQuaternion(_hcaQ);
+      const wL = gL.add(_hcaW2);
+      const restL = _hcaT.copy(B.L.h).applyMatrix4(inst.mesh.matrixWorld);
+      wL.lerp(restL, 1 - k);
+      solveRigArm(inst, 'L', wL, yaw, _hcaQ, curl);
+      holder.position.copy(_hcaG); holder.quaternion.copy(_hcaQ);
     }
     // ---------- THE SHAPE for the scene (+Z is his front, as the game's monster) ----------
     function hpcShapeFigure() {
@@ -29877,7 +29963,7 @@
               new THREE.Vector3(40.8 + 0.75 * k, 0, Z - 3.6 - (k % 2 ? 0.35 : 0))];
     }
     const HPC_CAR_A1 = { x: 40.6, z: HALLOW.z + 1.35, yaw: -Math.PI / 2 - 0.3 }, HPC_CAR_B0 = { x: 70, z: HALLOW.z - 1.6 }, HPC_CAR_B1 = { x: 44.6, z: HALLOW.z - 1.5, yaw: -Math.PI / 2 + 0.36 };
-    const HPC_COP = [[0.6, 0.25, 2.05], [1.35, 0.05, 2.42], [2.35, 0.2, 2.68], [2.9, 1.1, 2.95]];   // the officer's steps (the car's frame: x out of the driver's side, z forward) and when he's there: behind the open door, round its end, clear of the car's nose
+    const HPC_COP = [[-1.45, 1.5, 1.95], [-1.2, 3.1, 2.4], [1.2, 3.15, 2.85]];   // (r104) from the cruiser's far side, round its nose, clear of it; the doors stay shut   // the officer's steps (the car's frame: x out of the driver's side, z forward) and when he's there: behind the open door, round its end, clear of the car's nose
     const HPC_SHAPE0 = new THREE.Vector3(27.0, 0, HALLOW.z + 0.3), HPC_SHAPE_AT = new THREE.Vector3(41, 0, HALLOW.z - 2.2), HPC_SHOT = [3.05, 3.32];
     // how far THE SHAPE has run by time t: flat out with them (3.3 m/s), then checking as the cruisers block the road (1.2 m/s)
     const hpcShapeRun = (t) => (t < 1.5 ? 3.3 * t : t < 2.4 ? 4.95 + (3.3 * (t - 1.5) - 1.1667 * (t - 1.5) * (t - 1.5)) : 6.975 + 1.2 * (t - 2.4));
@@ -29893,7 +29979,7 @@
       HPC.actors = hpcRunners().map((id, k) => ({ id, k, fig: hpcSurvivorFigure(false), path: hpcSurvivorPath(k), done: false }));
       if (!HPC.cop) HPC.cop = hpcSurvivorFigure(true);
       if (!HPC.shape) HPC.shape = hpcShapeFigure();
-      HPC.cop.root.visible = false; HPC.shape.root.visible = true;
+      HPC.cop.root.visible = false; if (HPC.cop.pistolHolder) HPC.cop.pistolHolder.visible = false; HPC.shape.root.visible = true;
       hcCruiser.cut = true; hcCruiser.group.visible = true;
       HPC.carA0 = { x: hcCruiser.group.position.x > 45 ? hcCruiser.group.position.x : HP_STOP_X, z: HALLOW.z + 1.6 };
       HPC.carB.visible = true; for (const g of HPC.glowB) g.visible = true;
@@ -29943,7 +30029,7 @@
       if (!HPC.built) return;
       hcCruiser.cut = false; HPC.door.visible = false; HPC.door.rotation.y = 0; HPC.doorGap.visible = false;
       HPC.carB.visible = false; for (const g of HPC.glowB) g.visible = false;
-      if (HPC.cop) HPC.cop.root.visible = false;
+      if (HPC.cop) { HPC.cop.root.visible = false; if (HPC.cop.pistolHolder) HPC.cop.pistolHolder.visible = false; }
       if (HPC.shape) HPC.shape.root.visible = false;
       for (const a of HPC.actors) scene.remove(a.fig.root);
       HPC.actors = [];
@@ -30008,9 +30094,7 @@
       if (!HPC.yelped && t > 1.85) { HPC.yelped = true; try { hpAudio.yelp(); } catch (e) { } }
       // B's light bar glow (A's is the existing one)
       { const g = HPC.glowB; g[0].position.set(B.position.x, 1.6, B.position.z - 0.36); g[1].position.set(B.position.x, 1.6, B.position.z + 0.36); g[0].material.opacity = flip ? 0.95 : 0.05; g[1].material.opacity = flip ? 0.05 : 0.95; }
-      // the driver's door swings open
-      const dOpen = hpcOut(hpcSeg(t, 2.0, 2.35));
-      HPC.door.rotation.y = -1.1 * dOpen; HPC.door.visible = dOpen > 0.001; HPC.doorGap.visible = dOpen > 0.02;
+      HPC.door.visible = false; HPC.doorGap.visible = false;                // (r104: the doors stay shut and flush)
       // THE SHAPE: chasing down Main Street, shot, thrown over onto his back
       const sh = HPC.shape, H = sh.H;
       const run = hpcShapeRun(Math.min(t, HPC_SHOT[0]));
@@ -30046,10 +30130,10 @@
         f.root.rotation.set(-g.lean, cur + d * Math.min(1, dt * 8), 0, 'YXZ');
         f.root.visible = true;
       }
-      // the officer: out of the driver's door, from behind it, aims, fires twice
+      // the officer: out from the far side of the cruiser, round its nose, aims, fires twice
       const cop = HPC.cop;
-      if (t >= 2.05) {
-        cop.root.visible = true;
+      if (t >= HPC_COP[0][2]) {
+        cop.root.visible = true; if (cop.pistolHolder) cop.pistolHolder.visible = true;
         const S = HPC_COP; let lx, lz;
         let i = 0; while (i < S.length - 2 && t >= S[i + 1][2]) i++;
         { const u = hpcInOut(hpcSeg(t, S[i][2], S[i + 1][2])); lx = S[i][0] + (S[i + 1][0] - S[i][0]) * u; lz = S[i][1] + (S[i + 1][1] - S[i][1]) * u; }
@@ -30057,18 +30141,20 @@
         const walking = t < S[S.length - 1][2];
         cop.phase += dt * (walking ? 10 : 0);
         cop.root.position.set(cp.x, hpcGround(cp.x, cp.z) + (walking ? 0.02 * cop.H * Math.abs(Math.sin(cop.phase)) : 0), cp.z);
-        const outYaw = C.group.rotation.y - Math.PI / 2;                     // (facing out of the door: the car's +X is his -Z)
+        const cy = Math.cos(C.group.rotation.y), sy = Math.sin(C.group.rotation.y);
+        const nx = S[i + 1][0] - S[i][0], nz = S[i + 1][1] - S[i][1];
+        const walkYaw = hpcYawNegZ(nx * cy + nz * sy, -nx * sy + nz * cy);               // (facing the way he's going)
         const toShape = hpcYawNegZ(sh.root.position.x - cp.x, sh.root.position.z - cp.z);
-        const turn = hpcInOut(hpcSeg(t, 2.5, 2.9));
-        const dy = Math.atan2(Math.sin(toShape - outYaw), Math.cos(toShape - outYaw));
-        cop.root.rotation.set(0, outYaw + dy * turn, 0, 'YXZ');
+        const turn = hpcInOut(hpcSeg(t, 2.55, 2.95));
+        const dy = Math.atan2(Math.sin(toShape - walkYaw), Math.cos(toShape - walkYaw));
+        const copYaw = walkYaw + dy * turn;
+        cop.root.rotation.set(0, copYaw, 0, 'YXZ');
         cop.root.updateMatrixWorld(true);
         const aimK = hpcInOut(hpcSeg(t, 2.72, 3.0)) * (1 - 0.35 * hpcSeg(t, 4.3, 4.9));
         const chest = _hpcChest.copy(sh.root.position); chest.y += H * 0.62 * (1 - fall) + 0.1 * fall;
-        if (walking && aimK < 0.01) hpcGallop(cop, 0.35, 0, 0); else hpcAim(cop, chest, aimK);
         let kick = 0;
         for (let k = 0; k < 2; k++) if (t >= HPC_SHOT[k] && t < HPC_SHOT[k] + 0.12) kick = 1 - (t - HPC_SHOT[k]) / 0.12;
-        if (kick > 0 && cop.rig) { const R = cop.rig.bones.R.l; R.quaternion.multiply(_hpcQ1.setFromAxisAngle(_hpcV1.set(1, 0, 0), 0.25 * kick)); }
+        if (cop.rig) hpcCopArms(cop, chest, aimK, kick, copYaw);
         cop.root.updateMatrixWorld(true);
         // the shots
         for (let k = 0; k < 2; k++) if (!HPC.shots[k] && t >= HPC_SHOT[k]) {
@@ -30226,17 +30312,55 @@
     }
     // ---------- each copy: arm bones collapsed, its own gorilla arms and caps ----------
     const _shCyl = new THREE.CylinderGeometry(1, 1, 1, 14, 1), _shBall = new THREE.SphereGeometry(1, 16, 12), _shCap = new THREE.SphereGeometry(1, 20, 14);
-    function shapeBuildHand(sd) {
-      const h = new THREE.Group(), sg = sd === 'L' ? 1 : -1;
-      const palm = new THREE.Mesh(_shBall, shapeHandMat); palm.scale.set(0.05, 0.036, 0.052); palm.position.set(0, 0, -0.006); h.add(palm);
-      for (let f = 0; f < 4; f++) {                                            // four fingers folded into the palm (two knuckle rows)
-        const x = (-0.033 + f * 0.022) * sg;
-        const k1 = new THREE.Mesh(_shBall, shapeHandMat); k1.scale.set(0.0125, 0.0135, 0.016); k1.position.set(x, 0.006, 0.042); h.add(k1);
-        const k2 = new THREE.Mesh(_shBall, shapeHandMat); k2.scale.set(0.0115, 0.013, 0.0145); k2.position.set(x, -0.022, 0.038); h.add(k2);
-        const k3 = new THREE.Mesh(_shBall, shapeHandMat); k3.scale.set(0.011, 0.012, 0.012); k3.position.set(x, -0.032, 0.014); h.add(k3);
+    // (r104) a clean pale slasher's hand, one smooth mesh: a tapered palm with rounded edges, four long tapered fingers
+    // (three joints each, closed into a loose grip) and the thumb, every joint seamless. Its frame: +Z along the
+    // fingers, +Y the back of the hand, built once per side and shared by every copy
+    const SHAPE_HAND_GEO = {};
+    function shapeHandGeo(sd) {
+      if (SHAPE_HAND_GEO[sd]) return SHAPE_HAND_GEO[sd];
+      const sg = sd === 'L' ? 1 : -1, parts = [];
+      // the palm: a tapered, rounded slab (narrower at the wrist)
+      const pal = new THREE.Shape(), r = 0.012, ww = 0.026, wk = 0.033, z0 = -0.034, z1 = 0.04;
+      pal.moveTo(-ww + r, -z0); pal.lineTo(ww - r, -z0); pal.quadraticCurveTo(ww, -z0, ww, -z0 - r);
+      pal.lineTo(wk, -z1 + r); pal.quadraticCurveTo(wk, -z1, wk - r, -z1); pal.lineTo(-wk + r, -z1); pal.quadraticCurveTo(-wk, -z1, -wk, -z1 + r);
+      pal.lineTo(-ww, -z0 - r); pal.quadraticCurveTo(-ww, -z0, -ww + r, -z0);
+      parts.push(new THREE.ExtrudeGeometry(pal, { depth: 0.012, bevelEnabled: true, bevelThickness: 0.007, bevelSize: 0.006, bevelSegments: 3, curveSegments: 4 }).rotateX(-Math.PI / 2).translate(0, -0.006, 0));
+      // a tapered tube from a to b with round joints (radius ra at a, rb at b)
+      const _a = new THREE.Vector3(), _q = new THREE.Quaternion(), Y = new THREE.Vector3(0, 1, 0);
+      const tube = (a, b, ra, rb, cap) => {
+        _a.subVectors(b, a); const len = _a.length(); _a.normalize(); _q.setFromUnitVectors(Y, _a);
+        parts.push(new THREE.CylinderGeometry(rb, ra, len, 12, 1, true).translate(0, len / 2, 0).applyQuaternion(_q).translate(a.x, a.y, a.z));
+        parts.push(new THREE.SphereGeometry(ra, 12, 8).translate(a.x, a.y, a.z));
+        if (cap) parts.push(new THREE.SphereGeometry(rb, 12, 8).scale(1, 1, 1.25).applyQuaternion(_q).translate(b.x, b.y, b.z));
+      };
+      // the fingers: index (inner) to little finger (outer), long and tapered, curled into a loose grip
+      const fx = [-0.0235, -0.0078, 0.0078, 0.0235], fl = [0.03, 0.033, 0.031, 0.025], curl = [0.42, 0.95, 0.7];
+      for (let f = 0; f < 4; f++) {
+        let p = new THREE.Vector3(fx[f] * sg, 0.0, z1 + 0.002), ang = 0, rr = 0.0088 - f * 0.0006;
+        const spread = (f - 1.5) * 0.06 * sg;
+        for (let j = 0; j < 3; j++) {
+          ang += curl[j];
+          const len = fl[f] * [1, 0.72, 0.6][j];
+          const d = new THREE.Vector3(Math.sin(spread), -Math.sin(ang), Math.cos(ang)).normalize();
+          const q = p.clone().addScaledVector(d, len), r2 = rr * 0.86;
+          tube(p, q, rr, r2, j === 2);
+          p = q; rr = r2;
+        }
       }
-      const th = new THREE.Mesh(_shCyl, shapeHandMat); th.scale.set(0.012, 0.05, 0.012); th.rotation.set(0.2, 0, sg * 1.15); th.position.set(-0.038 * sg, -0.012, 0.022); h.add(th);
-      const tt = new THREE.Mesh(_shBall, shapeHandMat); tt.scale.setScalar(0.0125); tt.position.set(-0.016 * sg, -0.03, 0.034); h.add(tt);
+      // the thumb: from the heel of the palm on the inner side, forward and in under the fingers
+      {
+        const p0 = new THREE.Vector3(-0.03 * sg, -0.006, -0.012);
+        const p1 = p0.clone().add(new THREE.Vector3(-0.004 * sg, -0.009, 0.026));
+        const p2 = p1.clone().add(new THREE.Vector3(0.012 * sg, -0.01, 0.019));
+        const p3 = p2.clone().add(new THREE.Vector3(0.012 * sg, -0.007, 0.013));
+        tube(p0, p1, 0.012, 0.0098, false); tube(p1, p2, 0.0098, 0.0088, false); tube(p2, p3, 0.0088, 0.0075, true);
+      }
+      const geo = mergeGeometries(parts.map((g) => (g.index ? g.toNonIndexed() : g)), false);   // (each part keeps its own smooth normals)
+      return (SHAPE_HAND_GEO[sd] = geo);
+    }
+    function shapeBuildHand(sd) {
+      const h = new THREE.Group();
+      const m = new THREE.Mesh(shapeHandGeo(sd), shapeHandMat); m.castShadow = false; m.frustumCulled = false; h.add(m);
       return h;
     }
     function shapeBuildArms(I) {
