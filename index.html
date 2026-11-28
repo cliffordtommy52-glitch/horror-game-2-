@@ -6293,6 +6293,10 @@
     LY.play  = { x: LY.left.x + 44, y: LY.left.y + 562, w: LY.left.w - 88, h: 122 };
     LY.glow  = { x: LY.play.x - 44, y: LY.play.y - 44, w: LY.play.w + 88, h: LY.play.h + 88 }; // hover highlight overlay
     const LOBBY_UPDATES = [
+      { tag: 'NEW', date: '28/11/26', title: 'HIDE THE VICTORY SCREEN',
+        text: "Every victory screen now has a ⌫ button in its top-right corner (or press Backspace): it hides the screen so you can look round at the sunrise, the lake or the police cruisers. A small SHOW PANEL button in the top right brings it back, RETURN TO WAITING ROOM and all." },
+      { tag: 'FIX', date: '28/11/26', title: 'TIDIER HOUSES',
+        text: "No more odd blocks inside the Hallowcreek houses: the clothes in the closets are real shirts, dresses and coats on their hangers, the shoes are shoes, there's a round hat box on the shelf, the coat on the hall stand is a coat, the towels are folded towels, and the mop bucket is a real bucket, moved out of the way of the utility room door." },
       { tag: 'FIX', date: '27/11/26', title: 'SHAPE ARMS, DOORS, CRUISERS',
         text: "THE SHAPE has new arms: solid coverall arms with ball shoulders and elbows and pale fists, sealed at the shoulder, so his sleeves can never stretch into spikes, and his head turns within a real neck's limits. Every Hallowcreek door now fits its frame exactly, with a painted trim frame. The cruisers are rebuilt clean and closed in proper black-and-white livery, and the officer carries a real service pistol. Scenery behind you and outside your view isn't drawn, for smoother frame rates on Quest." },
       { tag: 'NEW', date: '27/11/26', title: 'THE POLICE ARRIVE',
@@ -10123,6 +10127,25 @@
       P.box(hcM.furnDark, -0.3, 0.3, y + 2.0, y + 2.06, -0.22, 0.2);                                     // the crown
       for (const u of [-0.24, 0, 0.24]) { P.at(new THREE.CylinderGeometry(0.02, 0.03, 0.06, 8), hcM.brass, u, y + 2.09, 0); P.at(new THREE.SphereGeometry(0.025, 8, 6), hcM.brass, u, y + 2.14, 0); }   // finials
     }
+    // (r102) soft goods, modelled instead of boxes: a garment on a hanger (its outline extruded thin, rounded, broad side
+    // along local z, hanging down from y 0: kind 0 a shirt, 1 a dress, 2 a coat with long sleeves), a shoe, a folded towel
+    function hcGarmentGeo(len, kind) {
+      const sw = kind === 1 ? 0.15 : 0.17, sl = kind === 2 ? len * 0.62 : kind === 1 ? 0.12 : 0.24, hem = kind === 1 ? 0.2 : kind === 2 ? 0.19 : 0.16;
+      const sh = new THREE.Shape();
+      const pts = [[0.05, 0], [sw, -0.035], [sw + 0.05, -0.09], [sw + 0.07, -sl], [sw + 0.0, -sl - 0.01], [sw - 0.03, -0.17], [sw - 0.02, -len * 0.55], [hem, -len], [-hem, -len], [-(sw - 0.02), -len * 0.55], [-(sw - 0.03), -0.17], [-sw, -sl - 0.01], [-(sw + 0.07), -sl], [-(sw + 0.05), -0.09], [-sw, -0.035], [-0.05, 0], [0, -0.05]];
+      pts.forEach(([u, v], i) => (i ? sh.lineTo(u, v) : sh.moveTo(u, v))); sh.closePath();
+      return new THREE.ExtrudeGeometry(sh, { depth: 0.03, bevelEnabled: true, bevelThickness: 0.012, bevelSize: 0.01, bevelSegments: 2, curveSegments: 2 }).translate(0, 0, -0.015).rotateY(Math.PI / 2);
+    }
+    function hcShoeGeo() {
+      const g = new THREE.SphereGeometry(1, 12, 8); g.scale(0.042, 0.035, 0.12); g.translate(0, 0.03, 0);
+      return g;
+    }
+    function hcTowelGeo(w, d, h) {
+      const sh = new THREE.Shape(), r = 0.012, a = w / 2 - r, b = d / 2 - r;
+      sh.moveTo(-a, -b - r); sh.lineTo(a, -b - r); sh.quadraticCurveTo(a + r, -b - r, a + r, -b); sh.lineTo(a + r, b); sh.quadraticCurveTo(a + r, b + r, a, b + r);
+      sh.lineTo(-a, b + r); sh.quadraticCurveTo(-a - r, b + r, -a - r, b); sh.lineTo(-a - r, -b); sh.quadraticCurveTo(-a - r, -b - r, -a, -b - r);
+      return new THREE.ExtrudeGeometry(sh, { depth: h - 0.016, bevelEnabled: true, bevelThickness: 0.008, bevelSize: 0.006, bevelSegments: 2, curveSegments: 3 }).rotateX(-Math.PI / 2).translate(0, 0.008, 0);
+    }
     function hcClosetInside(C, x0, x1, z0, z1, f, cols) {                                                       // inside a closet: shelf, rail, clothes on hangers, boxes, shoes
       C.L(hcM.furn, x0, x1, f + 1.62, f + 1.66, z1 - 0.5, z1, false);
       C.G(new THREE.CylinderGeometry(0.012, 0.012, x1 - x0, 8).rotateZ(Math.PI / 2), hcM.chrome, (x0 + x1) / 2, f + 1.52, z1 - 0.33);
@@ -10130,10 +10153,15 @@
       for (let k = 0; k < n; k++) {
         const x = x0 + 0.1 + k * 0.16, len = hr(0.75, 1.0);
         C.G(new THREE.TorusGeometry(0.06, 0.004, 3, 10, Math.PI).rotateY(Math.PI / 2), hcM.chrome, x, f + 1.48, z1 - 0.33);
-        C.L(cols[k % cols.length], x - 0.05, x + 0.05, f + 1.48 - len, f + 1.46, z1 - 0.52, z1 - 0.14, false);
+        C.G(hcGarmentGeo(len, k % 3), cols[k % cols.length], x, f + 1.47, z1 - 0.33);                       // (r102) a shirt, a dress, a coat (not a box)
       }
-      C.L(hcM.cream, x1 - 0.42, x1 - 0.05, f + 1.66, f + 1.92, z1 - 0.45, z1 - 0.06, false);
-      for (const dx of [0.08, 0.26]) { C.L(hcM.black, x0 + dx, x0 + dx + 0.1, f, f + 0.08, z1 - 0.3, z1 - 0.05, false); }
+      // (r102) a round hat box with its lid on the shelf, and two pairs of shoes on the closet floor, toes out
+      C.G(new THREE.CylinderGeometry(0.16, 0.16, 0.2, 18), hcM.cream, x1 - 0.235, f + 1.76, z1 - 0.255);
+      C.G(new THREE.CylinderGeometry(0.168, 0.168, 0.045, 18), hcM.fabricR, x1 - 0.235, f + 1.86, z1 - 0.255);
+      for (const [dx, mat] of [[0.1, hcM.black], [0.27, hcM.furnDark]]) for (const s2 of [-0.032, 0.032]) {
+        C.G(hcShoeGeo(), mat, x0 + dx + s2, f, z1 - 0.2);
+        C.G(new THREE.BoxGeometry(0.07, 0.012, 0.24), hcM.black, x0 + dx + s2, f + 0.006, z1 - 0.2);
+      }
     }
     function hcBath(C, f) {
       const P = hcPiece(C, 7.9, 7.42, '-z'), y = f;
@@ -10205,7 +10233,7 @@
       { const P = hcTable(C, 3.8, 0.62, '+x', 0.55, 0.28, hcM.furnDark, 0.8); P.at(new THREE.SphereGeometry(0.11, 12, 9).scale(1, 0.8, 1), hcM.pumpkin, 0, FL + 0.89, 0); HC_SPOTS[`hall${H.no}`] = P.p(0.15, FL + 0.8, 0); }
       { const x = 3.75, z = 3.05; G(new THREE.CylinderGeometry(0.12, 0.14, 0.03, 10), hcM.furnDark, x, FL + 0.015, z); G(new THREE.CylinderGeometry(0.018, 0.018, 1.7, 8), hcM.furnDark, x, FL + 0.85, z);
         for (let k = 0; k < 4; k++) { const a = k * Math.PI / 2; G(new THREE.CylinderGeometry(0.008, 0.008, 0.16, 4).rotateZ(0.8).rotateY(a), hcM.brass, x + Math.cos(a) * 0.05, FL + 1.62, z - Math.sin(a) * 0.05); }
-        L(hcM.black, x - 0.12, x + 0.12, FL + 0.9, FL + 1.58, z - 0.07, z + 0.05, false); }                     // a coat on the stand
+        G(hcGarmentGeo(0.68, 2), hcM.black, x, FL + 1.6, z - 0.01); }                                                // (r102) a coat on the stand (a coat, not a box)
       if (!two) hcPortrait(C, 3.66, FL + 1.3, 5.4, '+x', H.no + 2, 0.4, 0.5);
       hcLamp(C, 4.4, FL + 2.3, two ? 1.2 : 4, 0xffc890, 1.6, 4, 0.7);
       G(new THREE.SphereGeometry(0.1, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2).rotateX(Math.PI), hcM.shade, 4.4, FL + 2.49, two ? 1.2 : 4);
@@ -10251,9 +10279,18 @@
         { const S = hcPiece(C, 0.35, 5.8, '+x');
           S.box(hcM.furnDark, -0.6, -0.56, FL, FL + 1.9, -0.2, 0.2); S.box(hcM.furnDark, 0.56, 0.6, FL, FL + 1.9, -0.2, 0.2); S.col(-0.6, 0.6, FL, FL + 1.9, -0.2, 0.2);
           for (let k = 0; k < 4; k++) S.box(hcM.furn, -0.56, 0.56, FL + 0.35 + k * 0.45, FL + 0.38 + k * 0.45, -0.2, 0.2);
-          for (let k = 0; k < 5; k++) S.box([hcM.fabricY, hcM.cream, hcM.fabricB][k % 3], -0.5 + k * 0.2, -0.36 + k * 0.2, FL + 0.38 + (k % 3) * 0.45, FL + 0.6 + (k % 3) * 0.45, -0.15, 0.1);
+          for (let k = 0; k < 5; k++) for (let j = 0; j < 3; j++)                                              // (r102) stacks of folded towels (rounded, not boxes)
+            S.at(hcTowelGeo(0.14, 0.24, 0.065), [hcM.fabricY, hcM.cream, hcM.fabricB][(k + j) % 3], -0.43 + k * 0.2, FL + 0.38 + (k % 3) * 0.45 + j * 0.068, -0.025);
           out.shelf = S.p(0.25, FL + 0.38 + 2 * 0.45, 0.02); }
-        C0.L(hcM.chrome, 2.6, 3.0, FL, FL + 0.3, 7.3, 7.7, false); C0.L(hcM.furn, 2.78, 2.82, FL, FL + 1.3, 7.48, 7.52, false);
+        // (r102) a mop bucket (a real bucket: walls, rim, bail handle) with the mop leaning against the back wall, out of the doorway's swing
+        { const bx = 2.15, bz = 7.5;
+          G(new THREE.CylinderGeometry(0.17, 0.14, 0.28, 18, 1, true), hcM.fabricY, bx, FL + 0.14, bz);
+          G(new THREE.CylinderGeometry(0.14, 0.14, 0.01, 18), hcM.fabricY, bx, FL + 0.005, bz);
+          G(new THREE.TorusGeometry(0.17, 0.012, 6, 22).rotateX(Math.PI / 2), hcM.fabricY, bx, FL + 0.28, bz);
+          G(new THREE.CylinderGeometry(0.155, 0.155, 0.005, 18), hcM.water || hcM.oven, bx, FL + 0.2, bz);
+          G(new THREE.TorusGeometry(0.17, 0.006, 4, 16, Math.PI), hcM.chrome, bx, FL + 0.28, bz);
+          G(new THREE.CylinderGeometry(0.014, 0.014, 1.3, 8).rotateX(0.2), hcM.furn, bx + 0.02, FL + 0.66, bz + 0.12);
+          for (let k = 0; k < 9; k++) { const a = k * 0.7; G(new THREE.CylinderGeometry(0.012, 0.01, 0.22, 4).rotateZ(Math.cos(a) * 0.4).rotateX(Math.sin(a) * 0.4), hcM.cream, bx + 0.02 + Math.cos(a) * 0.03, FL + 0.17, bz + 0.02 + Math.sin(a) * 0.03); } }
         G(new THREE.SphereGeometry(0.04, 8, 6), hcM.bulb, 1.8, FL + 2.5, 6.4); G(new THREE.CylinderGeometry(0.004, 0.004, 0.12, 4), hcM.iron, 1.8, FL + 2.58, 6.4);
         hcLamp(C, 1.8, FL + 2.4, 6.4, 0xffe0b0, 1.4, 4, 0.6);
         web(0.16, FL + 2.58, 7.84, 1, -1, 0.8); web(3.54, FL + 2.58, 5.06, -1, 1, 0.5);
@@ -30402,6 +30439,155 @@
     }
     // (for the tests)
     window.__cull = { CULL, rebuild: () => cullBuild(), apply: () => { cullApply(); const n = CULL.hid.length; cullRestore(); return n; } };
+    // =====================================================================
+    //  r103: HIDE / SHOW THE VICTORY SCREEN (the ⌫ button)
+    //  Every victory screen (the boat's sunrise escape and its SUNRISE RUN, the lake chain containment, the Hallowcreek
+    //  police rescue) gets a ⌫ button in its top-right corner. Press it (VR pointer + trigger, a tap of your hand on it,
+    //  a mouse click, or the Backspace key) and the victory screen goes away so you can look round at the dawn, the lake
+    //  or the cruisers; a small see-through "⌫ SHOW PANEL" button stays in the top-right of your view to bring it back
+    //  (or press Backspace again), RETURN TO WAITING ROOM and all. Leaving the map, or the next match, puts everything
+    //  back to normal: the next victory screen always appears in full.
+    // =====================================================================
+    const VH = { hidden: false, groups: [], tapCool: [0, 0], warned: false };
+    const VH_BTN = { x: 1024 - 104 - 18, y: 18, w: 104, h: 82 };                 // (on the 1024 x 628 victory panels)
+    const vhGroups = () => [victoryGroup, lkcVicGroup, hpVicGroup];
+    const vhPanels = () => [[victoryPanel, victoryGroup, (s) => placeVictory(s)], [lkcVicPanel, lkcVicGroup, (s) => lkcPlaceVic(s)], [hpVicPanel, hpVicGroup, (s) => hpPlaceVic(s)]];
+    function vhDrawKey(g, p, x, y, w, h, id, label, size) {
+      const hov = uiButton(p, id, x, y, w, h);
+      roundRect(g, x, y, w, h, Math.min(18, h / 3));
+      g.fillStyle = hov ? 'rgba(130,40,28,0.95)' : 'rgba(40,14,10,0.85)'; g.fill();
+      g.lineWidth = 4; g.strokeStyle = hov ? '#ffd0b0' : '#ffb090'; g.stroke();
+      g.save(); g.textAlign = 'center'; g.textBaseline = 'middle'; g.shadowBlur = 0;
+      g.fillStyle = '#f4e8d0'; g.font = `bold ${size}px "Segoe UI Symbol", "Apple Symbols", "Noto Sans Symbols 2", "DejaVu Sans", sans-serif`;
+      g.fillText(label, x + w / 2, y + h / 2 + 2); g.restore();
+    }
+    // the ⌫ key on each victory panel
+    for (const [p] of vhPanels()) {
+      const d0 = p.draw, c0 = p.onClick;
+      p.draw = (g, P) => { d0(g, P); vhDrawKey(g, P, VH_BTN.x, VH_BTN.y, VH_BTN.w, VH_BTN.h, 'vhide', '⌫', 54); };
+      p.onClick = (id) => { if (id === 'vhide') vhHide(); else c0(id); };
+    }
+    // the small see-through SHOW PANEL key (in the headset: top right of your view)
+    const vhShowPanel = makePanel(0.17, 0.055, 544, 176, (g, p) => {
+      g.clearRect(0, 0, p.cw, p.ch);
+      const hov = uiButton(p, 'vshow', 6, 6, p.cw - 12, p.ch - 12);
+      roundRect(g, 6, 6, p.cw - 12, p.ch - 12, 40);
+      g.fillStyle = hov ? 'rgba(130,40,28,0.8)' : 'rgba(30,10,8,0.5)'; g.fill();
+      g.lineWidth = 5; g.strokeStyle = hov ? 'rgba(255,208,176,0.95)' : 'rgba(255,176,144,0.6)'; g.stroke();
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillStyle = hov ? '#fff4e4' : 'rgba(244,232,208,0.85)';
+      g.font = 'bold 64px "Segoe UI Symbol", "Apple Symbols", "Noto Sans Symbols 2", "DejaVu Sans", sans-serif'; g.fillText('⌫', 92, p.ch / 2 + 2);
+      g.font = 'bold 54px "Courier New", monospace'; g.fillText('SHOW PANEL', 330, p.ch / 2 + 2);
+      g.textAlign = 'left';
+    }, (id) => { if (id === 'vshow') vhShow(); }, { onTop: true });
+    const vhShowGroup = new THREE.Group(); vhShowGroup.visible = false; vhShowGroup.add(vhShowPanel.mesh); scene.add(vhShowGroup);
+    redrawPanel(vhShowPanel);
+    // ... and on the desktop: a ⌫ in the corner of the victory screen, a SHOW PANEL key when it's hidden
+    {
+      const b = document.createElement('button'); b.id = 'v-hide'; b.title = 'Hide the victory screen (Backspace)'; b.textContent = '⌫';
+      victoryEl.appendChild(b);
+      const r = document.createElement('button'); r.id = 'v-restore'; r.title = 'Show the victory screen again (Backspace)'; r.innerHTML = '<span>⌫</span> SHOW PANEL';
+      document.body.appendChild(r);
+      const st = document.createElement('style');
+      st.textContent = `#victory #v-hide{position:absolute;top:18px;right:18px;font:bold 34px "Segoe UI Symbol","Apple Symbols","Noto Sans Symbols 2","DejaVu Sans",sans-serif;line-height:1;
+          padding:10px 18px;border-radius:12px;border:3px solid #ffb090;background:rgba(40,14,10,.85);color:#f4e8d0;cursor:pointer;z-index:2}
+        #victory #v-hide:hover{background:#7a1a12}
+        #victory.v-hidden{opacity:0 !important;pointer-events:none !important}
+        #v-restore{position:fixed;top:14px;right:14px;z-index:31;display:none;font:bold 16px "Courier New",monospace;color:rgba(244,232,208,.9);
+          background:rgba(30,10,8,.5);border:2px solid rgba(255,176,144,.6);border-radius:10px;padding:8px 14px;cursor:pointer;backdrop-filter:blur(2px)}
+        #v-restore span{font:bold 20px "Segoe UI Symbol","Apple Symbols","Noto Sans Symbols 2","DejaVu Sans",sans-serif;margin-right:6px;vertical-align:-2px}
+        #v-restore:hover{background:rgba(122,26,18,.85);color:#fff4e4}`;
+      document.head.appendChild(st);
+      b.addEventListener('click', (e) => { e.stopPropagation(); vhHide(); });
+      r.addEventListener('click', (e) => { e.stopPropagation(); vhShow(); });
+    }
+    const vhRestoreEl = () => document.getElementById('v-restore');
+    // ---------- hide / show ----------
+    function vhActive() { return !!ending && (VH.hidden || victoryEl.classList.contains('show') || vhGroups().some((g) => g.visible)); }
+    function vhHide() {
+      if (!ending || VH.hidden) return;
+      VH.hidden = true; VH.groups = vhGroups().filter((g) => g.visible);
+      for (const g of VH.groups) g.visible = false;
+      victoryEl.classList.add('v-hidden');
+      vhSync(true);
+      try { gameAudio.click && gameAudio.click(); } catch (e) { }
+    }
+    function vhShow() {
+      if (!VH.hidden) return;
+      VH.hidden = false;
+      victoryEl.classList.remove('v-hidden');
+      if (renderer.xr.isPresenting) for (const [, g, place] of vhPanels()) if (VH.groups.includes(g)) { g.visible = true; try { place(true); } catch (e) { } }
+      VH.groups = [];
+      vhShowGroup.visible = false; vhRestoreEl().style.display = 'none';
+    }
+    function vhReset() {                                                      // a new match / leaving: everything back to normal
+      VH.hidden = false; VH.groups = [];
+      victoryEl.classList.remove('v-hidden');
+      vhShowGroup.visible = false; vhRestoreEl().style.display = 'none';
+    }
+    const _vhP = new THREE.Vector3(), _vhD = new THREE.Vector3(), _vhR = new THREE.Vector3(), _vhT = new THREE.Vector3(), _vhL = new THREE.Vector3(), _vhQ = new THREE.Quaternion();
+    function vhPlaceShow(snap) {                                              // top right of your view, half a metre out, easing after your head
+      camera.getWorldPosition(_vhP); camera.getWorldQuaternion(_vhQ);
+      _vhD.set(0, 0, -1).applyQuaternion(_vhQ); _vhR.set(1, 0, 0).applyQuaternion(_vhQ);
+      const up = _vhL.set(0, 1, 0).applyQuaternion(_vhQ);
+      _vhT.copy(_vhP).addScaledVector(_vhD, 0.5).addScaledVector(_vhR, 0.17).addScaledVector(up, 0.13);
+      if (snap) vhShowGroup.position.copy(_vhT); else vhShowGroup.position.lerp(_vhT, 0.12);
+      vhShowGroup.quaternion.copy(_vhQ);
+    }
+    function vhSync(snap) {
+      const vr = renderer.xr.isPresenting;
+      if (VH.hidden) {
+        for (const g of vhGroups()) if (g.visible) { g.visible = false; if (!VH.groups.includes(g)) VH.groups.push(g); }   // (a headset put on / taken off brings a panel back: keep it hidden)
+        if (vr) { if (!vhShowGroup.visible) { vhShowGroup.visible = true; snap = true; } vhPlaceShow(snap); } else vhShowGroup.visible = false;
+        vhRestoreEl().style.display = vr ? 'none' : 'block';
+      }
+    }
+    // a tap of your hand on a key (the front of the controller, a few cm ahead of your grip)
+    const _vhH = new THREE.Vector3(), _vhLoc = new THREE.Vector3();
+    function vhTapped(p, i, bx, by, bw, bh) {
+      const m = p.mesh; if (!shownInScene(m)) return false;
+      const W = m.geometry.parameters ? m.geometry.parameters.width : 1, H = m.geometry.parameters ? m.geometry.parameters.height : 1;
+      const c = controllers[i]; if (!c || !c.userData || !c.userData.inputSource) return false;
+      _vhH.set(0, 0, -0.06).applyMatrix4(c.matrixWorld);
+      m.worldToLocal(_vhLoc.copy(_vhH));
+      if (Math.abs(_vhLoc.z) > 0.025) return false;
+      const x = (_vhLoc.x / W + 0.5) * p.cw, y = (0.5 - _vhLoc.y / H) * p.ch;
+      return x >= bx && x <= bx + bw && y >= by && y <= by + bh;
+    }
+    function vhTaps(dt) {
+      if (!renderer.xr.isPresenting) return;
+      for (let i = 0; i < 2; i++) {
+        if ((VH.tapCool[i] -= dt) > 0) continue;
+        let hit = false;
+        if (!VH.hidden) { for (const [p] of vhPanels()) if (vhTapped(p, i, VH_BTN.x, VH_BTN.y, VH_BTN.w, VH_BTN.h)) { vhHide(); hit = true; break; } }
+        else if (vhTapped(vhShowPanel, i, 6, 6, vhShowPanel.cw - 12, vhShowPanel.ch - 12)) { vhShow(); hit = true; }
+        if (hit) { VH.tapCool[0] = VH.tapCool[1] = 0.6; try { pulse(controllers[i], 0.6, 40); } catch (e) { } }
+      }
+    }
+    // the Backspace key
+    window.addEventListener('keydown', (e) => {
+      if (e.key !== 'Backspace' || e.repeat) return;
+      const t = e.target; if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      if (!vhActive()) return;
+      e.preventDefault();
+      if (VH.hidden) vhShow(); else vhHide();
+    });
+    // every frame
+    {
+      const baseNetVH = updateNet;
+      updateNet = function (dt) {
+        const r = baseNetVH(dt);
+        try {
+          if (!ending) { if (VH.hidden || vhShowGroup.visible || victoryEl.classList.contains('v-hidden')) vhReset(); }
+          else { vhSync(false); vhTaps(dt); }
+        } catch (e) { if (!VH.warned) { VH.warned = true; console.warn('[victory hide]', e); } }
+        return r;
+      };
+      const baseArrVH = arrive;
+      arrive = function (id) { try { vhReset(); } catch (e) { } return baseArrVH(id); };
+    }
+    // (for the tests)
+    window.__vh = { VH, hide: () => vhHide(), show: () => vhShow(), active: () => vhActive() };
 
     // ---------- XR session hooks ----------
     renderer.xr.addEventListener('sessionstart', () => {
